@@ -1,7 +1,7 @@
 services:
   waha:
     container_name: waha
-    image: devlikeapro/waha-plus:arm
+    image: devlikeapro/waha-plus
     ports:
       - "3000:3000"
     env_file:
@@ -9,8 +9,6 @@ services:
     volumes:
       - waha_data:/app/data
     restart: unless-stopped
-
-
   db:
     image: pgvector/pgvector:pg17          # Postgres + pgvector baked in
     container_name: letta-db
@@ -47,15 +45,13 @@ services:
     # container_name: pgadmin
     restart: unless-stopped
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@local.dev     # change as needed
-      PGADMIN_DEFAULT_PASSWORD: admin123         # change this too
+      PGADMIN_DEFAULT_EMAIL: admin@local.dev
+      PGADMIN_DEFAULT_PASSWORD: admin123
     ports:
-      - "5050:80"                                 # access via http://localhost:5050
+      - "5050:80"
     volumes:
       - pgadmin_data:/var/lib/pgadmin
 volumes:
   waha_data:
   pg_data:
   pgadmin_data:
-  # redis_data:
-  # qdrant_data:
