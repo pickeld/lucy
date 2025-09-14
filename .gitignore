@@ -39,3 +39,4 @@ venv/
 
 # Ignore Memory Bank directory
 memory-bank/
+data/
