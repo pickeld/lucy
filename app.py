@@ -94,31 +94,16 @@ def send_request(method: str, endpoint: str, payload: Union[Dict, None] = None, 
     payload = payload or {}
     params = params or {}
 
-    headers = {"X-Api-Key": config.waha_api_key}
-    url = f"{config.waha_api_url}{endpoint}"
-
-    method_map = {
-        "GET": requests.get,
-        "POST": requests.post,
-        "PUT": requests.put,
-    }
-
-    func = method_map[method.upper()]
-
-    kwargs = {
-        "headers": headers,
-        "stream": True,
-    }
-
-    if method.upper() == "GET":
-        # fallback to payload if params not given
-        kwargs["params"] = params or payload
-    else:
-        kwargs["json"] = payload
-
-    response = func(url, **kwargs)
-    response.raise_for_status()
-    # logger.debug(f"Request to {url} completed with status code {response.status_code}")
+    headers = {"Content-Type": "application/json",
+               "X-Api-Key": config.waha_api_key,
+               "stream": "true"}
+    url = f"{config.waha_base_url}{endpoint}"
+    if method.upper() == "POST":
+        response = requests.post(url, json=payload, headers=headers, params=params)
+    elif method.upper() == "GET":
+        response = requests.get(url, headers=headers, params=params)
+    elif method.upper() == "PUT":
+        response = requests.put(url, json=payload, headers=headers, params=params)
     return response
 
 
@@ -230,6 +215,9 @@ def test():
 @app.route("/webhook", methods=["POST"])
 def webhook():
     payload = request.json.get("payload", {}) if request.json else {}
+
+    if payload.get('event') =="message_ack":
+        pass
     if not payload.get("from") == config.waha_test_recipient:
         return jsonify({"status": "ignored"}), 200
     whatsapp_msg = WhatsappMSG(payload)
@@ -278,8 +266,6 @@ def pair():
     session_name = config.waha_session_name
 
     response = send_request("GET", f"/api/sessions/{session_name}")
-    # print(f"Response: {response.json()}")
-    # logger.debug(f"Session status response: {response}")
 
     status_data = response.json()
     logger.debug(f"Status data: {status_data}")
@@ -296,7 +282,7 @@ def pair():
             "config": {
                 "webhooks": [
                     {
-                        "url": config.webhook_url,
+                        "url": config.waha_webhook_url,
                         "events": ["message.any", "session.status"]
                     }
                 ]
