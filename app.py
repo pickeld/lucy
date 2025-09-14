@@ -64,7 +64,7 @@ class Contact:
     def get_contact(self):
         endpoint = f"/api/contacts"
         contact = self.participant if self.participant and self.participant != "out@c.us" else self._from
-        params = {"contactId": contact, "session": "default"}
+        params = {"contactId": contact, "session": config.waha_session_name}
         response = send_request(method="GET", endpoint=endpoint, params=params)
         return response.json()
 
@@ -200,7 +200,7 @@ class WhatsappMSG:
                      payload={
                               "chatId": self.recipient,
                               "text": response,
-                              "session": "default"
+                              "session": config.waha_session_name
                      }
                      )
 
@@ -230,6 +230,8 @@ def test():
 @app.route("/webhook", methods=["POST"])
 def webhook():
     payload = request.json.get("payload", {}) if request.json else {}
+    if not payload.get("from") == config.waha_test_recipient:
+        return jsonify({"status": "ignored"}), 200
     whatsapp_msg = WhatsappMSG(payload)
     mem_agent: MemoryAgent = get_memory_agent(whatsapp_msg._from)
     mem_agent.remember(text=whatsapp_msg.message,
@@ -256,7 +258,7 @@ def webhook():
                          payload={
                              "chatId": payload.get("to"),
                              "file": {"url": image_url},
-                             "session": "default"
+                             "session": config.waha_session_name
                          })
 
         else:
@@ -316,4 +318,4 @@ def pair():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=config.port, debug=True if config.debug else False)
+    app.run(host="0.0.0.0", port=config.port, debug=True if config.log_level=="DEBUG" else False)
