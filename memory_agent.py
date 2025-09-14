@@ -11,7 +11,7 @@ logger = Logger()
 
 class MemoryAgent:
     def __init__(self, recipient: str):
-        self.llm_model_name = "gpt-4.1-mini"
+        self.llm_model_name = "letta-free"
         self.model = None
         self.recipient = recipient
         self.chat_id = recipient.replace("@", "_").replace(".", "_")
@@ -39,6 +39,7 @@ class MemoryAgent:
     def get_models(self):
         models = self.client.models.list()
         for model in models:
+            logger.debug(f"Available model: {model.model}")
             if model.model == self.llm_model_name:
                 self.model = model
                 return model
