@@ -213,6 +213,20 @@ def health():
     return jsonify({"status": "up"}), 200
 
 
+@app.route("/test", methods=["GET"])
+def test():
+    # send a test message to yourself
+    test_message = f"{config.gpt_prefix} Hello from WhatsApp-GPT!"
+    send_request(method="POST",
+                 endpoint="/api/sendText",
+                 payload={
+                     "chatId": config.waha_test_recipient,
+                     "text": test_message,
+                     "session": config.waha_session_name
+                 }
+                 )
+    return jsonify({"status": "test message sent"}), 200
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     payload = request.json.get("payload", {}) if request.json else {}
@@ -259,7 +273,7 @@ def webhook():
 
 @app.route("/pair", methods=["GET"])
 def pair():
-    session_name = "default"
+    session_name = config.waha_session_name
 
     response = send_request("GET", f"/api/sessions/{session_name}")
     # print(f"Response: {response.json()}")
@@ -302,4 +316,4 @@ def pair():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5002, debug=True)
+    app.run(host="0.0.0.0", port=config.port, debug=True if config.debug else False)
