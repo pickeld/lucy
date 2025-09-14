@@ -3,3 +3,4 @@ openai
 flask
 python-dotenv
 qrcode[pil]
+letta-client
