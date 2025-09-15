@@ -18,4 +18,4 @@ def send_request(method: str, endpoint: str, payload: Union[Dict, None] = None, 
         response = requests.get(url, headers=headers, params=params)
     elif method.upper() == "PUT":
         response = requests.put(url, json=payload, headers=headers, params=params)
-    return response.json()
+    return response
