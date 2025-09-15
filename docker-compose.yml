@@ -1,7 +1,7 @@
 services:
   waha:
     container_name: waha
-    image: devlikeapro/waha-plus
+    image: devlikeapro/waha-plus:arm-2025.9.3
     ports:
       - "3000:3000"
     volumes:
@@ -12,7 +12,7 @@ services:
       - WAHA_PRINT_QR=false
       - WAHA_SESSION_NAME=default
   db:
-    image: ankane/pgvector:v0.5.1        # Postgres + pgvector baked in
+    image: pgvector/pgvector:pg17        # Postgres + pgvector baked in
     container_name: letta-db
     restart: unless-stopped
     environment:
@@ -22,8 +22,8 @@ services:
     ports:
       - "5432:5432"                     # expose locally; drop if not needed
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
-      - ./scripts/postgres-db-init/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - pg_data:/var/lib/postgresql/data
+      - ./scripts/postgres-db-init/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U letta"]
       interval: 10s
@@ -34,11 +34,15 @@ services:
     container_name: letta
     environment:
       LETTA_PG_URI: postgresql://letta:letta_pass@letta-db:5432/letta
+    env_file:
+      - .env
     ports:
       - "8283:8283"
+    volumes:
+      - letta_data:/app/data
     depends_on:
       db:
-        condition: service_healthy 
+        condition: service_healthy
   pgadmin:
     image: dpage/pgadmin4:latest
     # container_name: pgadmin
@@ -47,10 +51,11 @@ services:
       PGADMIN_DEFAULT_EMAIL: admin@local.dev
       PGADMIN_DEFAULT_PASSWORD: admin123
     ports:
-      - "5050:80"
+      - "5080:80"
     volumes:
       - pgadmin_data:/var/lib/pgadmin
 volumes:
   waha_data:
   pg_data:
   pgadmin_data:
+  letta_data:
