@@ -40,3 +40,7 @@ class Logger:
 
     def critical(self, message: str):
         self._log("critical", message)
+
+
+
+logger = Logger()

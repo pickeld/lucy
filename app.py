@@ -8,12 +8,12 @@ import base64
 import requests
 
 from config import config
-from utiles.logger import Logger
+from contact import Contact
+from utiles.globals import send_request
+from utiles.logger import logger
 from memory_agent import MemoryAgent
 from providers.dalle import Dalle
 
-
-logger = Logger()
 app = Flask(__name__)
 
 
@@ -41,35 +41,7 @@ class Group:
         return f"Group ID: {self.group_id}, Name: {self.name}, Participants: {len(self.participants)}"
 
 
-class Contact:
-    def __init__(self, payload):
-        self._from = payload.get("from", "")
-        self.participant = payload.get("participant", "")
-        data = self.get_contact()
 
-        self.isMyContact = data.get("isMyContact", False)
-        if self.isMyContact:
-            self.name = data.get("name", "")
-        else:
-            self.name = data.get("pushname", "")
-
-        self.number = data.get("number", "")
-        self.isBusiness = data.get("isBusiness", False)
-        self.is_group = data.get("isGroup", False)
-        self.isUser = data.get("isUser", False)
-
-        self.isMe = data.get("isMe", False)
-        self.isBlocked = data.get("isBlocked", False)
-
-    def get_contact(self):
-        endpoint = f"/api/contacts"
-        contact = self.participant if self.participant and self.participant != "out@c.us" else self._from
-        params = {"contactId": contact, "session": config.waha_session_name}
-        response = send_request(method="GET", endpoint=endpoint, params=params)
-        return response.json()
-
-    def __str__(self):
-        return self.__dict__.__str__()
 
 
 def get_contact(payload):
@@ -90,21 +62,7 @@ def get_memory_agent(recipient: str) -> MemoryAgent:
     return _memory_agents[recipient]
 
 
-def send_request(method: str, endpoint: str, payload: Union[Dict, None] = None, params: Union[Dict, None] = None):
-    payload = payload or {}
-    params = params or {}
 
-    headers = {"Content-Type": "application/json",
-               "X-Api-Key": config.waha_api_key,
-               "stream": "true"}
-    url = f"{config.waha_base_url}{endpoint}"
-    if method.upper() == "POST":
-        response = requests.post(url, json=payload, headers=headers, params=params)
-    elif method.upper() == "GET":
-        response = requests.get(url, headers=headers, params=params)
-    elif method.upper() == "PUT":
-        response = requests.put(url, json=payload, headers=headers, params=params)
-    return response
 
 
 class MediaMessage:

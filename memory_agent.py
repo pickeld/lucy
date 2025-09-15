@@ -4,7 +4,11 @@ from typing import Union
 from letta_client import Base64Image, ImageContent, TextContent
 from utiles.logger import Logger
 
+"""
+Letta Memory Agent
+Handles memory and interactions with the Letta API.
 
+"""
 SUPPORTED_MEDIA_TYPES = {"image/jpeg", "image/png"}
 logger = Logger()
 
@@ -21,7 +25,6 @@ class MemoryAgent:
             f"Initialized MemoryAgent for {self.chat_id} with agent ID {self.agent.name}")
 
     def remember(self, text: str, role: str):
-        pass
         if not text:
             return
 
@@ -39,7 +42,6 @@ class MemoryAgent:
     def get_models(self):
         models = self.client.models.list()
         for model in models:
-            logger.debug(f"Available model: {model.model}")
             if model.model == self.llm_model_name:
                 self.model = model
                 return model
@@ -63,7 +65,8 @@ class MemoryAgent:
                 CreateBlock(value="", label="human"),
                 CreateBlock(value="", label="persona")
             ],
-            enable_sleeptime=True
+            enable_sleeptime=True,
+            tags=["whatsapp", self.chat_id]
         )
 
     def get_recent_text_context(self, max_chars=3500, max_messages=20) -> str:
