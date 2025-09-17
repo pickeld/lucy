@@ -16,8 +16,9 @@ class MediaMessage:
     def __init__(self, payload):
         self.has_media = payload.get("hasMedia", False)
         if self.has_media:
-            self.url = payload.get('url')
-            self.type = payload.get('mimetype')
+            self.media = payload.get("media", {})
+            self.url = self.media.get('url')
+            self.type = self.media.get('mimetype')
             self.base64 = base64.standard_b64encode(httpx.get(
                 self.url, headers={"X-Api-Key": config.waha_api_key}).content).decode("utf-8")
             if config.log_level == "DEBUG":
