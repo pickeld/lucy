@@ -25,6 +25,14 @@ app = Flask(__name__)
 #         _memory_agents[recipient] = MemoryAgent(recipient)
 #     return _memory_agents[recipient]
 
+def pass_filter(payload):
+    if payload.get('event') == "message_ack" or \
+        payload.get("from").endswith("@newsletter") or \
+        payload.get("from").endswith("@broadcast") or \
+        payload.get("_data", {}).get("type") == "e2e_notification":
+            return False
+        
+    return True
 
 @app.route("/health", methods=["GET"])
 def health():
@@ -50,14 +58,14 @@ def test():
 def webhook():
     payload = request.json.get("payload", {})
     try:
-        if payload.get('event') == "message_ack" or payload.get("from").endswith("@newsletter"):
-            pass
+        if pass_filter(payload) is False:
+            return jsonify({"status": "ok"}), 200
         msg = WhatsappMSG(payload)
         logger.info(msg)
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         logger.error(f"Error processing webhook: {e} || Payload: {payload}")
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"error": str(e)}), 200
     # # from_ = payload.get('from')
     # # contact: Contact = get_or_create_contact(contact_id=from_)
     # print(msg)
