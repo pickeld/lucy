@@ -19,7 +19,7 @@ class GroupManager:
         group_data = redis_get(f"group:{_from}")
         if not group_data:
             group_data = self.fetch_group(_from)
-            redis_set(f"group:{_from}", group_data, expire=3600)
+            redis_set(f"group:{_from}", group_data)
 
         group = Group().extract(group_data)
         return group
@@ -50,3 +50,9 @@ class Group:
         self.id = data.get("id")
         self.name = data.get("name")
         return self
+
+    def to_dict(self):
+        return {
+            k: v for k, v in self.__dict__.items()
+            if not k.startswith("_") and not callable(v)
+        }
