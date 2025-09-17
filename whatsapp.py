@@ -13,14 +13,28 @@ group_manager = GroupManager()
 
 
 class MediaMessage:
-    def __init__(self, data):
-        # logger.debug(f"Message has media: {payload}")
-        self.url = data.get('url')
-        self.type = data.get('mimetype')
-        self.base64 = base64.standard_b64encode(httpx.get(
-            self.url, headers={"X-Api-Key": config.waha_api_key}).content).decode("utf-8")
-
-
+    def __init__(self, payload):
+        self.has_media = payload.get("hasMedia", False)
+        if self.has_media:
+            self.url = payload.get('url')
+            self.type = payload.get('mimetype')
+            self.base64 = base64.standard_b64encode(httpx.get(
+                self.url, headers={"X-Api-Key": config.waha_api_key}).content).decode("utf-8")
+            if config.log_level == "DEBUG":
+                # save media to file
+                extension = self.type.split("/")[-1]
+                filename = f"media_{payload.get('id')}.{extension}"
+                with open(filename, "wb") as f:
+                    f.write(base64.b64decode(self.base64))
+                logger.debug(f"Saved media to {filename}")
+                self.saved_path = filename
+        
+    def __str__(self):
+        if self.has_media:
+            return self.saved_path
+        return "No media"
+            
+            
 class QuotedMessage:
     def __init__(self, quoted_data, recipient):
         self.quoted_data = quoted_data
@@ -49,12 +63,12 @@ class WhatsappMSG:
         self.timestamp = payload.get("timestamp")
         self.message = payload.get("body") if payload.get(
             "body") else "Empty message"
-        # self.media = MediaMessage(payload)
+        self.media = MediaMessage(payload)
         # self.quoted = QuotedMessage(quoted_data=payload.get("quotedMsg", {}), recipient=self.recipient)
         # self.recipient = payload.get("to")
 
     def __str__(self) -> str:
-        return f"{self.timestamp} Message from {self.group.name}/{self.contact.name}: {self.message}"
+        return f"{self.timestamp} Message from {self.group.name}/{self.contact.name}: {self.message} || Media: {self.media}"
 
     def route(self):
         if self.message.startswith(config.chat_prefix):
@@ -78,4 +92,4 @@ class WhatsappMSG:
 if __name__ == "__main__":
     from samples import json_msg
     msg = WhatsappMSG(json_msg)
-    print(msg)
+    logger.debug(msg)
