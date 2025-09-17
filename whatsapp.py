@@ -1,10 +1,11 @@
 import base64
-
-from groups import Group, GroupManager
-import httpx
 import json
+
+import httpx
+
 from config import config
-from contact import ContactManager, Contact
+from contact import Contact, ContactManager
+from groups import Group, GroupManager
 from utiles.globals import send_request
 from utiles.logger import logger
 
@@ -29,13 +30,19 @@ class MediaMessage:
                     f.write(base64.b64decode(self.base64))
                 logger.debug(f"Saved media to {filename}")
                 self.saved_path = filename
-        
+
     def __str__(self):
         if self.has_media:
             return self.saved_path
         return "No media"
-            
-            
+
+    def to_dict(self):
+        return {
+            k: v for k, v in self.__dict__.items()
+            if not k.startswith("_") and not callable(v)
+        }
+
+
 class QuotedMessage:
     def __init__(self, quoted_data, recipient):
         self.quoted_data = quoted_data
@@ -60,6 +67,8 @@ class WhatsappMSG:
     def __init__(self, payload):
         self.contact: Contact = contact_manager.get_contact(payload)
         self.group: Group = group_manager.get_group(payload)
+        if not self.group.id:
+            logger.info(f"Message from contact: {self.contact}")
 
         self.timestamp = payload.get("timestamp")
         self.message = payload.get("body") if payload.get(
@@ -69,7 +78,26 @@ class WhatsappMSG:
         # self.recipient = payload.get("to")
 
     def __str__(self) -> str:
-        return f"{self.timestamp} Message from {self.group.name}/{self.contact.name}: {self.message} || Media: {self.media}"
+        return f"{self.group.name}/{self.contact.name}: {self.message} || Media: {self.media}"
+
+    def to_dict(self):
+        def serialize(value):
+            if hasattr(value, "to_dict"):
+                return value.to_dict()
+            elif isinstance(value, dict):
+                return {k: serialize(v) for k, v in value.items()}
+            elif isinstance(value, (list, tuple, set)):
+                return [serialize(v) for v in value]
+            elif isinstance(value, (str, int, float, bool, type(None))):
+                return value
+            else:
+                return str(value)
+
+        return {
+            k: serialize(v)
+            for k, v in self.__dict__.items()
+            if not k.startswith("_") and not callable(v)
+        }
 
     def route(self):
         if self.message.startswith(config.chat_prefix):
