@@ -48,11 +48,16 @@ def test():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    logger.debug(f"Received webhook: {json.dumps(request.json)}")
-    # payload = request.json.get("payload", {})
-    # if payload.get('event') == "message_ack":
-    #     pass
-    # msg = WhatsappMSG(payload)
+    payload = request.json.get("payload", {})
+    try:
+        if payload.get('event') == "message_ack" or payload.get("from").endswith("@newsletter"):
+            pass
+        msg = WhatsappMSG(payload)
+        logger.info(msg)
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        logger.error(f"Error processing webhook: {e} || Payload: {payload}")
+        return jsonify({"error": str(e)}), 400
     # # from_ = payload.get('from')
     # # contact: Contact = get_or_create_contact(contact_id=from_)
     # print(msg)
