@@ -1,6 +1,8 @@
 import logging
 import inspect
+import os
 from config import config
+
 
 class Logger:
     def __init__(self, name: str = "WAHALogger"):
@@ -8,18 +10,27 @@ class Logger:
         self.logger.setLevel(config.log_level)
         self.logger.propagate = False
 
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter(
-            fmt="%(asctime)s | %(levelname)s | %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"
-        )
-        handler.setFormatter(formatter)
-
+        # Avoid duplicate handlers
         if not self.logger.handlers:
-            self.logger.addHandler(handler)
+            formatter = logging.Formatter(
+                fmt="%(asctime)s | %(levelname)s | %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S"
+            )
+
+            # Console (stdout)
+            stream_handler = logging.StreamHandler()
+            stream_handler.setFormatter(formatter)
+            self.logger.addHandler(stream_handler)
+
+            # File (log to logs/app.log or wherever you like)
+            log_dir = "logs"
+            os.makedirs(log_dir, exist_ok=True)
+            file_handler = logging.FileHandler(
+                f"{log_dir}/app.log", encoding="utf-8")
+            file_handler.setFormatter(formatter)
+            self.logger.addHandler(file_handler)
 
     def _log(self, level: str, message: str):
-        # Get caller function name and filename (2 frames up)
         frame = inspect.currentframe().f_back.f_back
         caller = frame.f_code.co_name
         filename = frame.f_code.co_filename.split("/")[-1]
@@ -40,7 +51,6 @@ class Logger:
 
     def critical(self, message: str):
         self._log("critical", message)
-
 
 
 logger = Logger()
