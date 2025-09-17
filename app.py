@@ -1,154 +1,29 @@
 import base64
-import requests
-
 from typing import Dict, Union
-from flask import Flask, request, jsonify, render_template_string
+
 import httpx
-import base64
 import requests
+import json
+from flask import Flask, jsonify, render_template_string, request
 
 from config import config
 from contact import Contact
-from utiles.globals import send_request
-from utiles.logger import logger
 from memory_agent import MemoryAgent
 from providers.dalle import Dalle
+from utiles.globals import send_request
+from utiles.logger import logger
+from whatsapp import WhatsappMSG
 
 app = Flask(__name__)
 
 
-_memory_agents = {}
-_contacts = {}
+# _memory_agents = {}
 
 
-class Group:
-    def __init__(self, group_id):
-        self.group_id = group_id
-        self.data = self.get_group(group_id)
-        self.name = self.data.get("name", "")
-        self.participants = self.data.get("participants", [])
-        self.is_group = True
-        self.isMyGroup = True if self.data.get("isMyGroup", False) else False
-        self.isMe = True if self.data.get("isMe", False) else False
-
-    def get_group(self, id):
-        endpoint = f"/api/session/groups/{id}"
-        response = send_request(method="GET", endpoint=endpoint)
-        logger.debug(f"Retrieved group info for {id}: {response.json()}")
-        return response.json()
-
-    def __str__(self):
-        return f"Group ID: {self.group_id}, Name: {self.name}, Participants: {len(self.participants)}"
-
-
-
-
-
-def get_contact(payload):
-    try:
-        sender = payload["participant"]
-    except KeyError:
-        sender = payload.get("from", None)
-
-    if sender not in _contacts:
-        _contacts[sender] = Contact(payload)
-    logger.debug(f"Retrieved contact for sender {sender}: {_contacts[sender]}")
-    return _contacts[sender]
-
-
-def get_memory_agent(recipient: str) -> MemoryAgent:
-    if recipient not in _memory_agents:
-        _memory_agents[recipient] = MemoryAgent(recipient)
-    return _memory_agents[recipient]
-
-
-
-
-
-class MediaMessage:
-    def __init__(self, data):
-        # logger.debug(f"Message has media: {payload}")
-        self.url = data.get('url')
-        self.type = data.get('mimetype')
-        self.base64 = base64.standard_b64encode(httpx.get(
-            self.url, headers={"X-Api-Key": config.waha_api_key}).content).decode("utf-8")
-
-
-class QuotedMessage:
-    def __init__(self, quoted_data, recipient):
-        self.quoted_data = quoted_data
-        self.quoted_msg = quoted_data.get("quotedMsg", {})
-        self.type = self.quoted_msg.get("type", "")
-        self.body = self.quoted_msg.get("body", "").strip()
-        self.kind = self.quoted_msg.get("kind", "")
-        self.quoted_stanza_id = quoted_data.get("quotedStanzaID", "")
-        self.quoted_participant = quoted_data.get("quotedParticipant", "")
-        self.mimetype = self.quoted_msg.get("mimetype", "")
-        self.caption = self.quoted_msg.get("caption", "").strip()
-        if self.type == "image":
-            self.file_extension = self.mimetype.split("/")[-1]
-            self.filename = f"true_{recipient}_{self.quoted_stanza_id}_{self.quoted_participant}.{self.file_extension}"
-            endpoint = f"/api/files/default/{self.filename}"
-            response = send_request(method="GET", endpoint=endpoint)
-            self.base64_data = base64.b64encode(
-                response.content).decode("ascii")
-
-
-class WhatsappMSG:
-    def __init__(self, payload):
-        # logger.debug(f"Initializing WhatsappMSG with payload: {payload}")
-        self.message = payload.get("body", "").strip()
-        self.contact = get_contact(payload=payload)
-        self.recipient = payload.get("to", "")
-        self._from = payload.get("from", "")
-        self.is_group = True if "@g" in self._from else False
-        if self.is_group:
-            self.group = Group(self._from)
-        self.has_media = payload.get("hasMedia", False)
-        if self.has_media:
-            self.media = MediaMessage(payload.get("media"))
-        self.has_quote = payload.get("_data", {}).get("quotedMsg", {})
-        if self.has_quote:
-            try:
-                self.quoted = QuotedMessage(quoted_data=payload.get(
-                    "_data", {}), recipient=self.recipient)
-            except Exception as e:
-                logger.error(f"Error processing quoted message: {e}")
-                self.quoted = None
-        else:
-            self.quoted = None
-
-    def is_valid(self) -> bool:
-        allowed_senders = []
-        if self.contact.name not in ["Me", allowed_senders]:
-            return False
-        if not self.message.startswith(config.chat_prefix) and not self.message.startswith(config.dalle_prefix):
-            return False
-        return True
-
-    def startswith(self, prefix: str) -> bool:
-        return self.message.startswith(prefix)
-
-    def route(self):
-        if self.message.startswith(config.chat_prefix):
-            return "chat"
-        elif self.message.startswith(config.dalle_prefix):
-            return "dalle"
-        else:
-            return "unknown"
-
-    def reply(self, response: str):
-        send_request(method="POST",
-                     endpoint="/api/sendText",
-                     payload={
-                              "chatId": self.recipient,
-                              "text": response,
-                              "session": config.waha_session_name
-                     }
-                     )
-
-    def __str__(self):
-        return f"From: {self.contact.name}, To: {self.recipient}, Message: '{self.message}'"
+# def get_memory_agent(recipient: str) -> MemoryAgent:
+#     if recipient not in _memory_agents:
+#         _memory_agents[recipient] = MemoryAgent(recipient)
+#     return _memory_agents[recipient]
 
 
 @app.route("/health", methods=["GET"])
@@ -159,64 +34,75 @@ def health():
 @app.route("/test", methods=["GET"])
 def test():
     # send a test message to yourself
-    test_message = f"{config.gpt_prefix} Hello from WhatsApp-GPT!"
+    test_message = f"my name is david and i 39 years old, i have two kids, mia which is 4 and ben which is 6 and i work as a software developer."
     send_request(method="POST",
                  endpoint="/api/sendText",
                  payload={
-                     "chatId": config.waha_test_recipient,
+                     "chatId": "972547755011@c.us",
                      "text": test_message,
                      "session": config.waha_session_name
                  }
                  )
     return jsonify({"status": "test message sent"}), 200
 
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    payload = request.json.get("payload", {}) if request.json else {}
+    logger.debug(f"Received webhook: {json.dumps(request.json)}")
+    # payload = request.json.get("payload", {})
+    # if payload.get('event') == "message_ack":
+    #     pass
+    # msg = WhatsappMSG(payload)
+    # # from_ = payload.get('from')
+    # # contact: Contact = get_or_create_contact(contact_id=from_)
+    # print(msg)
+    # return jsonify({"status": "ok"}), 200
 
-    if payload.get('event') =="message_ack":
-        pass
-    if not payload.get("from") == config.waha_test_recipient:
-        return jsonify({"status": "ignored"}), 200
-    whatsapp_msg = WhatsappMSG(payload)
-    mem_agent: MemoryAgent = get_memory_agent(whatsapp_msg._from)
-    mem_agent.remember(text=whatsapp_msg.message,
-                       role=whatsapp_msg.contact.name or "unknown")
+    # if not contact.is_me:
+    #     logger.debug(f"Ignoring message from {from_}")
+    #     return jsonify({"status": "ignored"}), 200
 
-    if not whatsapp_msg.is_valid():
-        return jsonify({"status": "ignored"}), 200
+    # whatsapp_msg = WhatsappMSG(payload)
+    # print(whatsapp_msg)
+    # mem_agent: MemoryAgent = get_memory_agent(whatsapp_msg._from)
 
-    try:
-        route = whatsapp_msg.route()
-        if route == "chat":
-            response = mem_agent.send_message(whatsapp_msg)
-            whatsapp_msg.reply(str(response))
-        elif route == "dalle":
-            dalle = Dalle()
-            dalle.context = mem_agent.get_recent_text_context()
+    # mem_agent.remember(text=whatsapp_msg.message,
+    #                    role=whatsapp_msg.contact.name or "unknown")
 
-            dalle.prompt = whatsapp_msg.message[len(
-                config.dalle_prefix):].strip()
-            image_url = dalle.request()
+    # if not whatsapp_msg.is_valid():
+    #     return jsonify({"status": "ignored"}), 200
 
-            send_request(method="POST",
-                         endpoint="/api/sendImage",
-                         payload={
-                             "chatId": payload.get("to"),
-                             "file": {"url": image_url},
-                             "session": config.waha_session_name
-                         })
+    # try:
+    #     route = whatsapp_msg.route()
+    #     if route == "chat":
+    #         response = mem_agent.send_message(whatsapp_msg)
+    #         whatsapp_msg.reply(str(response))
+    #     elif route == "dalle":
+    #         dalle = Dalle()
+    #         dalle.context = mem_agent.get_recent_text_context()
 
-        else:
-            logger.debug(
-                f"Message did not match any route: {whatsapp_msg.message}")
-            return jsonify({"status": "no matching handler"}), 200
-        return jsonify({"status": "ok"}), 200
+    #         dalle.prompt = whatsapp_msg.message[len(
+    #             config.dalle_prefix):].strip()
+    #         image_url = dalle.request()
 
-    except Exception as e:
-        logger.error(f"Failed to process message: {e}")
-        raise
-        return jsonify({"error": str(e)}), 400
+    #         send_request(method="POST",
+    #                      endpoint="/api/sendImage",
+    #                      payload={
+    #                          "chatId": payload.get("to"),
+    #                          "file": {"url": image_url},
+    #                          "session": config.waha_session_name
+    #                      })
+
+    #     else:
+    #         logger.debug(
+    #             f"Message did not match any route: {whatsapp_msg.message}")
+    #         return jsonify({"status": "no matching handler"}), 200
+    #     return jsonify({"status": "ok"}), 200
+
+    # except Exception as e:
+    #     logger.error(f"Failed to process message: {e}")
+    #     raise
+    #     return jsonify({"error": str(e)}), 400
 
 
 @app.route("/pair", methods=["GET"])
@@ -262,4 +148,5 @@ def pair():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=config.port, debug=True if config.log_level=="DEBUG" else False)
+    app.run(host="0.0.0.0", port=5002,
+            debug=True if config.log_level == "DEBUG" else False)
