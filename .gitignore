@@ -46,4 +46,5 @@ data/
 samples.py
 
 #images
-imgs/
+images/
+logs/
