@@ -21,7 +21,7 @@ class ContactManager:
             contact_data = redis_get(f"contact:{_from}")
             if not contact_data:
                 contact_data = self.fetch_contact(_from)
-                redis_set(f"contact:{_from}", contact_data, expire=3600)
+                redis_set(f"contact:{_from}", contact_data)
             contact = Contact()
             contact.extract(contact_data)
             return contact
@@ -36,14 +36,14 @@ class ContactManager:
                 else:
                     contact_data = self.fetch_contact(contact_id)
                     redis_set(f"contact:{contact_id}",
-                              contact_data, expire=3600)
+                              contact_data)
             else:
                 contact_data = self.fetch_contact(_participant)
 
             redis_set(f"contact_alias:{_participant}",
-                      contact_data.get("id"), expire=3600)
+                      contact_data.get("id"))
             redis_set(f"contact:{contact_data.get('id')}",
-                      contact_data, expire=3600)
+                      contact_data)
             contact = Contact()
             contact.extract(contact_data)
             return contact
@@ -98,3 +98,9 @@ class Contact:
         self.is_my_contact = bool(data.get("isMyContact", False))
         self.is_blocked = bool(data.get("isBlocked", False))
         return self
+
+    def to_dict(self):
+        return {
+            k: v for k, v in self.__dict__.items()
+            if not k.startswith("_") and not callable(v)
+        }
