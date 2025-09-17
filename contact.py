@@ -1,38 +1,63 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Any, Dict, Optional
 
 from config import config
 from utiles.globals import send_request
 from utiles.logger import logger
+from utiles.redis_conn import redis_get, redis_set
 
 
 class ContactManager:
     def __init__(self) -> None:
-        self.contacts = {}
+        pass
 
-    def get_contact(self, payload) -> "Contact":
-        contact_id = payload.get("from")
-        if not contact_id:
-            raise ValueError("Payload missing 'from' field")
-        if contact_id not in self.contacts:
-            self.contacts[contact_id] = self.fetch_contact(contact_id)
-        return self.contacts[contact_id]
+    def get_contact(self, payload) -> Contact:
+        _from = payload.get("from", None)
+        _participant = payload.get("participant", None)
+        if _from and _from.endswith("@c.us"):
+            logger.debug(f"Redis lookup for contact: contact:{_from}")
+            contact_data = redis_get(f"contact:{_from}")
+            if not contact_data:
+                contact_data = self.fetch_contact(_from)
+                redis_set(f"contact:{_from}", contact_data, expire=3600)
+            contact = Contact()
+            contact.extract(contact_data)
+            return contact
+        elif _participant and _participant.endswith("@lid"):
+            contact_id = redis_get(f"contact_alias:{_participant}")
+            if contact_id:
+                contact_data = redis_get(f"contact:{contact_id}")
+                if contact_data:
+                    contact = Contact()
+                    contact.extract(contact_data)
+                    return contact
+                else:
+                    contact_data = self.fetch_contact(contact_id)
+                    redis_set(f"contact:{contact_id}",
+                              contact_data, expire=3600)
+            else:
+                contact_data = self.fetch_contact(_participant)
 
-    def fetch_contact(self, contact_id: str) -> "Contact":
+            redis_set(f"contact_alias:{_participant}",
+                      contact_data.get("id"), expire=3600)
+            redis_set(f"contact:{contact_data.get('id')}",
+                      contact_data, expire=3600)
+            contact = Contact()
+            contact.extract(contact_data)
+            return contact
+
+    def fetch_contact(self, contact_id: str):
         params = {"contactId": contact_id, "session": config.waha_session_name}
         try:
-            resp = send_request(
+            response = send_request(
                 method="GET", endpoint="/api/contacts", params=params)
-            if isinstance(resp, dict):
-                return Contact().extract(resp)
-            logger.error(
-                f"Unexpected WAHA response for {contact_id}: {type(resp)}")
+            logger.debug(f"Fetched contact data: {response}")
+            return response
         except Exception as e:
             logger.error(f"WAHA contact fetch failed for {contact_id}: {e}")
-        # Graceful fallback so callers always get a Contact
-        return Contact(id=contact_id, number=contact_id)
+            return {}
 
 
 @dataclass
@@ -54,13 +79,12 @@ class Contact:
     is_blocked: bool = False
 
     def __str__(self) -> str:
-        return f"Contact Name({self.name}, number={self.number}, name={self.name})"
+        return f"Name: {self.name}, Number: {self.number}"
 
-    def extract(self, data: Dict[str, Any]) -> "Contact":
-        # populate fields in-place and return self
+    def extract(self, data) -> "Contact":
         self.id = data.get("id")
         self.number = data.get("number")
-        self.name = data.get("name")
+        self.name = data.get("name", data.get("pushname"))
         self.pushname = data.get("pushname")
         self.short_name = data.get("shortName")
         self.status_muted = bool(data.get("statusMuted", False))
