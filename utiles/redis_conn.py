@@ -1,6 +1,6 @@
 import json
 from typing import Optional, Any
-
+from config import config
 import redis
 
 # Redis connection singleton
@@ -24,7 +24,7 @@ def redis_set(key: str, value: Any, expire: Optional[int] = None) -> None:
     client = get_redis_client()
     if not isinstance(value, (str, bytes)):
         value = json.dumps(value)
-    client.set(key, value, ex=expire)
+    client.set(key, value, ex=int(config.redis_ttl) if expire is None else expire)
 
 
 def redis_get(key: str, default: Any = None) -> Any:
