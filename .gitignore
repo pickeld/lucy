@@ -40,3 +40,7 @@ venv/
 # Ignore Memory Bank directory
 memory-bank/
 data/
+
+
+#samples
+samples.py
