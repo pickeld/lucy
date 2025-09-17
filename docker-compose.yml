@@ -1,4 +1,26 @@
 services:
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: redis-commander
+    restart: unless-stopped
+    environment:
+      # Format: name:host:port(:password)
+      REDIS_HOSTS: "local:redis:6379"
+      # Optional basic auth for the UI:
+      HTTP_USER: "admin"
+      HTTP_PASSWORD: "change-me"
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis  
+  redis:
+    image: redis:latest
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
   waha:
     container_name: waha
     image: devlikeapro/waha-plus:arm-2025.9.3
@@ -59,3 +81,4 @@ volumes:
   pg_data:
   pgadmin_data:
   letta_data:
+  redis_data:
