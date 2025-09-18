@@ -8,7 +8,7 @@ from flask import Flask, jsonify, render_template_string, request
 
 from config import config
 from contact import Contact
-from memory_agent import MemoryAgent
+from memory_agent import MemoryManager
 from providers.dalle import Dalle
 from utiles.globals import send_request
 from utiles.logger import logger
@@ -17,13 +17,7 @@ from whatsapp import WhatsappMSG
 app = Flask(__name__)
 
 
-# _memory_agents = {}
-
-
-# def get_memory_agent(recipient: str) -> MemoryAgent:
-#     if recipient not in _memory_agents:
-#         _memory_agents[recipient] = MemoryAgent(recipient)
-#     return _memory_agents[recipient]
+memory_manager = MemoryManager()
 
 def pass_filter(payload):
     if payload.get('event') == "message_ack" or \
@@ -60,30 +54,20 @@ def webhook():
     try:
         if pass_filter(payload) is False:
             return jsonify({"status": "ok"}), 200
+        # logger.debug(f"Received webhook payload: {payload}")
         msg = WhatsappMSG(payload)
-        logger.info(msg)
+        agent = memory_manager.get_agent(msg)
+        if msg.message:
+            agent.remember(timestamp=msg.timestamp, sender=msg.contact.name or msg.contact.number, msg=msg.message)
+        # logger.info(msg)
+        # logger.debug(f"Message payload: {msg.to_dict()}")
+        # MemoryAgent = get_memory_agent(whatsapp_msg._from)
+        # mem_agent.remember(text=msg.message, role=msg.contact.name or "unknown")
         return jsonify({"status": "ok"}), 200
     except Exception as e:
-        logger.error(f"Error processing webhook: {e} || Payload: {payload}")
+        logger.error(f"Error processing webhook: {e}")
+        raise
         return jsonify({"error": str(e)}), 200
-    # # from_ = payload.get('from')
-    # # contact: Contact = get_or_create_contact(contact_id=from_)
-    # print(msg)
-    # return jsonify({"status": "ok"}), 200
-
-    # if not contact.is_me:
-    #     logger.debug(f"Ignoring message from {from_}")
-    #     return jsonify({"status": "ignored"}), 200
-
-    # whatsapp_msg = WhatsappMSG(payload)
-    # print(whatsapp_msg)
-    # mem_agent: MemoryAgent = get_memory_agent(whatsapp_msg._from)
-
-    # mem_agent.remember(text=whatsapp_msg.message,
-    #                    role=whatsapp_msg.contact.name or "unknown")
-
-    # if not whatsapp_msg.is_valid():
-    #     return jsonify({"status": "ignored"}), 200
 
     # try:
     #     route = whatsapp_msg.route()
@@ -112,10 +96,7 @@ def webhook():
     #         return jsonify({"status": "no matching handler"}), 200
     #     return jsonify({"status": "ok"}), 200
 
-    # except Exception as e:
-    #     logger.error(f"Failed to process message: {e}")
-    #     raise
-    #     return jsonify({"error": str(e)}), 400
+
 
 
 @app.route("/pair", methods=["GET"])
@@ -161,5 +142,4 @@ def pair():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5002,
-            debug=True if config.log_level == "DEBUG" else False)
+    app.run(host="0.0.0.0", port=5002,debug=True if config.log_level == "DEBUG" else False)
