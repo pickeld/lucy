@@ -1,5 +1,6 @@
 from time import sleep
 import requests
+from samples import json_msg
 
 
 conversation = [
@@ -13,21 +14,33 @@ conversation = [
 ]
 
 
-
-for sentence in conversation:
-    print(f"Sending: {sentence}")
+def send_msg(msg):
     response = requests.post(
         "http://localhost:5002/webhook",
         json={
-            "payload":
-                {
-                    "fromMe": True,
-                    "body":sentence,
-                    "to": "120363401685799472@g.us",
-                }
-                
+            "payload": msg
         }
     )
-    print(f"Response: {response.status_code} - {response.text}")
-    sleep(1)  # Sleep to avoid overwhelming the server
-    
+    return response
+
+# for sentence in conversation:
+#     print(f"Sending: {sentence}")
+#     response = requests.post(
+#         "http://localhost:5002/webhook",
+#         json={
+#             "payload":
+#                 about:blank{
+#                     "fromMe": True,
+#                     "body":sentence,
+#                     "to": "120363401685799472@g.us",
+#                 }
+
+#         }
+#     )
+#     print(f"Response: {response.status_code} - {response.text}")
+#     sleep(1)  # Sleep to avoid overwhelming the server
+
+
+if __name__ == "__main__":
+    res = send_msg(json_msg)
+    print(f"Response: {res.status_code} - {res.text}")
