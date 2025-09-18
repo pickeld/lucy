@@ -53,7 +53,6 @@ class ContactManager:
         try:
             response = send_request(
                 method="GET", endpoint="/api/contacts", params=params)
-            logger.debug(f"Fetched contact data: {response}")
             return response
         except Exception as e:
             logger.error(f"WAHA contact fetch failed for {contact_id}: {e}")
