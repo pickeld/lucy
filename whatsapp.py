@@ -67,12 +67,9 @@ class WhatsappMSG:
     def __init__(self, payload):
         self.contact: Contact = contact_manager.get_contact(payload)
         self.group: Group = group_manager.get_group(payload)
-        if not self.group.id:
-            logger.info(f"Message from contact: {self.contact}")
-
+        self.is_group = True if self.group.id else False
         self.timestamp = payload.get("timestamp")
-        self.message = payload.get("body") if payload.get(
-            "body") else "Empty message"
+        self.message = payload.get("body", None)
         self.media = MediaMessage(payload)
         # self.quoted = QuotedMessage(quoted_data=payload.get("quotedMsg", {}), recipient=self.recipient)
         # self.recipient = payload.get("to")
