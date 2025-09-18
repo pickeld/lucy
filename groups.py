@@ -30,8 +30,6 @@ class GroupManager:
             resp = send_request(
                 method="GET", endpoint=f"/api/{config.waha_session_name}/groups/{group_id}")
             return resp
-            logger.error(
-                f"Unexpected WAHA response for {group_id}: {type(resp)}")
         except Exception as e:
             logger.error(f"WAHA group fetch failed for {group_id}: {e}")
             return {}
@@ -46,8 +44,7 @@ class Group:
         return f"Name: {self.name}"
 
     def extract(self, data: Dict[str, Any]) -> "Group":
-        # populate fields in-place and return self
-        self.id = data.get("id")
+        self.id = data.get("id", {}).get("_serialized")
         self.name = data.get("name")
         return self
 
