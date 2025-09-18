@@ -19,14 +19,16 @@ app = Flask(__name__)
 
 memory_manager = MemoryManager()
 
+
 def pass_filter(payload):
     if payload.get('event') == "message_ack" or \
-        payload.get("from").endswith("@newsletter") or \
-        payload.get("from").endswith("@broadcast") or \
-        payload.get("_data", {}).get("type") == "e2e_notification":
-            return False
-        
+            payload.get("from").endswith("@newsletter") or \
+            payload.get("from").endswith("@broadcast") or \
+            payload.get("_data", {}).get("type") == "e2e_notification":
+        return False
+
     return True
+
 
 @app.route("/health", methods=["GET"])
 def health():
@@ -58,45 +60,12 @@ def webhook():
         msg = WhatsappMSG(payload)
         agent = memory_manager.get_agent(msg)
         if msg.message:
-            agent.remember(timestamp=msg.timestamp, sender=msg.contact.name or msg.contact.number, msg=msg.message)
-        # logger.info(msg)
-        # logger.debug(f"Message payload: {msg.to_dict()}")
-        # MemoryAgent = get_memory_agent(whatsapp_msg._from)
-        # mem_agent.remember(text=msg.message, role=msg.contact.name or "unknown")
+            agent.remember(timestamp=msg.timestamp,
+                           sender=msg.contact.name or msg.contact.number, msg=msg.message)
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         logger.error(f"Error processing webhook: {e}")
-        raise
         return jsonify({"error": str(e)}), 200
-
-    # try:
-    #     route = whatsapp_msg.route()
-    #     if route == "chat":
-    #         response = mem_agent.send_message(whatsapp_msg)
-    #         whatsapp_msg.reply(str(response))
-    #     elif route == "dalle":
-    #         dalle = Dalle()
-    #         dalle.context = mem_agent.get_recent_text_context()
-
-    #         dalle.prompt = whatsapp_msg.message[len(
-    #             config.dalle_prefix):].strip()
-    #         image_url = dalle.request()
-
-    #         send_request(method="POST",
-    #                      endpoint="/api/sendImage",
-    #                      payload={
-    #                          "chatId": payload.get("to"),
-    #                          "file": {"url": image_url},
-    #                          "session": config.waha_session_name
-    #                      })
-
-    #     else:
-    #         logger.debug(
-    #             f"Message did not match any route: {whatsapp_msg.message}")
-    #         return jsonify({"status": "no matching handler"}), 200
-    #     return jsonify({"status": "ok"}), 200
-
-
 
 
 @app.route("/pair", methods=["GET"])
@@ -115,7 +84,6 @@ def pair():
         send_request(method="POST", endpoint="/api/sessions/start",
                      payload={"name": session_name})
 
-        # Step 3: Configure webhook
         send_request("PUT", f"/api/sessions/{session_name}", {
             "config": {
                 "webhooks": [
@@ -127,7 +95,6 @@ def pair():
             }
         })
 
-    # Step 4: Get QR code
     qr_response = send_request("GET", f"/api/{session_name}/auth/qr")
     if isinstance(qr_response, dict) and "error" in qr_response:
         return f"Failed to get QR code: {qr_response['error']}", 500
@@ -142,4 +109,5 @@ def pair():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5002,debug=True if config.log_level == "DEBUG" else False)
+    app.run(host="0.0.0.0", port=5002,
+            debug=True if config.log_level == "DEBUG" else False)
