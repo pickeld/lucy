@@ -57,6 +57,15 @@ if __name__ == "__main__":
     client = Letta(base_url="http://localhost:8283")
     # delete_all_agents(client=client)
     # delete_all_sources(client=client)
-    # delete_all_identities(client=client)
+    # delete_all_identities(cliendt=client)
     # list_agent_tools(client=client)
-    force_sleep_agents(client=client)
+    # force_sleep_agents(client=client)
+    client.agents.messages.create(
+        agent_id="agent-cbd569d3-a985-4511-90cb-843741f5eb24",
+        messages=[{"role": "user", "content": "Say OK"}],
+        max_steps=5
+    )
+
+    a = client.agents.retrieve(
+        agent_id="agent-cbd569d3-a985-4511-90cb-843741f5eb24")
+    print(a.last_run_completion, a.last_run_duration_ms)

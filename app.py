@@ -56,8 +56,9 @@ def webhook():
     try:
         if pass_filter(payload) is False:
             return jsonify({"status": "ok"}), 200
-        logger.debug(f"Received webhook payload: {payload}")
+        # logger.debug(f"Received webhook payload: {payload}")
         msg = WhatsappMSG(payload)
+        logger.debug(f"Received: {msg.__dict__}")
         agent = memory_manager.get_agent(msg)
         if msg.message:
             agent.remember(timestamp=msg.timestamp,

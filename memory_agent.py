@@ -20,8 +20,12 @@ class MemoryManager:
             chat_id = msg.group.id
             chat_name = msg.group.name
         else:
-            chat_id = msg.contact.number
-            chat_name = msg.contact.name
+            if msg.contact.is_me:
+                chat_id = msg.to.replace("@c.us", "")
+                chat_name = msg.contact.name
+            else:
+                chat_id = msg.contact.number
+                chat_name = msg.contact.name
 
         if chat_id not in self.agents:
             self.agents[chat_id] = MemoryAgent(chat_id, chat_name)
@@ -94,13 +98,20 @@ class MemoryAgent:
                     tags=["whatsapp", self.chat_id, self.chat_name],
                     include_base_tools=True,
                     include_default_source=True,
+                    timezone="Asia/Jerusalem",
                     include_base_tool_rules=True,
                     tools=["archival_memory_search",
-                           "memory_rethink", "conversation_search"],
+                           "memory_rethink",
+                           "conversation_search",
+                           "memory_insert",
+                           "memory_replace",
+                           "memory_rethink",
+                           "memory_finish_edits",
+                           "archival_memory_insert",
+                           "web_search"
+                           ],
                     tool_ids=["tool-4f91bfc0-ff78-42bc-83e9-9cc8768772dd"]
                 )
-                srcs = self.client.agents.sources.list(agent_id=agent.id)
-                print("Agent sources:", [(s.name, s.id) for s in srcs])
                 self.agent = agent
             except Exception as e:
                 logger.error(f"Failed to create agent: {str(e)}")

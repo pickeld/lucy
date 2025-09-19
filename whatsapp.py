@@ -71,6 +71,7 @@ class WhatsappMSG:
         self.timestamp = payload.get("timestamp")
         self.message = payload.get("body", None)
         self.media = MediaMessage(payload)
+        self.to = payload.get("to", None)
         # self.quoted = QuotedMessage(quoted_data=payload.get("quotedMsg", {}), recipient=self.recipient)
         # self.recipient = payload.get("to")
 
