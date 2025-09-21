@@ -17,7 +17,6 @@ class ContactManager:
         _from = payload.get("from", None)
         _participant = payload.get("participant", None)
         if _from and _from.endswith("@c.us"):
-            logger.debug(f"Redis lookup for contact: contact:{_from}")
             contact_data = redis_get(f"contact:{_from}")
             if not contact_data:
                 contact_data = self.fetch_contact(_from)

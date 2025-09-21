@@ -56,16 +56,17 @@ def webhook():
     try:
         if pass_filter(payload) is False:
             return jsonify({"status": "ok"}), 200
-        # logger.debug(f"Received webhook payload: {payload}")
+        
         msg = WhatsappMSG(payload)
-        logger.debug(f"Received: {msg.__dict__}")
+        # logger.debug(f"Received: {msg.__dict__}")
         agent = memory_manager.get_agent(msg)
         if msg.message:
             agent.remember(timestamp=msg.timestamp,
                            sender=msg.contact.name or msg.contact.number, msg=msg.message)
+        logger.debug(msg.to_dict())
         return jsonify({"status": "ok"}), 200
     except Exception as e:
-        logger.error(f"Error processing webhook: {e}")
+        logger.error(f"Error processing webhook: {e} ::: {payload}")
         return jsonify({"error": str(e)}), 200
 
 
