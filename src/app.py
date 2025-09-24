@@ -1,10 +1,11 @@
 import base64
+import time
 from typing import Dict, Union
 
 import httpx
 import requests
 import json
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, jsonify, redirect, render_template_string, request, url_for
 
 from config import config
 from contact import Contact
@@ -70,34 +71,27 @@ def webhook():
         return jsonify({"error": str(e)}), 200
 
 
-@app.route("/pair", methods=["GET"])
-def pair():
-    session_name = config.waha_session_name
+@app.route("/", methods=["GET"])
+def index():
+    try:
+        response = send_request("GET", f"/api/sessions/{config.waha_session_name}")
+        status_data = response.json()
+        logger.debug(f"Session status: {status_data}")
+        
+        if status_data.get("status") == "WORKING" and status_data.get("engine", {}).get("state") == "CONNECTED":
+            return "<h1>Session 'default' is already connected.</h1>", 200
+        elif status_data.get("status") == "SCAN_QR_CODE":
+            return redirect("/qr_code")
+        else:
+            return redirect("/pair")
+    #catch 404 error    
+    except Exception as e:
+        logger.error(f"Error checking session status: {e}")
 
-    response = send_request("GET", f"/api/sessions/{session_name}")
 
-    status_data = response.json()
-    logger.debug(f"Status data: {status_data}")
-
-    if status_data.get("status") == "WORKING" and status_data.get("engine", {}).get("state") == "CONNECTED":
-        return "<h1>Session 'default' is already connected.</h1>", 200
-
-    if status_data.get("status") != "SCAN_QR_CODE":
-        send_request(method="POST", endpoint="/api/sessions/start",
-                     payload={"name": session_name})
-
-        send_request("PUT", f"/api/sessions/{session_name}", {
-            "config": {
-                "webhooks": [
-                    {
-                        "url": config.waha_webhook_url,
-                        "events": ["message.any", "session.status"]
-                    }
-                ]
-            }
-        })
-
-    qr_response = send_request("GET", f"/api/{session_name}/auth/qr")
+@app.route("/qr_code", methods=["GET"])
+def qr_code():
+    qr_response = send_request("GET", f"/api/{config.waha_session_name}/auth/qr")
     if isinstance(qr_response, dict) and "error" in qr_response:
         return f"Failed to get QR code: {qr_response['error']}", 500
 
@@ -108,8 +102,26 @@ def pair():
         return render_template_string(html)
     else:
         return "QR code not available yet. Please refresh in a few seconds.", 200
+    
+@app.route("/pair", methods=["GET"])
+def pair():
+    session_name = config.waha_session_name
+    send_request(method="POST", endpoint="/api/sessions/start", payload={"name": session_name})
+
+    send_request("PUT", f"/api/sessions/{session_name}", {
+        "config": {
+            "webhooks": [
+                {
+                    "url": config.webhook_url,
+                    "events": ["message.any", "session.status"]
+                    }
+                ]
+            }
+        })
+    time.sleep(2)
+    return redirect("/qr_code")
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5002,
+    app.run(host="0.0.0.0", port=8765,
             debug=True if config.log_level == "DEBUG" else False)

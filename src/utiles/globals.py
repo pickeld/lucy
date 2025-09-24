@@ -9,10 +9,9 @@ def send_request(method: str, endpoint: str, payload: Union[Dict, None] = None, 
     payload = payload or {}
     params = params or {}
     response = Response()
-
     headers = {"Content-Type": "application/json",
-               "X-Api-Key": config.waha_api_key,
-               "stream": "true"}
+            "X-Api-Key": config.waha_api_key,
+            "stream": "true"}
     url = f"{config.waha_base_url}{endpoint}"
     if method.upper() == "POST":
         response = requests.post(
@@ -22,5 +21,4 @@ def send_request(method: str, endpoint: str, payload: Union[Dict, None] = None, 
     elif method.upper() == "PUT":
         response = requests.put(
             url, json=payload, headers=headers, params=params)
-    response.raise_for_status()
-    return response.json()
+    return response

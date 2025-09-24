@@ -76,6 +76,23 @@ services:
       - "5080:80"
     volumes:
       - pgadmin_data:/var/lib/pgadmin
+  
+  app:
+    build: .
+    container_name: whatsapp-gpt
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8765:8765"
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+      - waha
+      - db
+      - letta
+
 volumes:
   waha_data:
   pg_data:
