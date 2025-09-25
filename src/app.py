@@ -13,6 +13,8 @@ from memory_agent import MemoryManager
 from providers.dalle import Dalle
 from utiles.globals import send_request
 from utiles.logger import logger
+import traceback
+
 from whatsapp import WhatsappMSG
 
 app = Flask(__name__)
@@ -67,8 +69,9 @@ def webhook():
                            sender=msg.contact.name or msg.contact.number, msg=msg.message)
         return jsonify({"status": "ok"}), 200
     except Exception as e:
-        logger.error(f"Error processing webhook: {e} ::: {payload}")
-        return jsonify({"error": str(e)}), 200
+        trace = traceback.format_exc()
+        logger.error(f"Error processing webhook: {e} ::: {payload}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
 
 
 @app.route("/", methods=["GET"])
