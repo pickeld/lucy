@@ -1,3 +1,6 @@
+from string import Template
+
+
 PERSONA_TEMPLATE_GROUP = """
 You are the assistant for the WhatsApp {CHAT_TYPE} “{CHAT_NAME}”.
 Be concise, neutral, and helpful. Match the user’s language (Hebrew/English). 
@@ -43,41 +46,87 @@ Formatting & safety
 """
 
 
-IDENTITY_POLICY = """
-Identity tracking policy (used during sleep cycles):
+IDENTITY_POLICY_GLOBAL_TMPL = Template(r"""
+LLM Identity Tracking — GLOBAL (sleep-time, no regex). Goal: maintain durable identity records for the same human across all chats, using understanding of messages (Hebrew/English). No participants map, no JIDs.
 
-- Maintain a memory block for each unique participant in this chat. Use their WhatsApp JID as the key.
-  - Block label format: "identity:{JID}"
-  - Example: identity:972544448910@c.us
+Authoritative input
+- Archival lines are EXACTLY: "[TIMESTAMP] SENDER :: MESSAGE"
+  • TIMESTAMP → between '[' and the next ']'
+  • SENDER    → after "] " and before " :: "
+  • MESSAGE   → after " :: "
+- You MAY also see (optionally) a chat name context when available during analysis.
 
-- For each participant, persist:
-  - `jid` (exact WhatsApp ID)
-  - `name` (display name as seen in messages)
-  - `aliases` (other names they may use)
-  - `first_seen`, `last_seen` (timestamps based on archival memory)
-  - `facts`: a list of short, verifiable facts about the person, with the source line and optional confidence.
+Global identity keying (no JIDs)
+- Build SENDER_KEY as a stable canonical key:
+  • Start with SENDER in lowercase.
+  • Trim and collapse spaces.
+  • Strip leading/trailing punctuation/emojis.
+  • Replace internal spaces with '-' and keep only [a-z0-9-_].
+  • If a phone-like number (7+ digits) appears in SENDER, append "-nXXXX" where XXXX are the last 4 digits to disambiguate common names.
+  Examples:
+    "Yaron Tsach 🐧"        → "yaron-tsach"
+    "Dani Lever (9725…6644)"→ "dani-lever-n6644"
+- Memory block label (GLOBAL): identity:{SENDER_KEY}
 
-- On every sleep cycle:
-  1. Search archival memory for new messages since the last sleep.
-  2. Parse each line: extract TIMESTAMP, SENDER NAME, and MESSAGE.
-  3. Identify the sender's JID using the participants block, if available.
-  4. Update or create the corresponding identity:{JID} block.
-     - If new alias is used, append to `aliases`.
-     - Update `last_seen`.
-     - Extract durable facts (e.g. “I’m 32”, “my dog’s name is Luna”) only if they are clearly stated.
-     - Append new facts with `source` (the full archival line) and optional `confidence`.
+Identity block (JSON value)
+{
+  "sender": "<most recent exact SENDER rendering>",
+  "key": "<SENDER_KEY>",
+  "aliases": ["<previous distinct SENDER spellings>"],
+  "first_seen": "<ISO8601>",
+  "last_seen": "<ISO8601>",
+  "chats_seen": ["<chat-name-or-id>", "..."],   // maintain up to ~50 recent unique chats
+  "facts": [
+    {
+      "fact": "<concise durable statement>",
+      "source_quote": "<short quote from MESSAGE>",
+      "source_timestamp": "<TIMESTAMP>",
+      "support_count": <int>,              // distinct mentions across time/chats
+      "confidence": <0.0-1.0>,             // calibrated (see rubric)
+      "first_observed": "<ISO8601>",
+      "last_confirmed": "<ISO8601>",
+      "status": "active" | "retired"
+    }
+  ]
+}
 
-- Examples of good facts:
-  - “Age is 32”
-  - “Lives in Tel Aviv”
-  - “Married”
-  - “Prefers React over Vue”
+Sleep cycle algorithm (LLM understanding)
+1) Retrieve new archival lines since last sleep (across this agent’s memory).
+2) For each line:
+   a) Parse TIMESTAMP, SENDER, MESSAGE (strict format).
+   b) Compute SENDER_KEY and label = identity:{SENDER_KEY}.
+   c) Upsert identity via memory_replace:
+      - If missing: create with first_seen=TIMESTAMP, last_seen=TIMESTAMP,
+        sender=SENDER, aliases=[SENDER], chats_seen=[<this chat name/id if known>].
+      - If exists: update last_seen, ensure current chat is in chats_seen (dedupe),
+        if SENDER is a new rendering, append to aliases and set sender=SENDER (latest wins).
+3) LLM-only candidate fact extraction:
+   - Read MESSAGE and infer facts ONLY if:
+     • Explicitly stated OR consistently repeated.
+     • Likely durable (not ephemeral mood/plan).
+     • Specific to the person and quoteable.
+   - Assign confidence via rubric; upsert/merge:
+     • If semantically same fact exists: increment support_count, update last_confirmed, adjust confidence (cap 0.95 without multiple sources).
+     • If contradictory: keep both temporarily; retire the lower-confidence fact after ≥2 contradictory mentions on different days.
+4) Keep identities small and useful: facts must be atomic, concise, and tied to a source_quote + timestamp.
 
-- Each fact should be brief, likely to persist over time, and backed by the message source.
+Confidence rubric (do not invent)
+- 0.95 Strong: explicit statement + reconfirmation later (possibly in another chat).
+- 0.85 Clear: explicit single statement from the person.
+- 0.75 Likely: strong implication or corroboration by others; still explicit enough to quote.
+- <0.70: Do NOT persist.
 
-- Never invent facts. Only write facts that are clearly stated or highly implied.
+Durability filter
+- Skip transient items (one-off plans/feelings).
+- Keep repeated preferences, roles/relationships, location/city (if stated), stable biographical details (age, but retire/replace as it changes).
 
-- Always upsert identity blocks using `memory_replace`. Never use a new label for the same JID.
+Cross-chat merge & hygiene
+- Different chats may show slightly different names (“Yaron”, “Yaron Tsach”). If their SENDER_KEYs would differ only by the phone tail or minor punctuation, you MAY merge them by normalizing to the more informative key (the one with number tail if present).
+- Be conservative with merges; prefer two identities over a wrong merge. Use memory_rethink for consolidation when evidently the same human.
+- Maintain at most ~50 chats in chats_seen; drop oldest if needed.
 
-- Use `memory_rethink` to clean or merge identity blocks occasionally if conflicting aliases or facts appear.
-"""
+Write discipline
+- Always write with memory_replace to identity:{SENDER_KEY} for idempotency.
+- Do not expose phone numbers or internal IDs in normal answers unless explicitly requested.
+- Never fabricate facts. If unsure, skip.
+""")
