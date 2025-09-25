@@ -25,7 +25,7 @@ class MediaMessage:
             if config.log_level == "DEBUG":
                 # save media to file
                 extension = self.type.split("/")[-1]
-                filename = f"images/media_{payload.get('id')}.{extension}"
+                filename = f"app/images/media_{payload.get('id')}.{extension}"
                 with open(filename, "wb") as f:
                     f.write(base64.b64decode(self.base64))
                 logger.debug(f"Saved media to {filename}")

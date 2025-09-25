@@ -70,7 +70,8 @@ def webhook():
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         trace = traceback.format_exc()
-        logger.error(f"Error processing webhook: {e} ::: {payload}\n{trace}")
+        logger.error(
+            f"Error processing webhook: {e} ::: {payload}\n{trace} :: {payload}")
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
