@@ -67,6 +67,7 @@ def webhook():
         if msg.message:
             agent.remember(timestamp=msg.timestamp,
                            sender=msg.contact.name or msg.contact.number, msg=msg.message)
+        logger.debug(f"Processed message: {msg}")
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         trace = traceback.format_exc()

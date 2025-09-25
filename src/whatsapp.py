@@ -76,7 +76,7 @@ class WhatsappMSG:
         # self.recipient = payload.get("to")
 
     def __str__(self) -> str:
-        return f"{self.group.name}/{self.contact.name}: {self.message} || Media: {self.media}"
+        return f"{self.group.name}/{self.contact.name}: {self.message} || Media: {True if self.media.has_media else False}"
 
     def to_dict(self):
         def serialize(value):
