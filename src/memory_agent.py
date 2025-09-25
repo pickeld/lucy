@@ -2,7 +2,7 @@ from letta_client import AgentState, EmbeddingConfig, Letta, MessageCreate, Mess
 from letta_client.types.agent_state import AgentState
 from typing import List, Union, Optional
 from letta_client import Base64Image, ImageContent, TextContent
-from templates import PERSONA_TEMPLATE_GROUP
+from templates import PERSONA_TEMPLATE_GROUP, IDENTITY_POLICY
 from utiles.logger import logger
 from letta_client.core.api_error import ApiError
 from whatsapp import WhatsappMSG
@@ -103,7 +103,13 @@ class MemoryAgent:
                             value=PERSONA_TEMPLATE_GROUP.format(
                                 CHAT_TYPE="group" if self.is_group else "contact",
                                 CHAT_NAME=self.chat_name)
-                        )
+                        ),
+                        CreateBlock(
+                            label="identity_policy",
+                            value=IDENTITY_POLICY.format(
+                                JID="test"
+                            )
+                        ),
                     ],
                     enable_sleeptime=True,
                     tags=["whatsapp", self.chat_id, self.chat_name],

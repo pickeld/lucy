@@ -41,3 +41,43 @@ Formatting & safety
 - If a query is ambiguous or spans multiple topics, ask one clarifying question before proceeding.
 
 """
+
+
+IDENTITY_POLICY = """
+Identity tracking policy (used during sleep cycles):
+
+- Maintain a memory block for each unique participant in this chat. Use their WhatsApp JID as the key.
+  - Block label format: "identity:{JID}"
+  - Example: identity:972544448910@c.us
+
+- For each participant, persist:
+  - `jid` (exact WhatsApp ID)
+  - `name` (display name as seen in messages)
+  - `aliases` (other names they may use)
+  - `first_seen`, `last_seen` (timestamps based on archival memory)
+  - `facts`: a list of short, verifiable facts about the person, with the source line and optional confidence.
+
+- On every sleep cycle:
+  1. Search archival memory for new messages since the last sleep.
+  2. Parse each line: extract TIMESTAMP, SENDER NAME, and MESSAGE.
+  3. Identify the sender's JID using the participants block, if available.
+  4. Update or create the corresponding identity:{JID} block.
+     - If new alias is used, append to `aliases`.
+     - Update `last_seen`.
+     - Extract durable facts (e.g. “I’m 32”, “my dog’s name is Luna”) only if they are clearly stated.
+     - Append new facts with `source` (the full archival line) and optional `confidence`.
+
+- Examples of good facts:
+  - “Age is 32”
+  - “Lives in Tel Aviv”
+  - “Married”
+  - “Prefers React over Vue”
+
+- Each fact should be brief, likely to persist over time, and backed by the message source.
+
+- Never invent facts. Only write facts that are clearly stated or highly implied.
+
+- Always upsert identity blocks using `memory_replace`. Never use a new label for the same JID.
+
+- Use `memory_rethink` to clean or merge identity blocks occasionally if conflicting aliases or facts appear.
+"""
