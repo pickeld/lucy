@@ -30,12 +30,9 @@ services:
       - waha_data:/app/data
       - waha_data:/app/.sessions
       - waha_data:/app/.media
-
+    env_file:
+      - .env
     restart: unless-stopped
-    environment:
-      - WAHA_API_KEY=your-waha-api-key
-      - WAHA_PRINT_QR=false
-      - WAHA_SESSION_NAME=default
   db:
     image: pgvector/pgvector:pg17        # Postgres + pgvector baked in
     container_name: letta-db
