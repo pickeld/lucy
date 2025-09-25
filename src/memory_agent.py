@@ -6,6 +6,7 @@ from templates import PERSONA_TEMPLATE_GROUP
 from utiles.logger import logger
 from letta_client.core.api_error import ApiError
 from whatsapp import WhatsappMSG
+from config import config
 
 
 LLM_MODEL_NAME = "letta-free"
@@ -39,8 +40,10 @@ class MemoryAgent:
         self.chat_name = chat_name
         self.chat_id = chat_id.replace("@", "_").replace(".", "_")
         self.is_group = True if chat_id.endswith("@g.us") else False
-        self.client = Letta(base_url="http://localhost:8283")
+        self.client = Letta(
+            base_url=f"http://{config.LETTA_HOST}:{config.LETTA_PORT}")
         self.agent: AgentState = None
+        self.tools = self.list_tools()
         self.get_set_agent()
 
     def remember(self, timestamp, sender, msg) -> bool:
@@ -68,6 +71,15 @@ class MemoryAgent:
         except Exception as e:
             logger.error(f"Failed to get models: {str(e)}")
             raise
+
+    def list_tools(self) -> List[str]:
+        """List available tools."""
+        try:
+            tools = self.client.tools.list()
+            return [tool.id for tool in tools]
+        except Exception as e:
+            logger.error(f"Failed to list tools: {str(e)}")
+            return []
 
     def get_set_agent(self) -> AgentState:
         """Get existing agent or create a new one."""
@@ -97,20 +109,10 @@ class MemoryAgent:
                     enable_sleeptime=True,
                     tags=["whatsapp", self.chat_id, self.chat_name],
                     include_base_tools=True,
-                    include_default_source=True,
+                    # include_default_source=True,
                     timezone="Asia/Jerusalem",
                     include_base_tool_rules=True,
-                    tools=["archival_memory_search",
-                           "memory_rethink",
-                           "conversation_search",
-                           "memory_insert",
-                           "memory_replace",
-                           "memory_rethink",
-                           "memory_finish_edits",
-                           "archival_memory_insert",
-                           "web_search"
-                           ],
-                    tool_ids=["tool-4f91bfc0-ff78-42bc-83e9-9cc8768772dd"]
+                    tool_ids=self.tools
                 )
                 self.agent = agent
             except Exception as e:

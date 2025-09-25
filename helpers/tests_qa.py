@@ -16,7 +16,7 @@ conversation = [
 
 def send_msg(msg):
     response = requests.post(
-        "http://localhost:5002/webhook",
+        "http://localhost:8765/webhook",
         json={
             "payload": msg
         }
