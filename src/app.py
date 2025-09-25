@@ -25,7 +25,7 @@ def pass_filter(payload):
     if payload.get('event') == "message_ack" or \
             payload.get("from").endswith("@newsletter") or \
             payload.get("from").endswith("@broadcast") or \
-            payload.get("_data", {}).get("type") == "e2e_notification":
+            payload.get("_data", {}).get("type") in ["e2e_notification", "notification_template"]:
         return False
 
     return True

@@ -36,7 +36,6 @@ class MemoryManager:
 class MemoryAgent:
     def __init__(self, chat_id: str, chat_name: str):
         self.model = None
-        self.chat_id = chat_id
         self.chat_name = chat_name
         self.chat_id = chat_id.replace("@", "_").replace(".", "_")
         self.is_group = True if chat_id.endswith("@g.us") else False
