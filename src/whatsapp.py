@@ -16,7 +16,8 @@ group_manager = GroupManager()
 class MediaMessage:
     def __init__(self, payload):
         self.has_media = payload.get("hasMedia", False)
-        if self.has_media:
+        media_type = payload.get("_data", {}).get("type")
+        if self.has_media and media_type not in ["sticker", "audio", "video"]:
             self.media = payload.get("media", {})
             self.url = self.media.get('url')
             self.type = self.media.get('mimetype')
