@@ -14,7 +14,10 @@ LLM_MODEL_NAME = "letta-free"
 
 class MemoryManager:
     def __init__(self):
+        self.client = Letta(
+            base_url=f"http://{config.LETTA_HOST}:{config.LETTA_PORT}")
         self.agents = {}
+        self.global_agent = MemoryAgent("global", "Global Agent")
 
     def get_agent(self, msg: WhatsappMSG) -> 'MemoryAgent':
         if msg.is_group:
@@ -35,17 +38,18 @@ class MemoryManager:
 
 class MemoryAgent:
     def __init__(self, chat_id: str, chat_name: str):
+        self.client = Letta(
+            base_url=f"http://{config.LETTA_HOST}:{config.LETTA_PORT}")
+
         self.model = None
         self.chat_name = chat_name
         self.chat_id = chat_id.replace("@", "_").replace(".", "_")
         self.is_group = True if chat_id.endswith("@g.us") else False
-        self.client = Letta(
-            base_url=f"http://{config.LETTA_HOST}:{config.LETTA_PORT}")
-        self.agent: AgentState = None
+
         self.tools = self.list_tools()
         self.get_set_agent()
 
-    def remember(self, timestamp, sender, msg) -> bool:
+    def remember(self, timestamp, sender, msg, *args, **kwargs) -> bool:
         try:
             self.client.agents.passages.create(
                 agent_id=self.agent.id,
@@ -107,8 +111,8 @@ class MemoryAgent:
                         CreateBlock(
                             label="identity_policy",
                             value=IDENTITY_POLICY_GLOBAL_TMPL.substitute()
-                            )
-                        
+                        )
+
                     ],
                     enable_sleeptime=True,
                     tags=["whatsapp", self.chat_id, self.chat_name],
