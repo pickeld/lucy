@@ -21,6 +21,7 @@ app = Flask(__name__)
 
 
 memory_manager = MemoryManager()
+global_agent = memory_manager.global_agent
 
 
 def pass_filter(payload):
@@ -67,12 +68,13 @@ def webhook():
         if msg.message:
             agent.remember(timestamp=msg.timestamp,
                            sender=msg.contact.name or msg.contact.number, msg=msg.message)
+            # global_agent.remember(timestamp=msg.timestamp,)
         logger.debug(f"Processed message: {agent.agent.name} || {msg}")
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         trace = traceback.format_exc()
         logger.error(
-            f"Error processing webhook: {e} ::: {payload}\n{trace} :: {payload}")
+            f"Error processing webhook: {e} ::: {payload}\n{trace}")
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
@@ -119,7 +121,7 @@ def pair():
             "webhooks": [
                 {
                     "url": config.webhook_url,
-                    "events": ["message.any", "session.status"]
+                    "events": ["message.any"]
                 }
             ]
         }
