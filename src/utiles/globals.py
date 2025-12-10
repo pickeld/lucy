@@ -5,36 +5,36 @@ import requests
 from requests.models import Response
 
 
-def send_request(method: str, endpoint: str, payload: Union[Dict, None] = None, params: Union[Dict, None] = None) -> Dict:
+def send_request(
+    method: str,
+    endpoint: str,
+    payload: Union[Dict, None] = None,
+    params: Union[Dict, None] = None,
+) -> Dict:
     payload = payload or {}
     params = params or {}
 
+    url = f"{config.waha_base_url}{endpoint}"
     headers = {
         "Content-Type": "application/json",
         "X-Api-Key": config.waha_api_key,
-        "stream": "true"
+        "stream": "true",
     }
 
-    url = f"{config.waha_base_url}{endpoint}"
-
+    response = None
     try:
         if method.upper() == "POST":
-            response = requests.post(
-                url, json=payload, headers=headers, params=params)
+            response = requests.post(url, json=payload, headers=headers, params=params)
         elif method.upper() == "PUT":
-            response = requests.put(
-                url, json=payload, headers=headers, params=params)
+            response = requests.put(url, json=payload, headers=headers, params=params)
         else:
             response = requests.get(url, headers=headers, params=params)
 
         response.raise_for_status()
-        try:
-            return response.json()
-        except Exception as json_err:
-            return response
-
-    except requests.HTTPError as http_err:
-        # Try to inspect JSON response for known errors
-        response_json = response.json()
-        logger.error(
-            f"HTTP error occurred: {http_err} - Response: {response_json}")
+        return response.json()
+    except requests.RequestException as req_err:
+        if response is not None:
+            logger.error(f"HTTP error occurred: {req_err} - Response: {response.text}")
+        else:
+            logger.error(f"HTTP error occurred: {req_err} - No response received")
+        return {}
