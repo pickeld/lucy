@@ -33,39 +33,39 @@ services:
     env_file:
       - .env
     restart: unless-stopped
-  db:
-    image: pgvector/pgvector:pg17        # Postgres + pgvector baked in
-    container_name: letta-db
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: letta                # default DB that Letta will use
-      POSTGRES_USER: letta
-      POSTGRES_PASSWORD: letta_pass
-    ports:
-      - "5432:5432"                     # expose locally; drop if not needed
-    volumes:
-      - pg_data:/var/lib/postgresql/data
-      - ./scripts/postgres-db-init/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U letta"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-  letta:
-    image: letta/letta:latest
-    container_name: letta
-    restart: unless-stopped
-    environment:
-      LETTA_PG_URI: postgresql://letta:letta_pass@letta-db:5432/letta
-    env_file:
-      - .env
-    ports:
-      - "8283:8283"
-    volumes:
-      - letta_data:/app/data
-    depends_on:
-      db:
-        condition: service_healthy
+  # db:
+  #   image: pgvector/pgvector:pg17        # Postgres + pgvector baked in
+  #   container_name: letta-db
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_DB: letta                # default DB that Letta will use
+  #     POSTGRES_USER: letta
+  #     POSTGRES_PASSWORD: letta_pass
+  #   ports:
+  #     - "5432:5432"                     # expose locally; drop if not needed
+  #   volumes:
+  #     - pg_data:/var/lib/postgresql/data
+  #     - ./scripts/postgres-db-init/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U letta"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  # letta:
+  #   image: letta/letta:latest
+  #   container_name: letta
+  #   restart: unless-stopped
+  #   environment:
+  #     LETTA_PG_URI: postgresql://letta:letta_pass@letta-db:5432/letta
+  #   env_file:
+  #     - .env
+  #   ports:
+  #     - "8283:8283"
+  #   volumes:
+  #     - letta_data:/app/data
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
   pgadmin:
     image: dpage/pgadmin4:latest
     # container_name: pgadmin
@@ -91,8 +91,8 @@ services:
     depends_on:
       - redis
       - waha
-      - db
-      - letta
+      # - db
+      # - letta
 
 volumes:
   waha_data:
