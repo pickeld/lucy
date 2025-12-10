@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 
 import httpx
 
@@ -12,6 +13,10 @@ from utiles.logger import logger
 contact_manager = ContactManager()
 group_manager = GroupManager()
 
+
+# make dir
+if not os.path.exists("tmp"):
+    os.makedirs("tmp")
 
 class MediaMessage:
     def __init__(self, payload):
@@ -26,7 +31,7 @@ class MediaMessage:
             if config.log_level == "DEBUG":
                 # save media to file
                 extension = self.type.split("/")[-1]
-                filename = f"/app/tmp/images/media_{payload.get('id')}.{extension}"
+                filename = f"tmp/images/media_{payload.get('id')}.{extension}"
                 with open(filename, "wb") as f:
                     f.write(base64.b64decode(self.base64))
                 logger.debug(f"Saved media to {filename}")
@@ -116,8 +121,3 @@ class WhatsappMSG:
                      }
                      )
 
-
-if __name__ == "__main__":
-    from samples import json_msg
-    msg = WhatsappMSG(json_msg)
-    logger.debug(msg)
