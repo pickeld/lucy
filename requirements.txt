@@ -6,7 +6,10 @@ qrcode[pil]
 redis
 # LangGraph and LangChain dependencies
 langgraph
+langgraph-cli
 langchain
 langchain-openai
 langchain-postgres
+langsmith
 psycopg[binary]
+langgraph-cli[inmem]
