@@ -3,10 +3,11 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
-from langgraph.checkpoint.memory import MemorySaver, PostgresSaver
+from langgraph.checkpoint.postgres import PostgresSaver
 from config import config
 from utiles.logger import logger
 from datetime import datetime
+import os
 
 
 # Define the state structure for our agent
@@ -18,16 +19,30 @@ class AgentState(TypedDict):
     is_group: bool
 
 
-class LangGraphMemoryManager:
-    """Manages LangGraph agents with in-memory checkpointer for persistent memory."""
+class MemoryManager:
+    """Manages LangGraph agents with PostgreSQL checkpointer for persistent memory."""
     
     def __init__(self):
-        """Initialize the LangGraph memory manager with MemorySaver backend."""
+        """Initialize the LangGraph memory manager with PostgreSQL backend."""
         logger.debug("Initializing LangGraphMemoryManager")
         
-        # Initialize MemorySaver checkpointer (in-memory, cross-agent accessible)
-        # For PostgreSQL persistence, install langgraph-checkpoint-postgres
-        self.checkpointer = MemorySaver()
+        # Initialize PostgreSQL checkpointer for persistent, cross-agent accessible storage
+        # Connection string format: postgresql://user:password@host:port/database
+        db_uri = os.getenv(
+            'POSTGRES_CONNECTION_STRING',
+            f"postgresql://{os.getenv('POSTGRES_USER', 'postgres')}:" +
+            f"{os.getenv('POSTGRES_PASSWORD', 'postgres')}@" +
+            f"{os.getenv('POSTGRES_HOST', 'localhost')}:" +
+            f"{os.getenv('POSTGRES_PORT', '5432')}/" +
+            f"{os.getenv('POSTGRES_DB', 'langgraph')}"
+        )
+        
+        try:
+            self.checkpointer = PostgresSaver.from_conn_string(db_uri)
+            self.checkpointer.setup()  # Create tables if they don't exist
+            logger.info(f"PostgreSQL checkpointer initialized: {os.getenv('POSTGRES_HOST', 'localhost')}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize PostgreSQL checkpointer: {e}")
         
         # Initialize OpenAI LLM
         self.llm = ChatOpenAI(
@@ -42,7 +57,7 @@ class LangGraphMemoryManager:
         # Create supervisor agent with access to all conversations
         self.supervisor_agent = self._create_supervisor_agent()
         
-        logger.info("LangGraphMemoryManager initialized successfully with MemorySaver")
+        logger.info("LangGraphMemoryManager initialized successfully")
 
     def _create_agent_graph(self, chat_id: str, chat_name: str, is_group: bool):
         """Create a LangGraph agent for a specific chat."""
@@ -167,7 +182,7 @@ class LangGraphAgent:
         self.graph = graph
         self.config = {"configurable": {"thread_id": chat_id}}
         
-        logger.info(f"LangGraphAgent initialized for {chat_id}")
+        logger.info(f"Agent initialized for {chat_id}")
 
     def send_message(self, sender: str, message: str, timestamp: Optional[str] = None) -> str:
         """Send a message and get a response."""
