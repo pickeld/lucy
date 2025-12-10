@@ -1,133 +1,274 @@
-from letta_client import AgentState, EmbeddingConfig, Letta, MessageCreate, MessageCreateContent, TextContent, ImageContent, CreateBlock
-from letta_client.types.agent_state import AgentState
-from typing import List, Union, Optional
-from letta_client import Base64Image, ImageContent, TextContent
-from templates import PERSONA_TEMPLATE_GROUP, IDENTITY_POLICY_GLOBAL_TMPL
-from utiles.logger import logger
-from letta_client.core.api_error import ApiError
-from whatsapp import WhatsappMSG
+from typing import Annotated, TypedDict, List, Optional, Dict
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from langgraph.checkpoint.memory import MemorySaver, PostgresSaver
 from config import config
+from utiles.logger import logger
+from datetime import datetime
 
 
-LLM_MODEL_NAME = "letta-free"
+# Define the state structure for our agent
+class AgentState(TypedDict):
+    """State structure for LangGraph agent conversations."""
+    messages: Annotated[List[BaseMessage], add_messages]
+    chat_id: str
+    chat_name: str
+    is_group: bool
 
 
-class MemoryManager:
+class LangGraphMemoryManager:
+    """Manages LangGraph agents with in-memory checkpointer for persistent memory."""
+    
     def __init__(self):
-        self.client = Letta(
-            base_url=f"http://{config.LETTA_HOST}:{config.LETTA_PORT}")
+        """Initialize the LangGraph memory manager with MemorySaver backend."""
+        logger.debug("Initializing LangGraphMemoryManager")
+        
+        # Initialize MemorySaver checkpointer (in-memory, cross-agent accessible)
+        # For PostgreSQL persistence, install langgraph-checkpoint-postgres
+        self.checkpointer = MemorySaver()
+        
+        # Initialize OpenAI LLM
+        self.llm = ChatOpenAI(
+            model=config.OPENAI_MODEL,
+            temperature=float(getattr(config, 'OPENAI_TEMPERATURE', 0.7)),
+            api_key=config.OPENAI_API_KEY
+        )
+        
+        # Cache for agent graphs
         self.agents = {}
-        self.global_agent = MemoryAgent("global", "Global Agent")
+        
+        # Create supervisor agent with access to all conversations
+        self.supervisor_agent = self._create_supervisor_agent()
+        
+        logger.info("LangGraphMemoryManager initialized successfully with MemorySaver")
 
-    def get_agent(self, msg: WhatsappMSG) -> 'MemoryAgent':
-        if msg.is_group:
-            chat_id = msg.group.id
-            chat_name = msg.group.name
-        else:
-            if msg.contact.is_me:
-                chat_id = msg.to.replace("@c.us", "")
-                chat_name = msg.contact.name
-            else:
-                chat_id = msg.contact.number
-                chat_name = msg.contact.name
+    def _create_agent_graph(self, chat_id: str, chat_name: str, is_group: bool):
+        """Create a LangGraph agent for a specific chat."""
+        
+        def chat_node(state: AgentState):
+            """Main chat processing node."""
+            messages = state["messages"]
+            
+            # Add system message with context
+            system_msg = SystemMessage(content=f"""You are a helpful AI assistant for WhatsApp.
+Chat Type: {'Group' if is_group else 'Personal'}
+Chat Name: {chat_name}
 
-        if chat_id not in self.agents:
-            self.agents[chat_id] = MemoryAgent(chat_id, chat_name)
-        return self.agents[chat_id]
+Remember conversations and provide contextual responses based on the chat history.""")
+            
+            # Invoke the LLM with full message history
+            response = self.llm.invoke([system_msg] + messages)
+            
+            return {"messages": [response]}
+        
+        # Build the graph
+        workflow = StateGraph(AgentState)
+        workflow.add_node("chat", chat_node)
+        workflow.add_edge(START, "chat")
+        workflow.add_edge("chat", END)
+        
+        # Compile with checkpointer for persistence
+        return workflow.compile(checkpointer=self.checkpointer)
 
+    def _create_supervisor_agent(self):
+        """Create a supervisor agent that can read all conversation threads."""
+        
+        def supervisor_node(state: AgentState):
+            """Supervisor node with cross-agent memory access."""
+            messages = state["messages"]
+            
+            # Get recent conversations from all threads
+            all_conversations = self._get_all_recent_conversations(limit=50)
+            
+            context = f"""You are a supervisor AI with access to all WhatsApp conversations.
+            
+Recent conversations across all chats:
+{all_conversations}
 
-class MemoryAgent:
-    def __init__(self, chat_id: str, chat_name: str):
-        logger.debug(f"Initializing MemoryAgent for chat_id: {chat_id}")
-        logger.debug(f"Using Letta host: {config.LETTA_HOST}, port: {config.LETTA_PORT}")
-        # self.client = Letta(base_url=f"http://{config.LETTA_HOST}:{config.LETTA_PORT}")
-        self.client = Letta(base_url=f"http://localhost:{config.LETTA_PORT}")
+Use this context to provide insights, summaries, or analysis across multiple conversations."""
+            
+            system_msg = SystemMessage(content=context)
+            response = self.llm.invoke([system_msg] + messages)
+            
+            return {"messages": [response]}
+        
+        workflow = StateGraph(AgentState)
+        workflow.add_node("supervisor", supervisor_node)
+        workflow.add_edge(START, "supervisor")
+        workflow.add_edge("supervisor", END)
+        
+        return workflow.compile(checkpointer=self.checkpointer)
 
-        self.model = None
-        self.chat_name = chat_name
-        self.chat_id = chat_id.replace("@", "_").replace(".", "_")
-        self.is_group = True if chat_id.endswith("@g.us") else False
-
-        self.tools = self.list_tools()
-        self.get_set_agent()
-
-    def remember(self, timestamp, sender, msg, *args, **kwargs) -> bool:
+    def _get_all_recent_conversations(self, limit: int = 50) -> str:
+        """Retrieve recent messages from all conversation threads."""
         try:
-            self.client.agents.passages.create(
-                agent_id=self.agent.id,
-                text=f"[{timestamp}] {sender} :: {msg}"
+            # Access all checkpoints from MemorySaver
+            conversations = []
+            checkpoint_data = self.checkpointer.storage
+            
+            # Iterate through all thread checkpoints
+            for thread_id, checkpoint_dict in list(checkpoint_data.items())[:limit]:
+                if thread_id == "supervisor":
+                    continue
+                    
+                # Get the most recent checkpoint
+                if checkpoint_dict:
+                    latest = max(checkpoint_dict.keys())
+                    checkpoint = checkpoint_dict[latest]
+                    
+                    # Extract messages
+                    if 'channel_values' in checkpoint:
+                        messages = checkpoint['channel_values'].get('messages', [])
+                        if messages:
+                            msg_text = "\n".join([
+                                f"  {msg.content if hasattr(msg, 'content') else str(msg)}"
+                                for msg in messages[-5:]  # Last 5 messages
+                            ])
+                            conversations.append(f"Thread {thread_id}:\n{msg_text}\n")
+            
+            return "\n".join(conversations) if conversations else "No recent conversations found."
+        except Exception as e:
+            logger.error(f"Error retrieving conversations: {e}")
+            return "Error accessing conversation history."
+
+    def get_agent(self, chat_id: str, chat_name: str, is_group: bool):
+        """Get or create an agent for a specific chat."""
+        # Normalize chat_id
+        normalized_id = chat_id.replace("@", "_").replace(".", "_")
+        
+        if normalized_id not in self.agents:
+            logger.debug(f"Creating new agent for chat: {normalized_id}")
+            self.agents[normalized_id] = LangGraphAgent(
+                chat_id=normalized_id,
+                chat_name=chat_name,
+                is_group=is_group,
+                graph=self._create_agent_graph(normalized_id, chat_name, is_group)
             )
+        
+        return self.agents[normalized_id]
+
+    def get_supervisor(self):
+        """Get the supervisor agent with cross-chat access."""
+        return LangGraphSupervisor(
+            graph=self.supervisor_agent,
+            manager=self
+        )
+
+
+class LangGraphAgent:
+    """Individual chat agent with persistent memory."""
+    
+    def __init__(self, chat_id: str, chat_name: str, is_group: bool, graph):
+        self.chat_id = chat_id
+        self.chat_name = chat_name
+        self.is_group = is_group
+        self.graph = graph
+        self.config = {"configurable": {"thread_id": chat_id}}
+        
+        logger.info(f"LangGraphAgent initialized for {chat_id}")
+
+    def send_message(self, sender: str, message: str, timestamp: Optional[str] = None) -> str:
+        """Send a message and get a response."""
+        if timestamp is None:
+            timestamp = datetime.now().isoformat()
+        
+        # Format message with metadata
+        formatted_message = f"[{timestamp}] {sender}: {message}"
+        
+        # Create state with message
+        state = {
+            "messages": [HumanMessage(content=formatted_message)],
+            "chat_id": self.chat_id,
+            "chat_name": self.chat_name,
+            "is_group": self.is_group
+        }
+        
+        # Add metadata for LangSmith UI display
+        config_with_metadata = {
+            **self.config,
+            "metadata": {
+                "chat_name": self.chat_name,
+                "chat_id": self.chat_id,
+                "sender": sender,
+                "is_group": self.is_group
+            },
+            "run_name": f"{self.chat_name} - {sender}"
+        }
+        
+        # Invoke graph with persistent state and metadata
+        result = self.graph.invoke(state, config_with_metadata)
+        
+        # Extract AI response
+        if result and "messages" in result and result["messages"]:
+            last_message = result["messages"][-1]
+            return last_message.content if hasattr(last_message, 'content') else str(last_message)
+        
+        return "No response generated"
+
+    def remember(self, timestamp: str, sender: str, message: str) -> bool:
+        """Store a message in the conversation history without generating a response."""
+        try:
+            formatted_message = f"[{timestamp}] {sender}: {message}"
+            
+            state = {
+                "messages": [HumanMessage(content=formatted_message)],
+                "chat_id": self.chat_id,
+                "chat_name": self.chat_name,
+                "is_group": self.is_group
+            }
+            
+            # Just invoke to store in checkpoint, don't return response
+            self.graph.invoke(state, self.config)
             return True
-
         except Exception as e:
-            logger.error(f"Unexpected error in remember: {str(e)}")
-            raise
+            logger.error(f"Error storing message: {e}")
+            return False
 
-    def get_models(self):
-        """Get available models and set the one we want to use."""
+    def get_history(self, limit: int = 10) -> List[BaseMessage]:
+        """Retrieve conversation history."""
         try:
-            models = self.client.models.list()
-            for model in models:
-                if model.model == LLM_MODEL_NAME:
-                    self.model = model
-                    return model
-            raise ValueError(
-                f"Model {LLM_MODEL_NAME} not found in available models.")
+            # Get state from checkpointer
+            state = self.graph.get_state(self.config)
+            if state and "messages" in state.values:
+                return state.values["messages"][-limit:]
+            return []
         except Exception as e:
-            logger.error(f"Failed to get models: {str(e)}")
-            raise
-
-    def list_tools(self) -> List[str]:
-        """List available tools."""
-        try:
-            tools = self.client.tools.list()
-            return [tool.id for tool in tools]
-        except Exception as e:
-            logger.error(f"Failed to list tools: {str(e)}")
+            logger.error(f"Error retrieving history: {e}")
             return []
 
-    def get_set_agent(self) -> AgentState:
-        """Get existing agent or create a new one."""
-        try:
-            agents = self.client.agents.list(name=self.chat_id)
-            self.agent = agents[0]
-        except IndexError:
-            logger.debug(
-                f"No existing agent for {self.chat_id}, creating new one.")
-            try:
-                agent = self.client.agents.create(
-                    name=self.chat_id,
-                    llm_config=self.model if self.model else self.get_models(),
-                    embedding_config=EmbeddingConfig(
-                        embedding_endpoint_type="openai",
-                        embedding_model="text-embedding-3-small",
-                        embedding_dim=1536,
-                    ),
-                    memory_blocks=[
-                        CreateBlock(
-                            label="persona",
-                            value=PERSONA_TEMPLATE_GROUP.format(
-                                CHAT_TYPE="group" if self.is_group else "contact",
-                                CHAT_NAME=self.chat_name)
-                        ),
-                        CreateBlock(
-                            label="identity_policy",
-                            value=IDENTITY_POLICY_GLOBAL_TMPL.substitute()
-                        )
 
-                    ],
-                    enable_sleeptime=True,
-                    tags=["whatsapp", self.chat_id, self.chat_name],
-                    include_base_tools=True,
-                    # include_default_source=True,
-                    timezone="Asia/Jerusalem",
-                    include_base_tool_rules=True,
-                    tool_ids=self.tools
-                )
-                self.agent = agent
-            except Exception as e:
-                logger.error(f"Failed to create agent: {str(e)}")
-                raise
-        except Exception as e:
-            logger.error(f"Failed to get agent: {str(e)}")
-            raise
+class LangGraphSupervisor:
+    """Supervisor agent with access to all conversation threads."""
+    
+    def __init__(self, graph, manager):
+        self.graph = graph
+        self.manager = manager
+        self.config = {"configurable": {"thread_id": "supervisor"}}
+        logger.info("LangGraphSupervisor initialized")
+
+    def query(self, question: str) -> str:
+        """Query across all conversations."""
+        state = {
+            "messages": [HumanMessage(content=question)],
+            "chat_id": "supervisor",
+            "chat_name": "Supervisor",
+            "is_group": False
+        }
+        
+        result = self.graph.invoke(state, self.config)
+        
+        if result and "messages" in result and result["messages"]:
+            last_message = result["messages"][-1]
+            return last_message.content if hasattr(last_message, 'content') else str(last_message)
+        
+        return "No response generated"
+
+    def get_all_conversations_summary(self) -> str:
+        """Get a summary of all recent conversations."""
+        return self.query("Provide a summary of the most recent conversations across all chats.")
+
+    def search_conversations(self, keyword: str) -> str:
+        """Search for a keyword across all conversations."""
+        return self.query(f"Search all conversations for mentions of: {keyword}")
