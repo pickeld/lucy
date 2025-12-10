@@ -3,5 +3,10 @@ openai
 flask
 python-dotenv
 qrcode[pil]
-letta-client
 redis
+# LangGraph and LangChain dependencies
+langgraph
+langchain
+langchain-openai
+langchain-postgres
+psycopg[binary]
