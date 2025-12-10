@@ -54,6 +54,7 @@ services:
   letta:
     image: letta/letta:latest
     container_name: letta
+    restart: unless-stopped
     environment:
       LETTA_PG_URI: postgresql://letta:letta_pass@letta-db:5432/letta
     env_file:
