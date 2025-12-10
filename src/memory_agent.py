@@ -38,8 +38,10 @@ class MemoryManager:
 
 class MemoryAgent:
     def __init__(self, chat_id: str, chat_name: str):
-        self.client = Letta(
-            base_url=f"http://{config.LETTA_HOST}:{config.LETTA_PORT}")
+        logger.debug(f"Initializing MemoryAgent for chat_id: {chat_id}")
+        logger.debug(f"Using Letta host: {config.LETTA_HOST}, port: {config.LETTA_PORT}")
+        # self.client = Letta(base_url=f"http://{config.LETTA_HOST}:{config.LETTA_PORT}")
+        self.client = Letta(base_url=f"http://localhost:{config.LETTA_PORT}")
 
         self.model = None
         self.chat_name = chat_name
