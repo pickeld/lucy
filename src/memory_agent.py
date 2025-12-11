@@ -22,11 +22,11 @@ class AgentState(TypedDict):
 
 class MemoryManager:
     """Manages LangGraph agents with PostgreSQL checkpointer for persistent memory."""
-    
+
     def __init__(self):
         """Initialize the LangGraph memory manager with PostgreSQL backend."""
         logger.debug("Initializing LangGraphMemoryManager")
-        
+
         # Initialize PostgreSQL checkpointer for persistent, cross-agent accessible storage
         # Connection string format: postgresql://user:password@host:port/database
         db_uri = os.getenv(
@@ -37,7 +37,7 @@ class MemoryManager:
             f"{os.getenv('POSTGRES_PORT', '5432')}/" +
             f"{os.getenv('POSTGRES_DB', 'langgraph')}"
         )
-        
+
         try:
             # Initialize PostgreSQL checkpointer
             # Keep the connection alive by storing the context manager
@@ -45,25 +45,27 @@ class MemoryManager:
             self.checkpointer = self._checkpointer_conn.__enter__()
             # Setup the database tables
             self.checkpointer.setup()
-            logger.info(f"PostgreSQL checkpointer initialized: {os.getenv('POSTGRES_HOST', 'localhost')}")
+            logger.info(
+                f"PostgreSQL checkpointer initialized: {os.getenv('POSTGRES_HOST', 'localhost')}")
         except Exception as e:
-            logger.warning(f"Failed to initialize PostgreSQL checkpointer: {e}")
+            logger.warning(
+                f"Failed to initialize PostgreSQL checkpointer: {e}")
             self.checkpointer = None
             self._checkpointer_conn = None
-        
+
         # Initialize OpenAI LLM
         self.llm = ChatOpenAI(
             model=config.OPENAI_MODEL,
             temperature=float(getattr(config, 'OPENAI_TEMPERATURE', 0.7)),
             api_key=config.OPENAI_API_KEY
         )
-        
+
         # Cache for agent graphs
         self.agents = {}
-        
+
         # Create supervisor agent with access to all conversations
         self.supervisor_agent = self._create_supervisor_agent()
-        
+
         logger.info("LangGraphMemoryManager initialized successfully")
 
     def __del__(self):
@@ -77,59 +79,58 @@ class MemoryManager:
 
     def _create_agent_graph(self, chat_id: str, chat_name: str, is_group: bool):
         """Create a LangGraph agent for a specific chat."""
-        
+
         def chat_node(state: AgentState):
             """Main chat processing node."""
             messages = state["messages"]
-            
+
             # Add system message with context
             system_msg = SystemMessage(content=f"""You are a helpful AI assistant for WhatsApp.
-Chat Type: {'Group' if is_group else 'Personal'}
-Chat Name: {chat_name}
+                                       Chat Type: {'Group' if is_group else 'Personal'}
+                                       Chat Name: {chat_name}
+                                       Remember conversations and provide contextual responses based on the chat history.""")
 
-Remember conversations and provide contextual responses based on the chat history.""")
-            
             # Invoke the LLM with full message history
             response = self.llm.invoke([system_msg] + messages)
-            
+
             return {"messages": [response]}
-        
+
         # Build the graph
         workflow = StateGraph(AgentState)
         workflow.add_node("chat", chat_node)
         workflow.add_edge(START, "chat")
         workflow.add_edge("chat", END)
-        
+
         # Compile with checkpointer for persistence
         return workflow.compile(checkpointer=self.checkpointer)
 
     def _create_supervisor_agent(self):
         """Create a supervisor agent that can read all conversation threads."""
-        
+
         def supervisor_node(state: AgentState):
             """Supervisor node with cross-agent memory access."""
             messages = state["messages"]
-            
+
             # Get recent conversations from all threads
             all_conversations = self._get_all_recent_conversations(limit=50)
-            
+
             context = f"""You are a supervisor AI with access to all WhatsApp conversations.
             
 Recent conversations across all chats:
 {all_conversations}
 
 Use this context to provide insights, summaries, or analysis across multiple conversations."""
-            
+
             system_msg = SystemMessage(content=context)
             response = self.llm.invoke([system_msg] + messages)
-            
+
             return {"messages": [response]}
-        
+
         workflow = StateGraph(AgentState)
         workflow.add_node("supervisor", supervisor_node)
         workflow.add_edge(START, "supervisor")
         workflow.add_edge("supervisor", END)
-        
+
         return workflow.compile(checkpointer=self.checkpointer)
 
     def _get_all_recent_conversations(self, limit: int = 50) -> str:
@@ -137,7 +138,7 @@ Use this context to provide insights, summaries, or analysis across multiple con
         try:
             if not self.checkpointer:
                 return "Checkpointer not available."
-            
+
             conversations = []
             # PostgresSaver doesn't expose storage directly like MemorySaver
             # We need to iterate through known agent thread_ids
@@ -145,7 +146,7 @@ Use this context to provide insights, summaries, or analysis across multiple con
                 thread_id = agent.chat_id
                 if thread_id == "supervisor":
                     continue
-                
+
                 try:
                     # Get conversation history for this agent
                     history = agent.get_history(limit=5)
@@ -154,11 +155,13 @@ Use this context to provide insights, summaries, or analysis across multiple con
                             f"  {msg.content if hasattr(msg, 'content') else str(msg)}"
                             for msg in history
                         ])
-                        conversations.append(f"Chat {agent.chat_name} ({thread_id}):\n{msg_text}\n")
+                        conversations.append(
+                            f"Chat {agent.chat_name} ({thread_id}):\n{msg_text}\n")
                 except Exception as agent_error:
-                    logger.debug(f"Could not get history for {thread_id}: {agent_error}")
+                    logger.debug(
+                        f"Could not get history for {thread_id}: {agent_error}")
                     continue
-            
+
             return "\n".join(conversations) if conversations else "No recent conversations found."
         except Exception as e:
             logger.error(f"Error retrieving conversations: {e}")
@@ -168,16 +171,18 @@ Use this context to provide insights, summaries, or analysis across multiple con
         """Get or create an agent for a specific chat."""
         # Normalize chat_id
         normalized_id = chat_id.replace("@", "_").replace(".", "_")
-        
+
         if normalized_id not in self.agents:
             logger.debug(f"Creating new agent for chat: {normalized_id}")
             self.agents[normalized_id] = LangGraphAgent(
                 chat_id=normalized_id,
                 chat_name=chat_name,
                 is_group=is_group,
-                graph=self._create_agent_graph(normalized_id, chat_name, is_group)
+                graph=self._create_agent_graph(
+                    normalized_id, chat_name, is_group)
             )
-        logger.info(f"Retrieved agent for chat: {(self.agents[normalized_id]).to_string()}")
+        logger.info(
+            f"Retrieved agent for chat: {(self.agents[normalized_id]).to_string()}")
         return self.agents[normalized_id]
 
     def get_supervisor(self):
@@ -190,24 +195,24 @@ Use this context to provide insights, summaries, or analysis across multiple con
 
 class LangGraphAgent:
     """Individual chat agent with persistent memory."""
-    
+
     def __init__(self, chat_id: str, chat_name: str, is_group: bool, graph):
         self.chat_id = chat_id
         self.chat_name = chat_name
         self.is_group = is_group
         self.graph = graph
         self.config = {"configurable": {"thread_id": chat_id}}
-        
+
         logger.info(f"Agent initialized for {chat_id}")
 
     def send_message(self, sender: str, message: str, timestamp: Optional[str] = None) -> str:
         """Send a message and get a response."""
         if timestamp is None:
             timestamp = datetime.now().isoformat()
-        
+
         # Format message with metadata
         formatted_message = f"[{timestamp}] {sender}: {message}"
-        
+
         # Create state with message
         state = {
             "messages": [HumanMessage(content=formatted_message)],
@@ -215,7 +220,7 @@ class LangGraphAgent:
             "chat_name": self.chat_name,
             "is_group": self.is_group
         }
-        
+
         # Add metadata for LangSmith UI display
         config_with_metadata = {
             **self.config,
@@ -227,29 +232,29 @@ class LangGraphAgent:
             },
             "run_name": f"{self.chat_name} - {sender}"
         }
-        
+
         # Invoke graph with persistent state and metadata
         result = self.graph.invoke(state, config_with_metadata)
-        
+
         # Extract AI response
         if result and "messages" in result and result["messages"]:
             last_message = result["messages"][-1]
             return last_message.content if hasattr(last_message, 'content') else str(last_message)
-        
+
         return "No response generated"
 
     def remember(self, timestamp: str, sender: str, message: str) -> bool:
         """Store a message in the conversation history without generating a response."""
         try:
             formatted_message = f"[{timestamp}] {sender}: {message}"
-            
+
             state = {
                 "messages": [HumanMessage(content=formatted_message)],
                 "chat_id": self.chat_id,
                 "chat_name": self.chat_name,
                 "is_group": self.is_group
             }
-            
+
             # Just invoke to store in checkpoint, don't return response
             self.graph.invoke(state, self.config)
             return True
@@ -271,9 +276,11 @@ class LangGraphAgent:
 
     def to_string(self) -> str:
         return f"LangGraphAgent(chat_id={self.chat_id}, chat_name={self.chat_name}, is_group={self.is_group})"
+
+
 class LangGraphSupervisor:
     """Supervisor agent with access to all conversation threads."""
-    
+
     def __init__(self, graph, manager):
         self.graph = graph
         self.manager = manager
@@ -288,13 +295,13 @@ class LangGraphSupervisor:
             "chat_name": "Supervisor",
             "is_group": False
         }
-        
+
         result = self.graph.invoke(state, self.config)
-        
+
         if result and "messages" in result and result["messages"]:
             last_message = result["messages"][-1]
             return last_message.content if hasattr(last_message, 'content') else str(last_message)
-        
+
         return "No response generated"
 
     def get_all_conversations_summary(self) -> str:
