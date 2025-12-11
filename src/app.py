@@ -1,4 +1,6 @@
 import base64
+import os
+from pickle import TRUE
 import time
 from typing import Dict, Union
 
@@ -9,7 +11,7 @@ from flask import Flask, jsonify, redirect, render_template_string, request, url
 
 from config import config
 from contact import Contact
-from memory_agent import MemoryManager
+from memory_agent import LangGraphAgent, LangGraphAgent, MemoryManager
 from providers.dalle import Dalle
 from utiles.globals import send_request
 from utiles.logger import logger
@@ -21,7 +23,6 @@ app = Flask(__name__)
 
 
 memory_manager = MemoryManager()
-global_agent = memory_manager.global_agent
 
 
 def pass_filter(payload):
@@ -64,12 +65,14 @@ def webhook():
 
         msg = WhatsappMSG(payload)
         # logger.debug(f"Received: {msg.__dict__}")
-        agent = memory_manager.get_agent(msg)
+        chat_id = msg.group.id if msg.is_group else msg.contact.number
+        chat_name = msg.group.name if msg.is_group else msg.contact.name
+        agent: LangGraphAgent = memory_manager.get_agent(is_group=msg.is_group, chat_name=chat_name or "UNKNOWN", chat_id=chat_id or "UNKNOWN")
         if msg.message:
             agent.remember(timestamp=msg.timestamp,
-                           sender=msg.contact.name or msg.contact.number, msg=msg.message)
+                           sender=str(msg.contact.name), message=msg.message)
             # global_agent.remember(timestamp=msg.timestamp,)
-        logger.debug(f"Processed message: {agent.agent.name} || {msg}")
+        logger.debug(f"Processed message: {agent.chat_name} || {msg}")
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         trace = traceback.format_exc()
@@ -131,5 +134,6 @@ def pair():
 
 
 if __name__ == "__main__":
+    os.environ["LOCAL"] = "TRUE"
     app.run(host="0.0.0.0", port=8765,
             debug=True if config.log_level == "DEBUG" else False)

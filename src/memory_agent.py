@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from typing import Annotated, TypedDict, List, Optional, Dict
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
@@ -38,11 +39,17 @@ class MemoryManager:
         )
         
         try:
-            self.checkpointer = PostgresSaver.from_conn_string(db_uri)
-            self.checkpointer.setup()  # Create tables if they don't exist
+            # Initialize PostgreSQL checkpointer
+            # Keep the connection alive by storing the context manager
+            self._checkpointer_conn = PostgresSaver.from_conn_string(db_uri)
+            self.checkpointer = self._checkpointer_conn.__enter__()
+            # Setup the database tables
+            self.checkpointer.setup()
             logger.info(f"PostgreSQL checkpointer initialized: {os.getenv('POSTGRES_HOST', 'localhost')}")
         except Exception as e:
             logger.warning(f"Failed to initialize PostgreSQL checkpointer: {e}")
+            self.checkpointer = None
+            self._checkpointer_conn = None
         
         # Initialize OpenAI LLM
         self.llm = ChatOpenAI(
@@ -58,6 +65,15 @@ class MemoryManager:
         self.supervisor_agent = self._create_supervisor_agent()
         
         logger.info("LangGraphMemoryManager initialized successfully")
+
+    def __del__(self):
+        """Cleanup method to properly close the database connection."""
+        try:
+            if hasattr(self, '_checkpointer_conn') and self._checkpointer_conn is not None:
+                self._checkpointer_conn.__exit__(None, None, None)
+                logger.debug("PostgreSQL checkpointer connection closed")
+        except Exception as e:
+            logger.debug(f"Error closing checkpointer connection: {e}")
 
     def _create_agent_graph(self, chat_id: str, chat_name: str, is_group: bool):
         """Create a LangGraph agent for a specific chat."""
@@ -119,36 +135,36 @@ Use this context to provide insights, summaries, or analysis across multiple con
     def _get_all_recent_conversations(self, limit: int = 50) -> str:
         """Retrieve recent messages from all conversation threads."""
         try:
-            # Access all checkpoints from MemorySaver
-            conversations = []
-            checkpoint_data = self.checkpointer.storage
+            if not self.checkpointer:
+                return "Checkpointer not available."
             
-            # Iterate through all thread checkpoints
-            for thread_id, checkpoint_dict in list(checkpoint_data.items())[:limit]:
+            conversations = []
+            # PostgresSaver doesn't expose storage directly like MemorySaver
+            # We need to iterate through known agent thread_ids
+            for agent in list(self.agents.values())[:limit]:
+                thread_id = agent.chat_id
                 if thread_id == "supervisor":
                     continue
-                    
-                # Get the most recent checkpoint
-                if checkpoint_dict:
-                    latest = max(checkpoint_dict.keys())
-                    checkpoint = checkpoint_dict[latest]
-                    
-                    # Extract messages
-                    if 'channel_values' in checkpoint:
-                        messages = checkpoint['channel_values'].get('messages', [])
-                        if messages:
-                            msg_text = "\n".join([
-                                f"  {msg.content if hasattr(msg, 'content') else str(msg)}"
-                                for msg in messages[-5:]  # Last 5 messages
-                            ])
-                            conversations.append(f"Thread {thread_id}:\n{msg_text}\n")
+                
+                try:
+                    # Get conversation history for this agent
+                    history = agent.get_history(limit=5)
+                    if history:
+                        msg_text = "\n".join([
+                            f"  {msg.content if hasattr(msg, 'content') else str(msg)}"
+                            for msg in history
+                        ])
+                        conversations.append(f"Chat {agent.chat_name} ({thread_id}):\n{msg_text}\n")
+                except Exception as agent_error:
+                    logger.debug(f"Could not get history for {thread_id}: {agent_error}")
+                    continue
             
             return "\n".join(conversations) if conversations else "No recent conversations found."
         except Exception as e:
             logger.error(f"Error retrieving conversations: {e}")
             return "Error accessing conversation history."
 
-    def get_agent(self, chat_id: str, chat_name: str, is_group: bool):
+    def get_agent(self, chat_id: str, chat_name: str, is_group: bool) -> 'LangGraphAgent':
         """Get or create an agent for a specific chat."""
         # Normalize chat_id
         normalized_id = chat_id.replace("@", "_").replace(".", "_")
@@ -161,7 +177,7 @@ Use this context to provide insights, summaries, or analysis across multiple con
                 is_group=is_group,
                 graph=self._create_agent_graph(normalized_id, chat_name, is_group)
             )
-        
+        logger.info(f"Retrieved agent for chat: {(self.agents[normalized_id]).to_string()}")
         return self.agents[normalized_id]
 
     def get_supervisor(self):
@@ -253,7 +269,8 @@ class LangGraphAgent:
             logger.error(f"Error retrieving history: {e}")
             return []
 
-
+    def to_string(self) -> str:
+        return f"LangGraphAgent(chat_id={self.chat_id}, chat_name={self.chat_name}, is_group={self.is_group})"
 class LangGraphSupervisor:
     """Supervisor agent with access to all conversation threads."""
     
