@@ -10,6 +10,7 @@ langgraph-cli
 langgraph-checkpoint-postgres
 langchain
 langchain-openai
+langchain-google-genai
 langchain-postgres
 langsmith
 psycopg[binary]

@@ -1,6 +1,7 @@
 from dataclasses import asdict
 from typing import Annotated, TypedDict, List, Optional, Dict
 from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
@@ -53,12 +54,23 @@ class MemoryManager:
             self.checkpointer = None
             self._checkpointer_conn = None
 
-        # Initialize OpenAI LLM
-        self.llm = ChatOpenAI(
-            model=config.OPENAI_MODEL,
-            temperature=float(getattr(config, 'OPENAI_TEMPERATURE', 0.7)),
-            api_key=config.OPENAI_API_KEY
-        )
+        # Initialize LLM based on configured provider
+        llm_provider = os.getenv('LLM_PROVIDER', 'openai').lower()
+        
+        if llm_provider == 'gemini':
+            self.llm = ChatGoogleGenerativeAI(
+                model=getattr(config, 'GEMINI_MODEL', 'gemini-pro'),
+                temperature=float(getattr(config, 'GEMINI_TEMPERATURE', '0.7')),
+                google_api_key=config.GOOGLE_API_KEY
+            )
+            logger.info(f"Initialized Gemini LLM: {getattr(config, 'GEMINI_MODEL', 'gemini-pro')}")
+        else:
+            self.llm = ChatOpenAI(
+                model=config.OPENAI_MODEL,
+                temperature=float(getattr(config, 'OPENAI_TEMPERATURE', 0.7)),
+                api_key=config.OPENAI_API_KEY
+            )
+            logger.info(f"Initialized OpenAI LLM: {config.OPENAI_MODEL}")
 
         # Cache for agent graphs
         self.agents = {}
