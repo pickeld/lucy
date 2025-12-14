@@ -71,7 +71,6 @@ def webhook():
         if msg.message:
             agent.remember(timestamp=msg.timestamp,
                            sender=str(msg.contact.name), message=msg.message)
-            # global_agent.remember(timestamp=msg.timestamp,)
         logger.debug(f"Processed message: {agent.chat_name} || {msg}")
         return jsonify({"status": "ok"}), 200
     except Exception as e:
