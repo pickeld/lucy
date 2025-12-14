@@ -75,9 +75,6 @@ class MemoryManager:
         # Cache for agent graphs
         self.agents = {}
 
-        # Create supervisor agent with access to all conversations
-        self.supervisor_agent = self._create_supervisor_agent()
-
         logger.info("LangGraphMemoryManager initialized successfully")
 
     def __del__(self):
@@ -116,69 +113,6 @@ class MemoryManager:
         # Compile with checkpointer for persistence
         return workflow.compile(checkpointer=self.checkpointer)
 
-    def _create_supervisor_agent(self):
-        """Create a supervisor agent that can read all conversation threads."""
-
-        def supervisor_node(state: AgentState):
-            """Supervisor node with cross-agent memory access."""
-            messages = state["messages"]
-
-            # Get recent conversations from all threads
-            all_conversations = self._get_all_recent_conversations(limit=50)
-
-            context = f"""You are a supervisor AI with access to all WhatsApp conversations.
-            
-Recent conversations across all chats:
-{all_conversations}
-
-Use this context to provide insights, summaries, or analysis across multiple conversations."""
-
-            system_msg = SystemMessage(content=context)
-            response = self.llm.invoke([system_msg] + messages)
-
-            return {"messages": [response]}
-
-        workflow = StateGraph(AgentState)
-        workflow.add_node("supervisor", supervisor_node)
-        workflow.add_edge(START, "supervisor")
-        workflow.add_edge("supervisor", END)
-
-        return workflow.compile(checkpointer=self.checkpointer)
-
-    def _get_all_recent_conversations(self, limit: int = 50) -> str:
-        """Retrieve recent messages from all conversation threads."""
-        try:
-            if not self.checkpointer:
-                return "Checkpointer not available."
-
-            conversations = []
-            # PostgresSaver doesn't expose storage directly like MemorySaver
-            # We need to iterate through known agent thread_ids
-            for agent in list(self.agents.values())[:limit]:
-                thread_id = agent.chat_id
-                if thread_id == "supervisor":
-                    continue
-
-                try:
-                    # Get conversation history for this agent
-                    history = agent.get_history(limit=5)
-                    if history:
-                        msg_text = "\n".join([
-                            f"  {msg.content if hasattr(msg, 'content') else str(msg)}"
-                            for msg in history
-                        ])
-                        conversations.append(
-                            f"Chat {agent.chat_name} ({thread_id}):\n{msg_text}\n")
-                except Exception as agent_error:
-                    logger.debug(
-                        f"Could not get history for {thread_id}: {agent_error}")
-                    continue
-
-            return "\n".join(conversations) if conversations else "No recent conversations found."
-        except Exception as e:
-            logger.error(f"Error retrieving conversations: {e}")
-            return "Error accessing conversation history."
-
     def get_agent(self, chat_id: str, chat_name: str, is_group: bool) -> 'LangGraphAgent':
         """Get or create an agent for a specific chat."""
         # Normalize chat_id
@@ -196,13 +130,6 @@ Use this context to provide insights, summaries, or analysis across multiple con
         logger.info(
             f"Retrieved agent for chat: {(self.agents[normalized_id]).to_string()}")
         return self.agents[normalized_id]
-
-    def get_supervisor(self):
-        """Get the supervisor agent with cross-chat access."""
-        return LangGraphSupervisor(
-            graph=self.supervisor_agent,
-            manager=self
-        )
 
 
 class LangGraphAgent:
@@ -288,38 +215,3 @@ class LangGraphAgent:
 
     def to_string(self) -> str:
         return f"LangGraphAgent(chat_id={self.chat_id}, chat_name={self.chat_name}, is_group={self.is_group})"
-
-
-class LangGraphSupervisor:
-    """Supervisor agent with access to all conversation threads."""
-
-    def __init__(self, graph, manager):
-        self.graph = graph
-        self.manager = manager
-        self.config = {"configurable": {"thread_id": "supervisor"}}
-        logger.info("LangGraphSupervisor initialized")
-
-    def query(self, question: str) -> str:
-        """Query across all conversations."""
-        state = {
-            "messages": [HumanMessage(content=question)],
-            "chat_id": "supervisor",
-            "chat_name": "Supervisor",
-            "is_group": False
-        }
-
-        result = self.graph.invoke(state, self.config)
-
-        if result and "messages" in result and result["messages"]:
-            last_message = result["messages"][-1]
-            return last_message.content if hasattr(last_message, 'content') else str(last_message)
-
-        return "No response generated"
-
-    def get_all_conversations_summary(self) -> str:
-        """Get a summary of all recent conversations."""
-        return self.query("Provide a summary of the most recent conversations across all chats.")
-
-    def search_conversations(self, keyword: str) -> str:
-        """Search for a keyword across all conversations."""
-        return self.query(f"Search all conversations for mentions of: {keyword}")
