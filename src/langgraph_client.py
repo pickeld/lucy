@@ -16,7 +16,7 @@ from utiles.logger import logger
 
 
 class StudioMemoryManager:
-    """Manages LangGraph agents via the LangGraph Studio API."""
+    """Manages LangGraph threads via the LangGraph Studio API."""
 
     def __init__(self, api_url: Optional[str] = None):
         """Initialize the LangGraph Studio client.
@@ -28,13 +28,13 @@ class StudioMemoryManager:
         self.client = get_client(url=self.api_url)
         self.graph_name = "memory_agent"  # Must match the graph name in langgraph.json
         
-        # Cache for agent instances
-        self.agents: Dict[str, 'StudioAgent'] = {}
+        # Cache for thread instances
+        self.threads: Dict[str, 'StudioThread'] = {}
         
         logger.info(f"StudioMemoryManager initialized with API URL: {self.api_url}")
 
-    def get_agent(self, chat_id: str, chat_name: str, is_group: bool) -> 'StudioAgent':
-        """Get or create an agent for a specific chat.
+    def get_thread(self, chat_id: str, chat_name: str, is_group: bool) -> 'StudioThread':
+        """Get or create a thread for a specific chat.
         
         Args:
             chat_id: The chat identifier
@@ -42,14 +42,14 @@ class StudioMemoryManager:
             is_group: Whether this is a group chat
             
         Returns:
-            StudioAgent instance for this chat
+            StudioThread instance for this chat
         """
         # Normalize chat_id for use as thread_id
         normalized_id = chat_id.replace("@", "_").replace(".", "_")
         
-        if normalized_id not in self.agents:
-            logger.debug(f"Creating new studio agent for chat: {normalized_id}")
-            self.agents[normalized_id] = StudioAgent(
+        if normalized_id not in self.threads:
+            logger.debug(f"Creating new studio thread for chat: {normalized_id}")
+            self.threads[normalized_id] = StudioThread(
                 client=self.client,
                 graph_name=self.graph_name,
                 chat_id=normalized_id,
@@ -57,11 +57,11 @@ class StudioMemoryManager:
                 is_group=is_group
             )
         
-        return self.agents[normalized_id]
+        return self.threads[normalized_id]
 
 
-class StudioAgent:
-    """Individual chat agent that communicates with LangGraph Studio."""
+class StudioThread:
+    """Individual chat thread that communicates with LangGraph Studio."""
 
     def __init__(
         self,
@@ -71,7 +71,7 @@ class StudioAgent:
         chat_name: str,
         is_group: bool
     ):
-        """Initialize a studio agent.
+        """Initialize a studio thread.
         
         Args:
             client: The LangGraph SDK client
@@ -87,7 +87,7 @@ class StudioAgent:
         self.is_group = is_group
         self._thread_id = None
         
-        logger.info(f"StudioAgent initialized for {chat_id} ({chat_name})")
+        logger.info(f"StudioThread initialized for {chat_id} ({chat_name})")
 
     async def _ensure_thread(self) -> str:
         """Ensure a thread exists for this chat, create if needed.
@@ -262,8 +262,8 @@ class StudioAgent:
             return []
 
     def to_string(self) -> str:
-        """Return string representation of this agent."""
-        return f"StudioAgent(chat_id={self.chat_id}, chat_name={self.chat_name}, is_group={self.is_group})"
+        """Return string representation of this thread."""
+        return f"StudioThread(chat_id={self.chat_id}, chat_name={self.chat_name}, is_group={self.is_group})"
 
 
 # Synchronous wrapper for use in Flask
