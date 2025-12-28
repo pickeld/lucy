@@ -1,5 +1,4 @@
 import base64
-import json
 import os
 
 import httpx
@@ -7,7 +6,6 @@ import httpx
 from config import config
 from contact import Contact, ContactManager
 from groups import Group, GroupManager
-from utiles.globals import send_request
 from utiles.logger import logger
 
 contact_manager = ContactManager()
@@ -62,26 +60,6 @@ class MediaMessage:
         }
 
 
-class QuotedMessage:
-    def __init__(self, quoted_data, recipient):
-        self.quoted_data = quoted_data
-        self.quoted_msg = quoted_data.get("quotedMsg", {})
-        self.type = self.quoted_msg.get("type", "")
-        self.body = self.quoted_msg.get("body", "").strip()
-        self.kind = self.quoted_msg.get("kind", "")
-        self.quoted_stanza_id = quoted_data.get("quotedStanzaID", "")
-        self.quoted_participant = quoted_data.get("quotedParticipant", "")
-        self.mimetype = self.quoted_msg.get("mimetype", "")
-        self.caption = self.quoted_msg.get("caption", "").strip()
-        if self.type == "image":
-            self.file_extension = self.mimetype.split("/")[-1]
-            self.filename = f"true_{recipient}_{self.quoted_stanza_id}_{self.quoted_participant}.{self.file_extension}"
-            endpoint = f"/api/files/default/{self.filename}"
-            response = send_request(method="GET", endpoint=endpoint)
-            self.base64_data = base64.b64encode(
-                response.content).decode("ascii")
-
-
 class WhatsappMSG:
     def __init__(self, payload):
         self.contact: Contact = contact_manager.get_contact(payload)
@@ -91,8 +69,6 @@ class WhatsappMSG:
         self.message = payload.get("body", None)
         self.media = MediaMessage(payload)
         self.to = payload.get("to", None)
-        # self.quoted = QuotedMessage(quoted_data=payload.get("quotedMsg", {}), recipient=self.recipient)
-        # self.recipient = payload.get("to")
 
     def __str__(self) -> str:
         return f"{self.group.name}/{self.contact.name}: {self.message} || Media: {True if self.media.has_media else False}"
@@ -115,22 +91,4 @@ class WhatsappMSG:
             for k, v in self.__dict__.items()
             if not k.startswith("_") and not callable(v)
         }
-
-    def route(self):
-        if self.message.startswith(config.chat_prefix):
-            return "chat"
-        elif self.message.startswith(config.dalle_prefix):
-            return "dalle"
-        else:
-            return "unknown"
-
-    def reply(self, response: str):
-        send_request(method="POST",
-                     endpoint="/api/sendText",
-                     payload={
-                              "chatId": self.recipient,
-                              "text": response,
-                              "session": config.waha_session_name
-                     }
-                     )
 

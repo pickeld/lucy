@@ -6,7 +6,6 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, Base
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from langgraph_sdk import get_client
-from datetime import datetime
 from typing import Annotated, List, Optional, Dict, Any, TypedDict
 import os
 import asyncio
@@ -279,48 +278,6 @@ class Thread:
 
         return self._thread_id
 
-    def send_message(self, sender: str, message: str, timestamp: Optional[str] = None) -> str:
-        """Send a message and get a response (sync)."""
-        async def _send():
-            client = get_client(url=self.api_url)
-
-            if timestamp is None:
-                ts = datetime.now().isoformat()
-            else:
-                ts = timestamp
-
-            thread_id = await self._async_ensure_thread(client)
-            formatted_message = f"[{ts}] {sender}: {message}"
-
-            # Set action="chat" to invoke LLM and get a response
-            input_state = {
-                "messages": [{"role": "user", "content": formatted_message}],
-                "chat_id": self.chat_id,
-                "chat_name": self.chat_name,
-                "is_group": self.is_group,
-                "action": "chat"  # This routes to chat node, invoking LLM
-            }
-
-            result = await client.runs.wait(
-                thread_id=thread_id,
-                assistant_id=self.graph_name,
-                input=input_state,
-                metadata={"sender": sender,
-                          "chat_name": self.chat_name, "action": "chat"}
-            )
-
-            if result and "messages" in result:
-                messages = result["messages"]
-                if messages:
-                    last_message = messages[-1]
-                    if isinstance(last_message, dict):
-                        return last_message.get("content", "No response")
-                    return str(last_message)
-
-            return "No response generated"
-
-        return self._run_async(_send())
-
     def remember(self, timestamp: str, sender: str, message: str) -> bool:
         """Store a message in the conversation history without triggering AI response.
 
@@ -359,25 +316,6 @@ class Thread:
         except Exception as e:
             logger.error(f"Error remembering message: {e}")
             return False
-
-    def get_history(self, limit: int = 10) -> List[Dict[str, Any]]:
-        """Retrieve conversation history (sync)."""
-        async def _get_history():
-            client = get_client(url=self.api_url)
-            thread_id = await self._async_ensure_thread(client)
-
-            state = await client.threads.get_state(thread_id)
-
-            if state and "values" in state and "messages" in state["values"]:
-                return state["values"]["messages"][-limit:]
-
-            return []
-
-        try:
-            return self._run_async(_get_history())
-        except Exception as e:
-            logger.error(f"Error getting history: {e}")
-            return []
 
     def to_string(self) -> str:
         """Return string representation of this thread."""

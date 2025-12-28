@@ -1,18 +1,12 @@
 import base64
 import os
-from pickle import TRUE
 import time
-from typing import Dict, Union
 
-import httpx
 import requests
-import json
-from flask import Flask, jsonify, redirect, render_template_string, request, url_for
+from flask import Flask, jsonify, redirect, render_template_string, request
 
 from config import config
-from contact import Contact
 from langgraph_client import ThreadsManager, Thread
-from providers.dalle import Dalle
 from utiles.globals import send_request
 from utiles.logger import logger
 import traceback
