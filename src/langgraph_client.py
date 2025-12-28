@@ -8,6 +8,13 @@ It also contains the graph definition for LangGraph Studio.
 """
 
 import os
+import sys
+
+# Add src directory to Python path for LangGraph dev compatibility
+_src_dir = os.path.dirname(os.path.abspath(__file__))
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
+
 from typing import Annotated, List, Optional, Dict, Any, TypedDict
 from datetime import datetime
 
