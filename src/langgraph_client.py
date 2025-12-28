@@ -110,19 +110,10 @@ Remember conversations and provide contextual responses based on the chat histor
             return {"messages": [error_response]}
 
     def route_by_action(state: ThreadState) -> str:
-        """Route to appropriate node based on action field.
-
-        IMPORTANT: The 'action' field can get persisted in thread state.
-        To handle Studio UI properly (which doesn't send action), we check
-        the last message - if it's a simple user message without the
-        timestamp/sender format, it's likely from the Studio UI and should
-        route to chat.
-        """
         action = state.get("action", None)  # Don't default to anything yet
         messages = state.get("messages", [])
         logger.info(f"[ROUTE] action={action}, num_messages={len(messages)}")
 
-        # Check if this is likely a Studio UI message (no timestamp/sender format)
         # App messages are formatted as "[timestamp] sender: message"
         if messages:
             last_msg = messages[-1]
@@ -131,13 +122,12 @@ Remember conversations and provide contextual responses based on the chat histor
             # Handle case where content might be a list
             if isinstance(last_content, list):
                 last_content = str(last_content[0]) if last_content else ""
-            # Studio UI sends plain messages, app sends "[timestamp] sender: message"
+
             is_formatted_msg = isinstance(last_content, str) and last_content.startswith(
                 '[') and '] ' in last_content and ': ' in last_content
 
             # If message is NOT in app format and action was store, override to chat
             if not is_formatted_msg and action == "store":
-                logger.info(f"[ROUTE] -> chat node (Studio UI detected)")
                 return "chat"
 
         # Use explicit action if provided, otherwise default to chat
@@ -167,9 +157,6 @@ Remember conversations and provide contextual responses based on the chat histor
 graph = create_graph()
 
 
-# =============================================================================
-# LangGraph SDK Client Classes (for app.py to communicate with LangGraph Studio)
-# =============================================================================
 
 
 class ThreadsManager:
@@ -282,16 +269,15 @@ class Thread:
             thread_name = self.chat_name
 
             # Create new thread with metadata
-            # Note: LangGraph Studio uses thread_id or a specific field for display
             thread = await client.threads.create(
                 thread_id=None,  # Let it auto-generate
                 metadata={
                     "chat_id": self.chat_id,
                     "chat_name": self.chat_name,
                     "is_group": self.is_group,
-                    "thread_name": thread_name,  # Alternative field name
-                    "name": thread_name,  # Display name in Studio
-                    "display_name": thread_name  # Try another field name
+                    "thread_name": thread_name,
+                    "name": thread_name,
+                    "display_name": thread_name
                 }
             )
             self._thread_id = thread["thread_id"]
