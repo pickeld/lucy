@@ -9,14 +9,7 @@ from langgraph_sdk import get_client
 from datetime import datetime
 from typing import Annotated, List, Optional, Dict, Any, TypedDict
 import os
-import sys
 import asyncio
-
-
-# Add src directory to Python path for LangGraph dev compatibility
-_src_dir = os.path.dirname(os.path.abspath(__file__))
-if _src_dir not in sys.path:
-    sys.path.insert(0, _src_dir)
 
 
 class ThreadState(TypedDict, total=False):
@@ -141,7 +134,6 @@ Remember conversations and provide contextual responses based on the chat histor
             # Studio UI sends plain messages, app sends "[timestamp] sender: message"
             is_formatted_msg = isinstance(last_content, str) and last_content.startswith(
                 '[') and '] ' in last_content and ': ' in last_content
-
 
             # If message is NOT in app format and action was store, override to chat
             if not is_formatted_msg and action == "store":
