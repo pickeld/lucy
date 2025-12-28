@@ -28,4 +28,4 @@ class Config:
             return self._attributes[name]
         raise AttributeError(f"'Config' object has no attribute '{name}'")
                 
-config = Config()
+config = Config(env_file="../.env")
