@@ -11,7 +11,7 @@ from flask import Flask, jsonify, redirect, render_template_string, request, url
 
 from config import config
 from contact import Contact
-from langgraph_client import SyncStudioMemoryManager, SyncStudioThread
+from langgraph_client import SyncStudioMemoryManager, Thread
 from providers.dalle import Dalle
 from utiles.globals import send_request
 from utiles.logger import logger
@@ -70,7 +70,7 @@ def webhook():
         chat_id = msg.group.id if msg.is_group else msg.contact.number
         chat_name = msg.group.name if msg.is_group else msg.contact.name
         
-        thread: SyncStudioThread = memory_manager.get_thread(is_group=msg.is_group, chat_name=chat_name or "UNKNOWN", chat_id=chat_id or "UNKNOWN")
+        thread: Thread = memory_manager.get_thread(is_group=msg.is_group, chat_name=chat_name or "UNKNOWN", chat_id=chat_id or "UNKNOWN")
         if msg.message:
             thread.remember(timestamp=msg.timestamp,
                            sender=str(msg.contact.name), message=msg.message)

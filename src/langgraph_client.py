@@ -216,7 +216,7 @@ class SyncStudioMemoryManager:
         self.api_url = api_url or os.getenv("LANGGRAPH_API_URL", "http://127.0.0.1:2024")
         self._async_manager = None
         self._loop = None
-        self.threads: Dict[str, 'SyncStudioThread'] = {}
+        self.threads: Dict[str, 'Thread'] = {}
         
         logger.info(f"SyncStudioMemoryManager initialized with API URL: {self.api_url}")
     
@@ -243,13 +243,13 @@ class SyncStudioMemoryManager:
         else:
             return loop.run_until_complete(coro)
     
-    def get_thread(self, chat_id: str, chat_name: str, is_group: bool) -> 'SyncStudioThread':
+    def get_thread(self, chat_id: str, chat_name: str, is_group: bool) -> 'Thread':
         """Get or create a thread for a specific chat."""
         normalized_id = chat_id.replace("@", "_").replace(".", "_")
         
         if normalized_id not in self.threads:
-            logger.debug(f"Creating new sync studio thread for chat: {normalized_id}")
-            self.threads[normalized_id] = SyncStudioThread(
+            logger.debug(f"Creating new thread for chat: {normalized_id}")
+            self.threads[normalized_id] = Thread(
                 api_url=self.api_url,
                 graph_name="memory_agent",
                 chat_id=normalized_id,
@@ -260,8 +260,8 @@ class SyncStudioMemoryManager:
         return self.threads[normalized_id]
 
 
-class SyncStudioThread:
-    """Synchronous wrapper for StudioThread."""
+class Thread:
+    """Represents a chat conversation thread (DM or group) in LangGraph."""
     
     def __init__(
         self,
@@ -271,7 +271,7 @@ class SyncStudioThread:
         chat_name: str,
         is_group: bool
     ):
-        """Initialize a sync studio thread."""
+        """Initialize a thread."""
         self.api_url = api_url
         self.graph_name = graph_name
         self.chat_id = chat_id
@@ -279,7 +279,7 @@ class SyncStudioThread:
         self.is_group = is_group
         self._thread_id = None
         
-        logger.info(f"SyncStudioThread initialized for {chat_id} ({chat_name})")
+        logger.info(f"Thread initialized for {chat_id} ({chat_name})")
     
     def _run_async(self, coro):
         """Run an async coroutine synchronously."""
@@ -429,4 +429,4 @@ class SyncStudioThread:
     
     def to_string(self) -> str:
         """Return string representation of this thread."""
-        return f"SyncStudioThread(chat_id={self.chat_id}, chat_name={self.chat_name}, is_group={self.is_group})"
+        return f"Thread(chat_id={self.chat_id}, chat_name={self.chat_name}, is_group={self.is_group})"

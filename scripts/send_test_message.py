@@ -22,7 +22,7 @@ os.chdir(project_root)
 # Add src to path for imports
 sys.path.insert(0, os.path.join(project_root, 'src'))
 
-from langgraph_client import SyncStudioMemoryManager, SyncStudioThread
+from langgraph_client import SyncStudioMemoryManager, Thread
 
 
 def send_test_message(
@@ -47,7 +47,7 @@ def send_test_message(
     timestamp = datetime.now().isoformat()
     
     print(f"Creating thread for chat: {chat_name}")
-    thread: SyncStudioThread = memory_manager.get_thread(
+    thread: Thread = memory_manager.get_thread(
         is_group=is_group,
         chat_name=chat_name,
         chat_id=chat_id
