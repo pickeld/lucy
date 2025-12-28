@@ -31,13 +31,13 @@ class AgentState(TypedDict, total=False):
 
 
 class MemoryManager:
-    """Manages LangGraph agents with PostgreSQL checkpointer for persistent memory."""
+    """Manages LangGraph threads with PostgreSQL checkpointer for persistent memory."""
 
     def __init__(self):
         """Initialize the LangGraph memory manager with PostgreSQL backend."""
         logger.debug("Initializing LangGraphMemoryManager")
 
-        # Initialize PostgreSQL checkpointer for persistent, cross-agent accessible storage
+        # Initialize PostgreSQL checkpointer for persistent, cross-thread accessible storage
         # Connection string format: postgresql://user:password@host:port/database
         db_uri = os.getenv(
             'POSTGRES_CONNECTION_STRING',
@@ -81,8 +81,8 @@ class MemoryManager:
             )
             logger.info(f"Initialized OpenAI LLM: {config.OPENAI_MODEL}")
 
-        # Cache for agent graphs
-        self.agents = {}
+        # Cache for thread graphs
+        self.threads = {}
 
         logger.info("LangGraphMemoryManager initialized successfully")
 
@@ -95,8 +95,8 @@ class MemoryManager:
         except Exception as e:
             logger.debug(f"Error closing checkpointer connection: {e}")
 
-    def _create_agent_graph(self, chat_id: str, chat_name: str, is_group: bool):
-        """Create a LangGraph agent for a specific chat."""
+    def _create_thread_graph(self, chat_id: str, chat_name: str, is_group: bool):
+        """Create a LangGraph graph for a specific chat thread."""
 
         def chat_node(state: AgentState):
             """Main chat processing node."""
@@ -142,27 +142,27 @@ Remember conversations and provide contextual responses based on the chat histor
         # Compile with checkpointer for persistence
         return workflow.compile(checkpointer=self.checkpointer)
 
-    def get_agent(self, chat_id: str, chat_name: str, is_group: bool) -> 'LangGraphAgent':
-        """Get or create an agent for a specific chat."""
+    def get_thread(self, chat_id: str, chat_name: str, is_group: bool) -> 'LangGraphThread':
+        """Get or create a thread for a specific chat."""
         # Normalize chat_id
         normalized_id = chat_id.replace("@", "_").replace(".", "_")
 
-        if normalized_id not in self.agents:
-            logger.debug(f"Creating new agent for chat: {normalized_id}")
-            self.agents[normalized_id] = LangGraphAgent(
+        if normalized_id not in self.threads:
+            logger.debug(f"Creating new thread for chat: {normalized_id}")
+            self.threads[normalized_id] = LangGraphThread(
                 chat_id=normalized_id,
                 chat_name=chat_name,
                 is_group=is_group,
-                graph=self._create_agent_graph(
+                graph=self._create_thread_graph(
                     normalized_id, chat_name, is_group)
             )
         logger.info(
-            f"Retrieved agent for chat: {(self.agents[normalized_id]).to_string()}")
-        return self.agents[normalized_id]
+            f"Retrieved thread for chat: {(self.threads[normalized_id]).to_string()}")
+        return self.threads[normalized_id]
 
 
-class LangGraphAgent:
-    """Individual chat agent with persistent memory."""
+class LangGraphThread:
+    """Individual chat thread with persistent memory."""
 
     def __init__(self, chat_id: str, chat_name: str, is_group: bool, graph):
         self.chat_id = chat_id
@@ -171,7 +171,7 @@ class LangGraphAgent:
         self.graph = graph
         self.config = {"configurable": {"thread_id": chat_id}}
 
-        logger.info(f"Agent initialized for {chat_id}")
+        logger.info(f"Thread initialized for {chat_id}")
 
     def send_message(self, sender: str, message: str, timestamp: Optional[str] = None) -> str:
         """Send a message and get a response."""
@@ -232,7 +232,7 @@ class LangGraphAgent:
 
 
     def to_string(self) -> str:
-        return f"LangGraphAgent(chat_id={self.chat_id}, chat_name={self.chat_name}, is_group={self.is_group})"
+        return f"LangGraphThread(chat_id={self.chat_id}, chat_name={self.chat_name}, is_group={self.is_group})"
 
 
 # Create a compiled graph for LangGraph dev/studio

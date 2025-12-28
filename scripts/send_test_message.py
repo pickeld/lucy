@@ -22,7 +22,7 @@ os.chdir(project_root)
 # Add src to path for imports
 sys.path.insert(0, os.path.join(project_root, 'src'))
 
-from langgraph_client import SyncStudioMemoryManager, SyncStudioAgent
+from langgraph_client import SyncStudioMemoryManager, SyncStudioThread
 
 
 def send_test_message(
@@ -46,8 +46,8 @@ def send_test_message(
     chat_id = chat_name.replace(" ", "_").lower()
     timestamp = datetime.now().isoformat()
     
-    print(f"Creating agent for chat: {chat_name}")
-    agent: SyncStudioAgent = memory_manager.get_agent(
+    print(f"Creating thread for chat: {chat_name}")
+    thread: SyncStudioThread = memory_manager.get_thread(
         is_group=is_group,
         chat_name=chat_name,
         chat_id=chat_id
@@ -60,7 +60,7 @@ def send_test_message(
     print(f"  Timestamp: {timestamp}")
     
     # Use remember() just like in app.py webhook handler
-    success = agent.remember(
+    success = thread.remember(
         timestamp=timestamp,
         sender=sender_name,
         message=message
@@ -68,7 +68,7 @@ def send_test_message(
     
     if success:
         print(f"\n✓ Message stored successfully!")
-        print(f"  Agent: {agent.to_string()}")
+        print(f"  Thread: {thread.to_string()}")
     else:
         print(f"\n✗ Failed to store message")
 

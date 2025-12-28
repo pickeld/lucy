@@ -280,7 +280,7 @@ class SyncStudioMemoryManager:
         self.api_url = api_url or os.getenv("LANGGRAPH_API_URL", "http://127.0.0.1:2024")
         self._async_manager = None
         self._loop = None
-        self.agents: Dict[str, 'SyncStudioAgent'] = {}
+        self.threads: Dict[str, 'SyncStudioThread'] = {}
         
         logger.info(f"SyncStudioMemoryManager initialized with API URL: {self.api_url}")
     
@@ -307,13 +307,13 @@ class SyncStudioMemoryManager:
         else:
             return loop.run_until_complete(coro)
     
-    def get_agent(self, chat_id: str, chat_name: str, is_group: bool) -> 'SyncStudioAgent':
-        """Get or create an agent for a specific chat."""
+    def get_thread(self, chat_id: str, chat_name: str, is_group: bool) -> 'SyncStudioThread':
+        """Get or create a thread for a specific chat."""
         normalized_id = chat_id.replace("@", "_").replace(".", "_")
         
-        if normalized_id not in self.agents:
-            logger.debug(f"Creating new sync studio agent for chat: {normalized_id}")
-            self.agents[normalized_id] = SyncStudioAgent(
+        if normalized_id not in self.threads:
+            logger.debug(f"Creating new sync studio thread for chat: {normalized_id}")
+            self.threads[normalized_id] = SyncStudioThread(
                 api_url=self.api_url,
                 graph_name="memory_agent",
                 chat_id=normalized_id,
@@ -321,11 +321,11 @@ class SyncStudioMemoryManager:
                 is_group=is_group
             )
         
-        return self.agents[normalized_id]
+        return self.threads[normalized_id]
 
 
-class SyncStudioAgent:
-    """Synchronous wrapper for StudioAgent."""
+class SyncStudioThread:
+    """Synchronous wrapper for StudioThread."""
     
     def __init__(
         self,
@@ -335,7 +335,7 @@ class SyncStudioAgent:
         chat_name: str,
         is_group: bool
     ):
-        """Initialize a sync studio agent."""
+        """Initialize a sync studio thread."""
         self.api_url = api_url
         self.graph_name = graph_name
         self.chat_id = chat_id
@@ -343,7 +343,7 @@ class SyncStudioAgent:
         self.is_group = is_group
         self._thread_id = None
         
-        logger.info(f"SyncStudioAgent initialized for {chat_id} ({chat_name})")
+        logger.info(f"SyncStudioThread initialized for {chat_id} ({chat_name})")
     
     def _run_async(self, coro):
         """Run an async coroutine synchronously."""
@@ -492,5 +492,5 @@ class SyncStudioAgent:
             return []
     
     def to_string(self) -> str:
-        """Return string representation of this agent."""
-        return f"SyncStudioAgent(chat_id={self.chat_id}, chat_name={self.chat_name}, is_group={self.is_group})"
+        """Return string representation of this thread."""
+        return f"SyncStudioThread(chat_id={self.chat_id}, chat_name={self.chat_name}, is_group={self.is_group})"

@@ -11,7 +11,7 @@ from flask import Flask, jsonify, redirect, render_template_string, request, url
 
 from config import config
 from contact import Contact
-from langgraph_client import SyncStudioMemoryManager, SyncStudioAgent
+from langgraph_client import SyncStudioMemoryManager, SyncStudioThread
 from providers.dalle import Dalle
 from utiles.globals import send_request
 from utiles.logger import logger
@@ -70,11 +70,11 @@ def webhook():
         chat_id = msg.group.id if msg.is_group else msg.contact.number
         chat_name = msg.group.name if msg.is_group else msg.contact.name
         
-        agent: SyncStudioAgent = memory_manager.get_agent(is_group=msg.is_group, chat_name=chat_name or "UNKNOWN", chat_id=chat_id or "UNKNOWN")
+        thread: SyncStudioThread = memory_manager.get_thread(is_group=msg.is_group, chat_name=chat_name or "UNKNOWN", chat_id=chat_id or "UNKNOWN")
         if msg.message:
-            agent.remember(timestamp=msg.timestamp,
+            thread.remember(timestamp=msg.timestamp,
                            sender=str(msg.contact.name), message=msg.message)
-        logger.debug(f"Processed message: {agent.chat_name} || {msg}")
+        logger.debug(f"Processed message: {thread.chat_name} || {msg}")
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         trace = traceback.format_exc()
