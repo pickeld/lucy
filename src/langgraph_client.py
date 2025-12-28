@@ -1,12 +1,3 @@
-"""
-LangGraph SDK Client for connecting to LangGraph Studio/Dev server.
-
-This module provides a client that communicates with the LangGraph dev server
-(http://127.0.0.1:2024) allowing conversations to be visible in LangGraph Studio.
-
-It also contains the graph definition for LangGraph Studio.
-"""
-
 import os
 import sys
 
@@ -28,10 +19,6 @@ from langgraph.graph.message import add_messages
 from config import config
 from utiles.logger import logger
 
-
-# =============================================================================
-# LangGraph State and Graph Definition (for LangGraph Studio)
-# =============================================================================
 
 class ThreadState(TypedDict, total=False):
     """State structure for LangGraph thread conversations."""
@@ -203,11 +190,11 @@ graph = create_graph()
 # =============================================================================
 
 
-class SyncStudioMemoryManager:
-    """Synchronous wrapper for StudioMemoryManager for use in Flask."""
+class ThreadsManager:
+    """Manages LangGraph threads for WhatsApp conversations."""
     
     def __init__(self, api_url: Optional[str] = None):
-        """Initialize the sync wrapper.
+        """Initialize the threads manager.
         
         Args:
             api_url: The LangGraph dev server URL
@@ -218,7 +205,7 @@ class SyncStudioMemoryManager:
         self._loop = None
         self.threads: Dict[str, 'Thread'] = {}
         
-        logger.info(f"SyncStudioMemoryManager initialized with API URL: {self.api_url}")
+        logger.info(f"ThreadsManager initialized with API URL: {self.api_url}")
     
     def _get_loop(self):
         """Get or create an event loop."""

@@ -22,7 +22,7 @@ os.chdir(project_root)
 # Add src to path for imports
 sys.path.insert(0, os.path.join(project_root, 'src'))
 
-from langgraph_client import SyncStudioMemoryManager, Thread
+from langgraph_client import ThreadsManager, Thread
 
 
 def send_test_message(
@@ -40,7 +40,7 @@ def send_test_message(
         is_group: Whether this is a group chat
     """
     # Use the same memory manager as app.py
-    memory_manager = SyncStudioMemoryManager()
+    memory_manager = ThreadsManager()
     
     # Create chat_id from chat_name (simulating what WhatsappMSG does)
     chat_id = chat_name.replace(" ", "_").lower()

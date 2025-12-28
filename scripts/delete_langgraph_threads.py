@@ -1,17 +1,3 @@
-#!/usr/bin/env python3
-"""
-Script to delete all threads from LangGraph Studio/Dev server.
-
-This will remove all conversation history and threads from the LangGraph server.
-Use with caution - this action is irreversible!
-
-Usage:
-    python scripts/delete_langgraph_threads.py
-
-Environment Variables:
-    LANGGRAPH_API_URL: The LangGraph API URL (default: http://127.0.0.1:2024)
-"""
-
 import asyncio
 import os
 import sys

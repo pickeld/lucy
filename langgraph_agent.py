@@ -1,7 +1,3 @@
-"""
-LangGraph Agent for LangGraph Studio/Dev UI.
-This is a standalone version that works with `langgraph dev`.
-"""
 import os
 import sys
 

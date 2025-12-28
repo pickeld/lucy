@@ -11,7 +11,7 @@ from flask import Flask, jsonify, redirect, render_template_string, request, url
 
 from config import config
 from contact import Contact
-from langgraph_client import SyncStudioMemoryManager, Thread
+from langgraph_client import ThreadsManager, Thread
 from providers.dalle import Dalle
 from utiles.globals import send_request
 from utiles.logger import logger
@@ -22,9 +22,7 @@ from whatsapp import WhatsappMSG
 app = Flask(__name__)
 
 
-# Use LangGraph Studio API for conversation management
-# This allows viewing threads in LangGraph Studio UI
-memory_manager = SyncStudioMemoryManager()
+memory_manager = ThreadsManager()
 
 
 def pass_filter(payload):
