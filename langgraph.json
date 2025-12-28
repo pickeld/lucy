@@ -1,9 +1,0 @@
-{
-  "python_version": "3.11",
-  "dependencies": ["."],
-  "graphs": {
-    "memory_agent": "./src/langgraph_client.py:graph"
-  },
-  "env": ".env",
-  "python_path": ["./src"]
-}
