@@ -108,9 +108,8 @@ class StudioAgent:
             self._thread_id = threads[0]["thread_id"]
             logger.debug(f"Found existing thread: {self._thread_id}")
         else:
-            # Use chat_name as the thread name for better visibility in Studio
-            # Prefix with emoji to distinguish groups from direct chats
-            thread_name = f"{'👥 ' if self.is_group else '👤 '}{self.chat_name}"
+            # Use chat_name as the thread name (group name for groups, person name for DMs)
+            thread_name = self.chat_name
             
             # Create new thread with metadata
             thread = await self.client.threads.create(
@@ -369,9 +368,8 @@ class SyncStudioAgent:
             self._thread_id = threads[0]["thread_id"]
             logger.debug(f"Found existing thread: {self._thread_id}")
         else:
-            # Use chat_name as the thread name for better visibility in Studio
-            # Prefix with emoji to distinguish groups from direct chats
-            thread_name = f"{'👥 ' if self.is_group else '👤 '}{self.chat_name}"
+            # Use chat_name as the thread name (group name for groups, person name for DMs)
+            thread_name = self.chat_name
             
             thread = await client.threads.create(
                 metadata={

@@ -20,13 +20,13 @@ from utiles.logger import logger
 
 
 # Define the state structure for our agent
-class AgentState(TypedDict):
+class AgentState(TypedDict, total=False):
     """State structure for LangGraph agent conversations."""
     messages: Annotated[List[BaseMessage], add_messages]
     chat_id: str
     chat_name: str
     is_group: bool
-    action: str  # "store" = just save message, "chat" = invoke LLM
+    action: str  # "store" to just save message, "chat" to invoke LLM (default)
 
 
 class MemoryManager:
@@ -102,10 +102,30 @@ class MemoryManager:
             messages = state["messages"]
 
             # Add system message with context
-            system_msg = SystemMessage(content=f"""You are a helpful AI assistant for WhatsApp.
-                                       Chat Type: {'Group' if is_group else 'Personal'}
-                                       Chat Name: {chat_name}
-                                       Remember conversations and provide contextual responses based on the chat history.""")
+            # IMPORTANT: Messages are formatted as "[timestamp] sender_name: message_content"
+            # Each message includes the actual sender's name, which may be different from the user asking
+            if is_group:
+                system_msg = SystemMessage(content=f"""You are a helpful AI assistant for a WhatsApp group chat.
+Chat Name: {chat_name}
+
+IMPORTANT: This is a group chat with multiple participants. Each message in the history is formatted as:
+[timestamp] sender_name: message_content
+
+The sender_name indicates WHO sent that specific message. Different messages may come from different people.
+When a user asks about what someone said (e.g., "what did Adi say?"), look at the sender_name prefix of each message to identify messages from that specific person.
+
+The LAST message in the conversation is from the person currently asking you a question. Use the sender_name from that message to identify who is asking.
+
+Remember conversations and provide contextual responses based on the chat history.""")
+            else:
+                system_msg = SystemMessage(content=f"""You are a helpful AI assistant for WhatsApp.
+Chat Type: Personal
+Chat Name: {chat_name}
+
+Messages are formatted as: [timestamp] sender_name: message_content
+The sender_name indicates who sent each message.
+
+Remember conversations and provide contextual responses based on the chat history.""")
 
             # Invoke the LLM with full message history
             response = self.llm.invoke([system_msg] + messages)
@@ -269,10 +289,30 @@ def create_graph():
         logger.debug(f"Chat node: {len(messages)} messages in history, chat_name={chat_name}")
 
         # Add system message with context
-        system_msg = SystemMessage(content=f"""You are a helpful AI assistant for WhatsApp.
-                                   Chat Type: {'Group' if is_group else 'Personal'}
-                                   Chat Name: {chat_name}
-                                   Remember conversations and provide contextual responses based on the chat history.""")
+        # IMPORTANT: Messages are formatted as "[timestamp] sender_name: message_content"
+        # Each message includes the actual sender's name, which may be different from the user asking
+        if is_group:
+            system_msg = SystemMessage(content=f"""You are a helpful AI assistant for a WhatsApp group chat.
+Chat Name: {chat_name}
+
+IMPORTANT: This is a group chat with multiple participants. Each message in the history is formatted as:
+[timestamp] sender_name: message_content
+
+The sender_name indicates WHO sent that specific message. Different messages may come from different people.
+When a user asks about what someone said (e.g., "what did Adi say?"), look at the sender_name prefix of each message to identify messages from that specific person.
+
+The LAST message in the conversation is from the person currently asking you a question. Use the sender_name from that message to identify who is asking.
+
+Remember conversations and provide contextual responses based on the chat history.""")
+        else:
+            system_msg = SystemMessage(content=f"""You are a helpful AI assistant for WhatsApp.
+Chat Type: Personal
+Chat Name: {chat_name}
+
+Messages are formatted as: [timestamp] sender_name: message_content
+The sender_name indicates who sent each message.
+
+Remember conversations and provide contextual responses based on the chat history.""")
 
         # Invoke the LLM with full message history
         try:
