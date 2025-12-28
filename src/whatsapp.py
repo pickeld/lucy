@@ -21,11 +21,24 @@ if not os.path.exists("tmp"):
 class MediaMessage:
     def __init__(self, payload):
         self.has_media = payload.get("hasMedia", False)
+        self.base64 = None
+        self.url = None
+        self.type = None
+        self.saved_path = None
+        
         media_type = payload.get("_data", {}).get("type")
-        if self.has_media and media_type not in ["sticker", "audio", "video"]:
+        # Exclude unsupported media types: sticker, audio, video, ptv (video notes)
+        if self.has_media and media_type not in ["sticker", "audio", "video", "ptv"]:
             self.media = payload.get("media", {})
             self.url = self.media.get('url')
             self.type = self.media.get('mimetype')
+            
+            # Only fetch media if URL is present
+            if not self.url:
+                logger.warning(f"Media message has no URL, skipping media download. Media type: {media_type}")
+                self.has_media = False
+                return
+                
             self.base64 = base64.standard_b64encode(httpx.get(
                 self.url, headers={"X-Api-Key": config.waha_api_key}).content).decode("utf-8")
             if config.log_level == "DEBUG":

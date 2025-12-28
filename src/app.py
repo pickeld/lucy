@@ -11,7 +11,7 @@ from flask import Flask, jsonify, redirect, render_template_string, request, url
 
 from config import config
 from contact import Contact
-from memory_agent import LangGraphAgent, LangGraphAgent, MemoryManager
+from langgraph_client import SyncStudioMemoryManager, SyncStudioAgent
 from providers.dalle import Dalle
 from utiles.globals import send_request
 from utiles.logger import logger
@@ -22,7 +22,9 @@ from whatsapp import WhatsappMSG
 app = Flask(__name__)
 
 
-memory_manager = MemoryManager()
+# Use LangGraph Studio API for conversation management
+# This allows viewing threads in LangGraph Studio UI
+memory_manager = SyncStudioMemoryManager()
 
 
 def pass_filter(payload):
@@ -67,7 +69,7 @@ def webhook():
         # logger.debug(f"Received: {msg.__dict__}")
         chat_id = msg.group.id if msg.is_group else msg.contact.number
         chat_name = msg.group.name if msg.is_group else msg.contact.name
-        agent: LangGraphAgent = memory_manager.get_agent(is_group=msg.is_group, chat_name=chat_name or "UNKNOWN", chat_id=chat_id or "UNKNOWN")
+        agent: SyncStudioAgent = memory_manager.get_agent(is_group=msg.is_group, chat_name=chat_name or "UNKNOWN", chat_id=chat_id or "UNKNOWN")
         if msg.message:
             agent.remember(timestamp=msg.timestamp,
                            sender=str(msg.contact.name), message=msg.message)

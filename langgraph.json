@@ -1,0 +1,9 @@
+{
+  "python_version": "3.11",
+  "dependencies": ["."],
+  "graphs": {
+    "memory_agent": "./src/memory_agent.py:graph"
+  },
+  "env": ".env",
+  "python_path": ["./src"]
+}
