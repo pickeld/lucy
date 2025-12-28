@@ -26,7 +26,8 @@ class AgentState(TypedDict, total=False):
     chat_id: str
     chat_name: str
     is_group: bool
-    action: str  # "store" to just save message, "chat" to invoke LLM (default)
+    # Note: 'action' is intentionally NOT in the state to avoid persistence issues
+    # It's passed via input but not stored in checkpoints
 
 
 class MemoryManager:
@@ -99,7 +100,7 @@ class MemoryManager:
 
         def chat_node(state: AgentState):
             """Main chat processing node."""
-            messages = state["messages"]
+            messages = state.get("messages", [])
 
             # Add system message with context
             # IMPORTANT: Messages are formatted as "[timestamp] sender_name: message_content"
@@ -229,17 +230,6 @@ class LangGraphAgent:
             logger.error(f"Error storing message: {e}")
             return False
 
-    def get_history(self, limit: int = 10) -> List[BaseMessage]:
-        """Retrieve conversation history."""
-        try:
-            # Get state from checkpointer
-            state = self.graph.get_state(self.config)
-            if state and "messages" in state.values:
-                return state.values["messages"][-limit:]
-            return []
-        except Exception as e:
-            logger.error(f"Error retrieving history: {e}")
-            return []
 
     def to_string(self) -> str:
         return f"LangGraphAgent(chat_id={self.chat_id}, chat_name={self.chat_name}, is_group={self.is_group})"
@@ -274,6 +264,7 @@ def create_graph():
 
     def store_node(state: AgentState):
         """Store-only node - just passes through without LLM invocation."""
+        print(f"[STORE NODE] Storing message without LLM invocation")
         logger.debug(f"Store node: storing message without LLM invocation")
         # Messages are already added to state via add_messages reducer
         # Just return empty dict to preserve state without adding new messages
@@ -281,12 +272,20 @@ def create_graph():
 
     def chat_node(state: AgentState):
         """Chat node - invokes LLM to generate a response."""
-        logger.debug(f"Chat node: invoking LLM for response")
-        messages = state["messages"]
+        print(f"[CHAT NODE] Invoking LLM for response")
+        logger.info(f"Chat node: invoking LLM for response")
+        messages = state.get("messages", [])
         chat_name = state.get("chat_name", "Unknown")
         is_group = state.get("is_group", False)
 
-        logger.debug(f"Chat node: {len(messages)} messages in history, chat_name={chat_name}")
+        print(f"[CHAT NODE] {len(messages)} messages in history, chat_name={chat_name}")
+        logger.info(f"Chat node: {len(messages)} messages in history, chat_name={chat_name}, is_group={is_group}")
+        
+        # Log the messages for debugging
+        for i, msg in enumerate(messages[-5:]):  # Log last 5 messages
+            content = msg.content if hasattr(msg, 'content') else str(msg)
+            print(f"[CHAT NODE]   Message {i}: {content[:100]}...")
+            logger.debug(f"  Message {i}: {content[:100]}...")
 
         # Add system message with context
         # IMPORTANT: Messages are formatted as "[timestamp] sender_name: message_content"
@@ -316,20 +315,65 @@ Remember conversations and provide contextual responses based on the chat histor
 
         # Invoke the LLM with full message history
         try:
+            logger.info(f"Chat node: Sending {len(messages) + 1} messages to LLM (including system)")
             response = llm.invoke([system_msg] + messages)
-            logger.debug(f"Chat node: LLM response received: {str(response.content)[:100]}...")
+            response_content = response.content if hasattr(response, 'content') else str(response)
+            logger.info(f"Chat node: LLM response received ({len(response_content)} chars): {response_content[:100]}...")
+            
+            # Ensure we return a proper AIMessage
+            if not isinstance(response, AIMessage):
+                response = AIMessage(content=response_content)
+            
+            return {"messages": [response]}
         except Exception as e:
             logger.error(f"Chat node: LLM invocation failed: {e}")
-            raise
-
-        return {"messages": [response]}
+            import traceback
+            logger.error(traceback.format_exc())
+            # Return an error message instead of crashing
+            error_response = AIMessage(content=f"Sorry, I encountered an error processing your request: {str(e)}")
+            return {"messages": [error_response]}
 
     def route_by_action(state: AgentState) -> str:
-        """Route to appropriate node based on action field."""
-        action = state.get("action", "chat")  # Default to chat if not specified
-        logger.debug(f"Routing: action={action}")
+        """Route to appropriate node based on action field.
+        
+        IMPORTANT: The 'action' field can get persisted in thread state.
+        To handle Studio UI properly (which doesn't send action), we check
+        the last message - if it's a simple user message without the
+        timestamp/sender format, it's likely from the Studio UI and should
+        route to chat.
+        """
+        action = state.get("action", None)  # Don't default to anything yet
+        messages = state.get("messages", [])
+        
+        print(f"[ROUTE] action={action}, num_messages={len(messages)}")
+        logger.info(f"[ROUTE] action={action}, num_messages={len(messages)}")
+        
+        # Check if this is likely a Studio UI message (no timestamp/sender format)
+        # App messages are formatted as "[timestamp] sender: message"
+        if messages:
+            last_msg = messages[-1]
+            last_content = last_msg.content if hasattr(last_msg, 'content') else str(last_msg)
+            # Handle case where content might be a list
+            if isinstance(last_content, list):
+                last_content = str(last_content[0]) if last_content else ""
+            # Studio UI sends plain messages, app sends "[timestamp] sender: message"
+            is_formatted_msg = isinstance(last_content, str) and last_content.startswith('[') and '] ' in last_content and ': ' in last_content
+            print(f"[ROUTE] Last message formatted={is_formatted_msg}: {str(last_content)[:50]}...")
+            
+            # If message is NOT in app format and action was store, override to chat
+            if not is_formatted_msg and action == "store":
+                print(f"[ROUTE] -> chat node (Studio UI message detected, overriding store)")
+                logger.info(f"[ROUTE] -> chat node (Studio UI detected)")
+                return "chat"
+        
+        # Use explicit action if provided, otherwise default to chat
         if action == "store":
+            print(f"[ROUTE] -> store node")
+            logger.info(f"[ROUTE] -> store node (action=store)")
             return "store"
+        
+        print(f"[ROUTE] -> chat node")
+        logger.info(f"[ROUTE] -> chat node (action={action})")
         return "chat"
 
     # Build the graph with conditional routing

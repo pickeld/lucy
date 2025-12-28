@@ -69,6 +69,7 @@ def webhook():
         # logger.debug(f"Received: {msg.__dict__}")
         chat_id = msg.group.id if msg.is_group else msg.contact.number
         chat_name = msg.group.name if msg.is_group else msg.contact.name
+        
         agent: SyncStudioAgent = memory_manager.get_agent(is_group=msg.is_group, chat_name=chat_name or "UNKNOWN", chat_id=chat_id or "UNKNOWN")
         if msg.message:
             agent.remember(timestamp=msg.timestamp,

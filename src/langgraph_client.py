@@ -112,12 +112,16 @@ class StudioAgent:
             thread_name = self.chat_name
             
             # Create new thread with metadata
+            # Note: LangGraph Studio uses thread_id or a specific field for display
             thread = await self.client.threads.create(
+                thread_id=None,  # Let it auto-generate
                 metadata={
                     "chat_id": self.chat_id,
                     "chat_name": self.chat_name,
                     "is_group": self.is_group,
-                    "name": thread_name  # Display name in Studio
+                    "thread_name": thread_name,  # Alternative field name
+                    "name": thread_name,  # Display name in Studio
+                    "display_name": thread_name  # Try another field name
                 }
             )
             self._thread_id = thread["thread_id"]
@@ -371,12 +375,17 @@ class SyncStudioAgent:
             # Use chat_name as the thread name (group name for groups, person name for DMs)
             thread_name = self.chat_name
             
+            # Create new thread with metadata
+            # Note: LangGraph Studio uses thread_id or a specific field for display
             thread = await client.threads.create(
+                thread_id=None,  # Let it auto-generate
                 metadata={
                     "chat_id": self.chat_id,
                     "chat_name": self.chat_name,
                     "is_group": self.is_group,
-                    "name": thread_name  # Display name in Studio
+                    "thread_name": thread_name,  # Alternative field name
+                    "name": thread_name,  # Display name in Studio
+                    "display_name": thread_name  # Try another field name
                 }
             )
             self._thread_id = thread["thread_id"]
