@@ -220,14 +220,7 @@ class ThreadsManager:
 class Thread:
     """Represents a chat conversation thread (DM or group) in LangGraph."""
 
-    def __init__(
-        self,
-        api_url: str,
-        graph_name: str,
-        chat_id: str,
-        chat_name: str,
-        is_group: bool
-    ):
+    def __init__(self, api_url: str, graph_name: str, chat_id: str, chat_name: str, is_group: bool):
         """Initialize a thread."""
         self.api_url = api_url
         self.graph_name = graph_name
