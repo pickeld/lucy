@@ -17,8 +17,7 @@ class ThreadState(TypedDict, total=False):
     chat_id: str
     chat_name: str
     is_group: bool
-    # Note: 'action' is intentionally NOT in the state to avoid persistence issues
-    # It's passed via input but not stored in checkpoints
+    action: str  # "store" or "chat" - controls routing to skip or invoke LLM
 
 
 def create_graph():
@@ -278,7 +277,7 @@ class Thread:
 
         return self._thread_id
 
-    def remember(self, timestamp: str, sender: str, message: str) -> bool:
+    def remember(self, timestamp: str, sender: str, message: str, store: bool = True) -> bool:
         """Store a message in the conversation history without triggering AI response.
 
         Sets action="store" in the input state so the graph routes to the store node
@@ -290,13 +289,12 @@ class Thread:
 
             formatted_message = f"[{timestamp}] {sender}: {message}"
 
-            # Set action="store" to route to store node (no LLM invocation)
             input_state = {
                 "messages": [{"role": "user", "content": formatted_message}],
                 "chat_id": self.chat_id,
                 "chat_name": self.chat_name,
                 "is_group": self.is_group,
-                "action": "store"  # This routes to store node, skipping LLM
+                "action": "store" if store else "chat"  # This routes to store node, skipping LLM
             }
 
             # Wait for the run to complete to ensure message is stored

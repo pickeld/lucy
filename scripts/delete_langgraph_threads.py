@@ -1,14 +1,10 @@
 import asyncio
 import os
 import sys
-
-# Add src to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+from typing import Optional
 
 from langgraph_sdk import get_client
-
-
-from typing import Optional
+from langsmith import Client as LangSmithClient
 
 
 async def delete_all_threads(api_url: Optional[str] = None):
@@ -65,30 +61,102 @@ async def delete_all_threads(api_url: Optional[str] = None):
     print(f"Failed: {failed_count} threads")
 
 
-async def delete_all_runs(api_url: Optional[str] = None):
-    """Delete all runs from LangGraph server (if supported).
+def delete_langsmith_traces(project_name: Optional[str] = None, recreate: bool = True):
+    """Delete all traces from LangSmith by deleting and recreating the project.
+    
+    The LangSmith SDK doesn't support deleting individual runs/traces directly.
+    The only way to delete all traces is to delete the entire project.
     
     Args:
-        api_url: The LangGraph API URL. Defaults to env var or localhost.
+        project_name: The LangSmith project name. Defaults to env var LANGCHAIN_PROJECT.
+        recreate: Whether to recreate the project after deletion. Defaults to True.
     """
-    api_url = api_url or os.getenv("LANGGRAPH_API_URL", "http://127.0.0.1:2024")
+    project = project_name or os.getenv("LANGCHAIN_PROJECT", "default")
+    api_key = os.getenv("LANGCHAIN_API_KEY") or os.getenv("LANGSMITH_API_KEY")
     
-    print(f"\nNote: Run history is typically tied to threads.")
-    print("Deleting threads should also remove associated runs.")
+    if not api_key:
+        print("\nNo LangSmith API key found. Set LANGCHAIN_API_KEY or LANGSMITH_API_KEY.")
+        print("Skipping LangSmith trace deletion.")
+        return
+    
+    print(f"\n{'=' * 60}")
+    print("LangSmith Traces Deletion")
+    print("=" * 60)
+    print(f"\nConnecting to LangSmith...")
+    print(f"Project: {project}")
+    
+    try:
+        client = LangSmithClient()
+        
+        # Check if project exists and get trace count
+        try:
+            runs = list(client.list_runs(
+                project_name=project,
+                is_root=True,
+                limit=1000
+            ))
+            trace_count = len(runs)
+            print(f"Found {trace_count} traces in project '{project}'.")
+        except Exception:
+            print(f"Project '{project}' not found or no traces.")
+            return
+        
+        if trace_count == 0:
+            print("No traces found. Nothing to delete.")
+            return
+        
+        # Confirm deletion
+        print(f"\nWARNING: This will DELETE the entire project '{project}' and all its traces.")
+        if recreate:
+            print("The project will be recreated as an empty project after deletion.")
+        confirm = input(f"\nAre you sure you want to delete ALL {trace_count} traces? This cannot be undone. (yes/no): ")
+        if confirm.lower() != 'yes':
+            print("Aborted. No traces were deleted.")
+            return
+        
+        # Delete the project (this deletes all traces)
+        print(f"\nDeleting project '{project}'...")
+        try:
+            client.delete_project(project_name=project)
+            print(f"Project '{project}' and all {trace_count} traces deleted successfully.")
+        except Exception as e:
+            print(f"Failed to delete project: {e}")
+            return
+        
+        # Optionally recreate the project
+        if recreate:
+            print(f"\nRecreating project '{project}'...")
+            try:
+                client.create_project(project_name=project)
+                print(f"Project '{project}' recreated successfully.")
+            except Exception as e:
+                print(f"Failed to recreate project: {e}")
+                print("You may need to create it manually or it will be created on first trace.")
+        
+        print(f"\n--- LangSmith Traces Summary ---")
+        print(f"Deleted: {trace_count} traces (by deleting project)")
+        
+    except Exception as e:
+        print(f"\nError connecting to LangSmith: {e}")
+        print("Make sure LANGCHAIN_API_KEY is set correctly.")
 
 
 async def main():
     """Main entry point."""
     print("=" * 60)
-    print("LangGraph Thread Deletion Script")
+    print("LangGraph Thread & Traces Deletion Script")
     print("=" * 60)
     print()
     
     api_url = os.getenv("LANGGRAPH_API_URL", "http://127.0.0.1:2024")
     
-    print(f"Target server: {api_url}")
+    print(f"LangGraph Target server: {api_url}")
     print()
     
+    # First delete LangSmith traces (synchronous)
+    delete_langsmith_traces()
+    
+    # Then delete LangGraph threads (async)
     try:
         await delete_all_threads(api_url)
     except Exception as e:
