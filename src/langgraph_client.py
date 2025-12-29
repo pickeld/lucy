@@ -349,7 +349,9 @@ class Thread:
         try:
             return self._run_async(_remember())
         except Exception as e:
-            logger.error(f"Error remembering message: {e}")
+            import traceback
+            logger.error(f"Error remembering message: {type(e).__name__}: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return False
 
     def to_string(self) -> str:
