@@ -16,3 +16,6 @@ langchain-postgres
 langsmith
 psycopg[binary]
 langgraph-cli[inmem]
+# RAG / Vector Store dependencies
+qdrant-client
+langchain-qdrant
