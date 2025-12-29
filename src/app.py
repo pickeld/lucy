@@ -7,6 +7,7 @@ from flask import Flask, jsonify, redirect, render_template_string, request
 
 from config import config
 from langgraph_client import ThreadsManager, Thread
+from rag import RAG
 from utiles.globals import send_request
 from utiles.logger import logger
 import traceback
@@ -17,6 +18,7 @@ app = Flask(__name__)
 
 
 memory_manager = ThreadsManager()
+rag = RAG()
 
 
 def pass_filter(payload):
@@ -32,6 +34,123 @@ def pass_filter(payload):
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "up"}), 200
+
+
+@app.route("/rag/query", methods=["POST"])
+def rag_query():
+    """Query the RAG system with a natural language question.
+    
+    Request body:
+        {
+            "question": "who said they would be late?",
+            "k": 10,  # optional, number of context documents
+            "filter_chat_name": "Work Group",  # optional
+            "filter_sender": "John"  # optional
+        }
+    
+    Response:
+        {
+            "answer": "...",
+            "question": "...",
+            "stats": {"total_documents": 123}
+        }
+    """
+    try:
+        data = request.json or {}
+        question = data.get("question")
+        
+        if not question:
+            return jsonify({"error": "Missing 'question' in request body"}), 400
+        
+        k = data.get("k", 10)
+        filter_chat_name = data.get("filter_chat_name")
+        filter_sender = data.get("filter_sender")
+        
+        answer = rag.query(
+            question=question,
+            k=k,
+            filter_chat_name=filter_chat_name,
+            filter_sender=filter_sender
+        )
+        
+        stats = rag.get_stats()
+        
+        return jsonify({
+            "answer": answer,
+            "question": question,
+            "stats": stats
+        }), 200
+        
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"RAG query error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/rag/search", methods=["POST"])
+def rag_search():
+    """Search the RAG system for relevant messages.
+    
+    Request body:
+        {
+            "query": "meeting tomorrow",
+            "k": 10,  # optional
+            "filter_chat_name": "Work Group",  # optional
+            "filter_sender": "John"  # optional
+        }
+    
+    Response:
+        {
+            "results": [
+                {
+                    "content": "[2024-01-15 10:30] John in Work Group: meeting tomorrow at 2pm",
+                    "metadata": {...}
+                }
+            ]
+        }
+    """
+    try:
+        data = request.json or {}
+        query = data.get("query")
+        
+        if not query:
+            return jsonify({"error": "Missing 'query' in request body"}), 400
+        
+        k = data.get("k", 10)
+        filter_chat_name = data.get("filter_chat_name")
+        filter_sender = data.get("filter_sender")
+        
+        docs = rag.search(
+            query=query,
+            k=k,
+            filter_chat_name=filter_chat_name,
+            filter_sender=filter_sender
+        )
+        
+        results = [
+            {
+                "content": doc.page_content,
+                "metadata": doc.metadata
+            }
+            for doc in docs
+        ]
+        
+        return jsonify({"results": results}), 200
+        
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"RAG search error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/rag/stats", methods=["GET"])
+def rag_stats():
+    """Get RAG vector store statistics."""
+    try:
+        stats = rag.get_stats()
+        return jsonify(stats), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/test", methods=["GET"])

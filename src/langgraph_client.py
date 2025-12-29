@@ -6,6 +6,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, Base
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from langgraph_sdk import get_client
+from rag import RAG
 from typing import Annotated, List, Optional, Dict, Any, TypedDict
 import os
 import asyncio
@@ -56,6 +57,27 @@ def create_graph():
         messages = state.get("messages", [])
         chat_name = state.get("chat_name", "Unknown")
         is_group = state.get("is_group", False)
+
+        # Validate that we have messages to process
+        if not messages:
+            logger.warning("Chat node: No messages to process, returning empty response")
+            return {"messages": [AIMessage(content="I don't see any messages to respond to.")]}
+
+        # Filter out any messages with empty content
+        valid_messages = []
+        for msg in messages:
+            content = msg.content if hasattr(msg, 'content') else str(msg)
+            # Handle case where content might be a list
+            if isinstance(content, list):
+                content = str(content[0]) if content else ""
+            if content and content.strip():
+                valid_messages.append(msg)
+        
+        if not valid_messages:
+            logger.warning("Chat node: All messages have empty content")
+            return {"messages": [AIMessage(content="I don't see any messages to respond to.")]}
+        
+        messages = valid_messages
 
         # Log the messages for debugging
         for i, msg in enumerate(messages[-5:]):  # Log last 5 messages
@@ -282,6 +304,8 @@ class Thread:
 
         Sets action="store" in the input state so the graph routes to the store node
         instead of the chat node (which invokes the LLM).
+        
+        Also adds the message to RAG vector store for cross-thread semantic search.
         """
         async def _remember():
             client = get_client(url=self.api_url)
@@ -307,6 +331,19 @@ class Thread:
 
             logger.debug(
                 f"Stored message in thread {thread_id}: {formatted_message[:50]}...")
+            
+            # Add message to RAG vector store for cross-thread search
+            rag = RAG()
+            rag.add_message(
+                thread_id=thread_id,
+                chat_id=self.chat_id,
+                chat_name=self.chat_name,
+                is_group=self.is_group,
+                sender=sender,
+                message=message,
+                timestamp=timestamp
+            )
+            
             return True
 
         try:
