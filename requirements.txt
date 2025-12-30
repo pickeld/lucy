@@ -1,6 +1,7 @@
 requests
 openai
 flask
+streamlit
 python-dotenv
 qrcode[pil]
 redis
