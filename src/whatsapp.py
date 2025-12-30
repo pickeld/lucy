@@ -12,9 +12,9 @@ contact_manager = ContactManager()
 group_manager = GroupManager()
 
 
-# make dir
-if not os.path.exists("tmp"):
-    os.makedirs("tmp")
+# make dir for media storage
+if not os.path.exists("tmp/images"):
+    os.makedirs("tmp/images")
 
 class MediaMessage:
     def __init__(self, payload):
