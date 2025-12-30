@@ -39,7 +39,7 @@ def health():
 @app.route("/rag/query", methods=["POST"])
 def rag_query():
     """Query the RAG system with a natural language question.
-    
+
     Request body:
         {
             "question": "who said they would be late?",
@@ -47,7 +47,7 @@ def rag_query():
             "filter_chat_name": "Work Group",  # optional
             "filter_sender": "John"  # optional
         }
-    
+
     Response:
         {
             "answer": "...",
@@ -58,29 +58,29 @@ def rag_query():
     try:
         data = request.json or {}
         question = data.get("question")
-        
+
         if not question:
             return jsonify({"error": "Missing 'question' in request body"}), 400
-        
+
         k = data.get("k", 10)
         filter_chat_name = data.get("filter_chat_name")
         filter_sender = data.get("filter_sender")
-        
+
         answer = rag.query(
             question=question,
             k=k,
             filter_chat_name=filter_chat_name,
             filter_sender=filter_sender
         )
-        
+
         stats = rag.get_stats()
-        
+
         return jsonify({
             "answer": answer,
             "question": question,
             "stats": stats
         }), 200
-        
+
     except Exception as e:
         trace = traceback.format_exc()
         logger.error(f"RAG query error: {e}\n{trace}")
@@ -90,7 +90,7 @@ def rag_query():
 @app.route("/rag/search", methods=["POST"])
 def rag_search():
     """Search the RAG system for relevant messages.
-    
+
     Request body:
         {
             "query": "meeting tomorrow",
@@ -98,7 +98,7 @@ def rag_search():
             "filter_chat_name": "Work Group",  # optional
             "filter_sender": "John"  # optional
         }
-    
+
     Response:
         {
             "results": [
@@ -112,21 +112,21 @@ def rag_search():
     try:
         data = request.json or {}
         query = data.get("query")
-        
+
         if not query:
             return jsonify({"error": "Missing 'query' in request body"}), 400
-        
+
         k = data.get("k", 10)
         filter_chat_name = data.get("filter_chat_name")
         filter_sender = data.get("filter_sender")
-        
+
         docs = rag.search(
             query=query,
             k=k,
             filter_chat_name=filter_chat_name,
             filter_sender=filter_sender
         )
-        
+
         results = [
             {
                 "content": doc.page_content,
@@ -134,9 +134,9 @@ def rag_search():
             }
             for doc in docs
         ]
-        
+
         return jsonify({"results": results}), 200
-        
+
     except Exception as e:
         trace = traceback.format_exc()
         logger.error(f"RAG search error: {e}\n{trace}")
@@ -180,11 +180,12 @@ def webhook():
         # logger.debug(f"Received: {msg.__dict__}")
         chat_id = msg.group.id if msg.is_group else msg.contact.number
         chat_name = msg.group.name if msg.is_group else msg.contact.name
-        
-        thread: Thread = memory_manager.get_thread(is_group=msg.is_group, chat_name=chat_name or "UNKNOWN", chat_id=chat_id or "UNKNOWN")
+
+        thread: Thread = memory_manager.get_thread(
+            is_group=msg.is_group, chat_name=chat_name or "UNKNOWN", chat_id=chat_id or "UNKNOWN")
         if msg.message:
             thread.remember(timestamp=msg.timestamp,
-                           sender=str(msg.contact.name), message=msg.message)
+                            sender=str(msg.contact.name), message=msg.message)
         logger.debug(f"Processed message: {thread.chat_name} || {msg}")
         return jsonify({"status": "ok"}), 200
     except Exception as e:
