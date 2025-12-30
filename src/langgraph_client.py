@@ -60,7 +60,8 @@ def create_graph():
 
         # Validate that we have messages to process
         if not messages:
-            logger.warning("Chat node: No messages to process, returning empty response")
+            logger.warning(
+                "Chat node: No messages to process, returning empty response")
             return {"messages": [AIMessage(content="I don't see any messages to respond to.")]}
 
         # Filter out any messages with empty content
@@ -72,11 +73,11 @@ def create_graph():
                 content = str(content[0]) if content else ""
             if content and content.strip():
                 valid_messages.append(msg)
-        
+
         if not valid_messages:
             logger.warning("Chat node: All messages have empty content")
             return {"messages": [AIMessage(content="I don't see any messages to respond to.")]}
-        
+
         messages = valid_messages
 
         # Log the messages for debugging
@@ -171,12 +172,6 @@ Remember conversations and provide contextual responses based on the chat histor
 
     # Compile without checkpointer for dev mode (LangGraph dev provides its own)
     return workflow.compile()
-
-
-# Export the compiled graph for LangGraph dev
-graph = create_graph()
-
-
 
 
 class ThreadsManager:
@@ -304,7 +299,7 @@ class Thread:
 
         Sets action="store" in the input state so the graph routes to the store node
         instead of the chat node (which invokes the LLM).
-        
+
         Also adds the message to RAG vector store for cross-thread semantic search.
         """
         async def _remember():
@@ -318,7 +313,8 @@ class Thread:
                 "chat_id": self.chat_id,
                 "chat_name": self.chat_name,
                 "is_group": self.is_group,
-                "action": "store" if store else "chat"  # This routes to store node, skipping LLM
+                # This routes to store node, skipping LLM
+                "action": "store" if store else "chat"
             }
 
             # Wait for the run to complete to ensure message is stored
@@ -331,7 +327,7 @@ class Thread:
 
             logger.debug(
                 f"Stored message in thread {thread_id}: {formatted_message[:50]}...")
-            
+
             # Add message to RAG vector store for cross-thread search
             rag = RAG()
             rag.add_message(
@@ -343,7 +339,7 @@ class Thread:
                 message=message,
                 timestamp=timestamp
             )
-            
+
             return True
 
         try:
@@ -357,3 +353,6 @@ class Thread:
     def to_string(self) -> str:
         """Return string representation of this thread."""
         return f"Thread(chat_id={self.chat_id}, chat_name={self.chat_name}, is_group={self.is_group})"
+
+
+graph = create_graph()
