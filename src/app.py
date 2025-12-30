@@ -12,7 +12,7 @@ from utiles.globals import send_request
 from utiles.logger import logger
 import traceback
 
-from whatsapp import WhatsappMSG
+from whatsapp import WhatsappMSG, group_manager
 
 app = Flask(__name__)
 
@@ -151,6 +151,53 @@ def rag_stats():
         return jsonify(stats), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/cache/groups/clear", methods=["POST", "DELETE"])
+def clear_groups_cache():
+    """Clear all cached group data from Redis.
+    
+    This forces the system to re-fetch group info from WAHA on next message.
+    Use this when group names are showing incorrectly.
+    
+    Response:
+        {
+            "status": "ok",
+            "deleted_count": 5
+        }
+    """
+    try:
+        count = group_manager.clear_all_groups_cache()
+        return jsonify({"status": "ok", "deleted_count": count}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Failed to clear groups cache: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/cache/groups/<group_id>/refresh", methods=["POST"])
+def refresh_group_cache(group_id: str):
+    """Refresh cache for a specific group.
+    
+    Args:
+        group_id: The group ID (e.g., '120363123456789@g.us')
+        
+    Response:
+        {
+            "status": "ok",
+            "group": {"id": "...", "name": "..."}
+        }
+    """
+    try:
+        group = group_manager.refresh_group(group_id)
+        if group:
+            return jsonify({"status": "ok", "group": group.to_dict()}), 200
+        else:
+            return jsonify({"status": "error", "message": "Failed to fetch group"}), 404
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Failed to refresh group cache: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
 
 
 @app.route("/test", methods=["GET"])

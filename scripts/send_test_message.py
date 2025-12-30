@@ -1,103 +1,185 @@
-#!/usr/bin/env python3
-"""
-Script to send a test message using the same logic as app.py.
-
-This simulates a WhatsApp message from a group chat for testing purposes.
-
-Usage:
-    python scripts/send_test_message.py
-
-Environment Variables:
-    LANGGRAPH_API_URL: The LangGraph API URL (default: http://127.0.0.1:2024)
-"""
-
-import os
-import sys
-from datetime import datetime
-
-# Change to src directory so .env file can be found (config expects ../.env)
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-src_dir = os.path.join(project_root, 'src')
-os.chdir(src_dir)
-
-# Add src to path for imports
-sys.path.insert(0, src_dir)
-
-from langgraph_client import ThreadsManager, Thread
+import json
+import requests
 
 
-def send_test_message(
-    chat_name: str = "testing group",
-    sender_name: str = "sam",
-    message: str = "im 32 years old",
-    is_group: bool = True,
-    chat_id: str | None = None
-):
-    """Send a test message using the same logic as app.py.
-    
-    Args:
-        chat_name: Name of the group/chat
-        sender_name: Name of the message sender
-        message: The message content
-        is_group: Whether this is a group chat
-        chat_id: Optional real chat ID (if not provided, generated from chat_name)
-    """
-    # Use the same memory manager as app.py
-    memory_manager = ThreadsManager()
-    
-    # Use provided chat_id or generate from chat_name
-    if chat_id is None:
-        chat_id = chat_name.replace(" ", "_").lower()
-    timestamp = datetime.now().isoformat()
-    
-    print(f"Creating thread for chat: {chat_name}")
-    thread: Thread = memory_manager.get_thread(
-        is_group=is_group,
-        chat_name=chat_name,
-        chat_id=chat_id
-    )
-    
-    print(f"\nSending message:")
-    print(f"  {'Group' if is_group else 'Chat'}: {chat_name}")
-    print(f"  Sender: {sender_name}")
-    print(f"  Message: {message}")
-    print(f"  Timestamp: {timestamp}")
-    
-    # Use remember() just like in app.py webhook handler
-    success = thread.remember(
-        timestamp=timestamp,
-        sender=sender_name,
-        message=message
-    )
-    
-    if success:
-        print(f"\n✓ Message stored successfully!")
-        print(f"  Thread: {thread.to_string()}")
-    else:
-        print(f"\n✗ Failed to store message")
-
-
-def main():
-    """Main entry point."""
-    print("=" * 60)
-    print("LangGraph Test Message Sender")
-    print("=" * 60)
-    print()
-    
-    # Real chat examples from production logs:
-    # - 120363421680930524_g_us (צהרון א1 קבוצה מס׳1)
-    # - 972559259469-1578932540_g_us (בייביסיטר הוד השרון)
-    # - 120363143662637768_g_us (מומלצים - הקבוצה השכונתית 1200)
-    
-    # Test with a real chat ID to simulate production message
-    send_test_message(
-        chat_name="בייביסיטר הוד השרון",
-        sender_name="Test User",
-        message="בדיקה של הודעה אמיתית",
-        is_group=True,
-        chat_id="972559259469-1578932540_g_us"  # Real chat ID from logs
-    )
+def main(msg):
+    url = "http://localhost:8765/webhook"
+    response = requests.post(url, json={"payload": msg})
+    print("Response status code:", response.status_code)
+    print("Response body:", response.text)
 
 
 if __name__ == "__main__":
-    main()
+    msg = {
+        "id": "False_38379945201791@lid_3AAC8CA420457A103E88",
+        "timestamp": 1767081700,
+        "from": "38379945201791@lid",
+        "fromMe": False,
+        "source": "app",
+        "to": "972547755011@c.us",
+        "body": "בוקר טוב",
+        "hasMedia": False,
+        "media": None,
+        "ack": 1,
+        "ackName": "SERVER",
+        "location": None,
+        "vCards": [],
+        "_data": {
+            "id": {
+                "fromMe": False,
+                "remote": "38379945201791@lid",
+                "id": "3AAC8CA420457A103E88",
+                "_serialized": "False_38379945201791@lid_3AAC8CA420457A103E88"
+            },
+            "viewed": False,
+            "body": "בוקר טוב",
+            "type": "chat",
+            "t": 1767081700,
+            "clientReceivedTsMillis": 1767082252623,
+            "notifyName": "Daniella Sassoon",
+            "from": "38379945201791@lid",
+            "to": "972547755011@c.us",
+            "ack": 1,
+            "invis": False,
+            "isNewMsg": True,
+            "star": False,
+            "kicNotified": False,
+            "recvFresh": True,
+            "isFromTemplate": False,
+            "isAdsMedia": False,
+            "pollInvalidated": False,
+            "isSentCagPollCreation": False,
+            "latestEditMsgKey": None,
+            "latestEditSenderTimestampMs": None,
+            "mentionedJidList": [],
+            "groupMentions": [],
+            "isEventCanceled": False,
+            "eventInvalidated": False,
+            "isVcardOverMmsDocument": False,
+            "isForwarded": False,
+            "isQuestion": False,
+            "questionReplyQuotedMessage": None,
+            "questionResponsesCount": 0,
+            "readQuestionResponsesCount": 0,
+            "forwardsCount": 0,
+            "hasReaction": False,
+            "viewMode": "VISIBLE",
+            "messageSecret": {
+                "0": 108,
+                "1": 127,
+                "2": 90,
+                "3": 0,
+                "4": 201,
+                "5": 195,
+                "6": 219,
+                "7": 229,
+                "8": 39,
+                "9": 138,
+                "10": 239,
+                "11": 93,
+                "12": 143,
+                "13": 30,
+                "14": 254,
+                "15": 40,
+                "16": 140,
+                "17": 220,
+                "18": 33,
+                "19": 172,
+                "20": 107,
+                "21": 197,
+                "22": 143,
+                "23": 55,
+                "24": 9,
+                "25": 152,
+                "26": 62,
+                "27": 105,
+                "28": 75,
+                "29": 4,
+                "30": 41,
+                "31": 4
+            },
+            "productHeaderImageRejected": False,
+            "lastPlaybackProgress": 0,
+            "isDynamicReplyButtonsMsg": False,
+            "isCarouselCard": False,
+            "parentMsgId": None,
+            "callSilenceReason": None,
+            "isVideoCall": False,
+            "callDuration": None,
+            "callCreator": None,
+            "callParticipants": None,
+            "isCallLink": None,
+            "callLinkToken": None,
+            "isMdHistoryMsg": False,
+            "stickerSentTs": 0,
+            "isAvatar": False,
+            "lastUpdateFromServerTs": 0,
+            "invokedBotWid": None,
+            "bizBotType": None,
+            "botResponseTargetId": None,
+            "botPluginType": None,
+            "botPluginReferenceIndex": None,
+            "botPluginSearchProvider": None,
+            "botPluginSearchUrl": None,
+            "botPluginSearchQuery": None,
+            "botPluginMaybeParent": False,
+            "botReelPluginThumbnailCdnUrl": None,
+            "botMessageDisclaimerText": None,
+            "botMsgBodyType": None,
+            "reportingTokenInfo": {
+                "reportingToken": {
+                    "0": 237,
+                    "1": 114,
+                    "2": 122,
+                    "3": 171,
+                    "4": 13,
+                    "5": 47,
+                    "6": 232,
+                    "7": 232,
+                    "8": 21,
+                    "9": 60,
+                    "10": 15,
+                    "11": 178,
+                    "12": 240,
+                    "13": 46,
+                    "14": 17,
+                    "15": 200
+                },
+                "version": 2,
+                "reportingTag": {
+                    "0": 1,
+                    "1": 14,
+                    "2": 162,
+                    "3": 107,
+                    "4": 229,
+                    "5": 126,
+                    "6": 30,
+                    "7": 99,
+                    "8": 216,
+                    "9": 222,
+                    "10": 105,
+                    "11": 30,
+                    "12": 163,
+                    "13": 34,
+                    "14": 205,
+                    "15": 38,
+                    "16": 248,
+                    "17": 34,
+                    "18": 162,
+                    "19": 41
+                }
+            },
+            "requiresDirectConnection": None,
+            "bizContentPlaceholderType": None,
+            "hostedBizEncStateMismatch": False,
+            "senderOrRecipientAccountTypeHosted": False,
+            "placeholderCreatedWhenAccountIsHosted": False,
+            "groupHistoryBundleMessageKey": None,
+            "groupHistoryBundleMetadata": None,
+            "groupHistoryIndividualMessageInfo": None,
+            "nonJidMentions": None,
+            "links": []
+        }
+    }
+
+    main(msg)

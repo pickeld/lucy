@@ -38,3 +38,18 @@ def redis_get(key: str, default: Any = None) -> Any:
         return json.loads(value)
     except json.JSONDecodeError:
         return value
+
+
+def redis_delete(key: str) -> bool:
+    """Delete a key from Redis. Returns True if key existed and was deleted."""
+    client = get_redis_client()
+    return client.delete(key) > 0
+
+
+def redis_delete_pattern(pattern: str) -> int:
+    """Delete all keys matching a pattern. Returns count of deleted keys."""
+    client = get_redis_client()
+    keys = client.keys(pattern)
+    if keys:
+        return client.delete(*keys)
+    return 0
