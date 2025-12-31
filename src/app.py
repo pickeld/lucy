@@ -45,7 +45,8 @@ def rag_query():
             "question": "who said they would be late?",
             "k": 10,  # optional, number of context documents
             "filter_chat_name": "Work Group",  # optional
-            "filter_sender": "John"  # optional
+            "filter_sender": "John",  # optional
+            "filter_days": 7  # optional (1=24h, 3=3 days, 7=week, 30=month, null=all time)
         }
 
     Response:
@@ -65,12 +66,14 @@ def rag_query():
         k = data.get("k", 10)
         filter_chat_name = data.get("filter_chat_name")
         filter_sender = data.get("filter_sender")
+        filter_days = data.get("filter_days")
 
         answer = rag.query(
             question=question,
             k=k,
             filter_chat_name=filter_chat_name,
-            filter_sender=filter_sender
+            filter_sender=filter_sender,
+            filter_days=filter_days
         )
 
         stats = rag.get_stats()
@@ -96,7 +99,8 @@ def rag_search():
             "query": "meeting tomorrow",
             "k": 10,  # optional
             "filter_chat_name": "Work Group",  # optional
-            "filter_sender": "John"  # optional
+            "filter_sender": "John",  # optional
+            "filter_days": 7  # optional (1=24h, 3=3 days, 7=week, 30=month, null=all time)
         }
 
     Response:
@@ -119,12 +123,14 @@ def rag_search():
         k = data.get("k", 10)
         filter_chat_name = data.get("filter_chat_name")
         filter_sender = data.get("filter_sender")
+        filter_days = data.get("filter_days")
 
         docs = rag.search(
             query=query,
             k=k,
             filter_chat_name=filter_chat_name,
-            filter_sender=filter_sender
+            filter_sender=filter_sender,
+            filter_days=filter_days
         )
 
         results = [

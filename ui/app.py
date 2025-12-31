@@ -80,6 +80,21 @@ with st.sidebar:
         index=0,
         format_func=lambda x: "All senders" if x == "" else x
     )
+    
+    # Date range filter
+    DATE_RANGE_OPTIONS = {
+        "All time": None,
+        "Last 24 hours": 1,
+        "Last 3 days": 3,
+        "Last week": 7,
+        "Last month": 30
+    }
+    filter_date_range = st.selectbox(
+        "Filter by time range (optional)",
+        options=list(DATE_RANGE_OPTIONS.keys()),
+        index=0
+    )
+    filter_days = DATE_RANGE_OPTIONS[filter_date_range]
 
     st.markdown("---")
     if st.button("Clear Chat History"):
@@ -135,6 +150,8 @@ if question:
                     payload["filter_chat_name"] = filter_chat.strip()
                 if filter_sender.strip():
                     payload["filter_sender"] = filter_sender.strip()
+                if filter_days is not None:
+                    payload["filter_days"] = filter_days
 
                 # Call the RAG query endpoint
                 response = requests.post(

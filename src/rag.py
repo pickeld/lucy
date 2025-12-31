@@ -177,6 +177,12 @@ class RAG:
             # Create document with full context
             doc_content = f"[{readable_timestamp}] {sender} in {chat_name}: {message}"
             
+            # Convert timestamp to integer for range filtering
+            try:
+                timestamp_int = int(timestamp)
+            except (ValueError, TypeError):
+                timestamp_int = int(datetime.now().timestamp())
+            
             doc = Document(
                 page_content=doc_content,
                 metadata={
@@ -185,7 +191,7 @@ class RAG:
                     "chat_name": chat_name,
                     "is_group": is_group,
                     "sender": sender,
-                    "timestamp": timestamp,
+                    "timestamp": timestamp_int,
                     "message": message
                 }
             )
@@ -202,7 +208,8 @@ class RAG:
         query: str,
         k: int = 10,
         filter_chat_name: Optional[str] = None,
-        filter_sender: Optional[str] = None
+        filter_sender: Optional[str] = None,
+        filter_days: Optional[int] = None
     ) -> List[Document]:
         """Search for relevant messages using semantic similarity.
         
@@ -211,13 +218,14 @@ class RAG:
             k: Number of results to return
             filter_chat_name: Optional filter by chat/group name
             filter_sender: Optional filter by sender name
+            filter_days: Optional filter by number of days (e.g., 1=24h, 3=3 days, 7=week, 30=month, None=all time)
             
         Returns:
             List of relevant Document objects with metadata
         """
         try:
             # Build filter for Qdrant
-            from qdrant_client.models import Filter, FieldCondition, MatchValue
+            from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
             
             conditions = []
             if filter_chat_name:
@@ -227,6 +235,15 @@ class RAG:
             if filter_sender:
                 conditions.append(
                     FieldCondition(key="metadata.sender", match=MatchValue(value=filter_sender))
+                )
+            if filter_days is not None and filter_days > 0:
+                # Calculate the timestamp threshold (current time - filter_days in seconds)
+                min_timestamp = int(datetime.now().timestamp()) - (filter_days * 24 * 60 * 60)
+                conditions.append(
+                    FieldCondition(
+                        key="metadata.timestamp",
+                        range=Range(gte=min_timestamp)
+                    )
                 )
             
             qdrant_filter = Filter(must=conditions) if conditions else None
@@ -249,7 +266,8 @@ class RAG:
         question: str,
         k: int = 10,
         filter_chat_name: Optional[str] = None,
-        filter_sender: Optional[str] = None
+        filter_sender: Optional[str] = None,
+        filter_days: Optional[int] = None
     ) -> str:
         """Query the RAG system with a natural language question.
         
@@ -258,13 +276,14 @@ class RAG:
             k: Number of context documents to retrieve
             filter_chat_name: Optional filter by chat/group name
             filter_sender: Optional filter by sender name
+            filter_days: Optional filter by number of days (e.g., 1=24h, 3=3 days, 7=week, 30=month, None=all time)
             
         Returns:
             AI-generated answer based on retrieved context
         """
         try:
             # Retrieve relevant documents
-            docs = self.search(question, k=k, filter_chat_name=filter_chat_name, filter_sender=filter_sender)
+            docs = self.search(question, k=k, filter_chat_name=filter_chat_name, filter_sender=filter_sender, filter_days=filter_days)
             
             if not docs:
                 return "I couldn't find any relevant messages to answer your question."
