@@ -6,7 +6,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, Base
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from langgraph_sdk import get_client
-from rag import RAG
+from rag import RAG, format_timestamp
 from typing import Annotated, List, Optional, Dict, Any, TypedDict
 import os
 import asyncio
@@ -306,7 +306,9 @@ class Thread:
             client = get_client(url=self.api_url)
             thread_id = await self._async_ensure_thread(client)
 
-            formatted_message = f"[{timestamp}] {sender}: {message}"
+            # Convert Unix timestamp to human-readable format
+            readable_timestamp = format_timestamp(timestamp)
+            formatted_message = f"[{readable_timestamp}] {sender}: {message}"
 
             input_state = {
                 "messages": [{"role": "user", "content": formatted_message}],

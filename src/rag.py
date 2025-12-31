@@ -16,7 +16,29 @@ from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
 from typing import List, Optional, Dict, Any
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import os
+
+
+def format_timestamp(timestamp: str, timezone: str = "Asia/Jerusalem") -> str:
+    """Convert Unix timestamp to human-readable format.
+    
+    Args:
+        timestamp: Unix timestamp as string or int
+        timezone: Timezone for display (default: Asia/Jerusalem)
+        
+    Returns:
+        Formatted datetime string (e.g., "31/12/2024 10:30")
+    """
+    try:
+        ts = int(timestamp)
+        tz = ZoneInfo(timezone)
+        dt = datetime.fromtimestamp(ts, tz=tz)
+        return dt.strftime("%d/%m/%Y %H:%M")
+    except (ValueError, TypeError, KeyError) as e:
+        # If conversion fails, return original timestamp
+        return str(timestamp)
 
 
 class RAG:
@@ -149,8 +171,11 @@ class RAG:
             True if successful, False otherwise
         """
         try:
+            # Convert Unix timestamp to human-readable format
+            readable_timestamp = format_timestamp(timestamp)
+            
             # Create document with full context
-            doc_content = f"[{timestamp}] {sender} in {chat_name}: {message}"
+            doc_content = f"[{readable_timestamp}] {sender} in {chat_name}: {message}"
             
             doc = Document(
                 page_content=doc_content,
