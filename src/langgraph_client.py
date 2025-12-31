@@ -1,15 +1,40 @@
-from utils.logger import logger
-from config import config
-from langgraph.graph.message import add_messages
-from langgraph.graph import StateGraph, START, END
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
+"""LangGraph client for managing WhatsApp conversation threads.
+
+Provides thread management, message storage, and LLM interaction
+for WhatsApp conversations using LangGraph.
+"""
+
+import asyncio
+import concurrent.futures
+import os
+import traceback
+from typing import Annotated, Any, Dict, List, Optional, TypedDict
+
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
 from langgraph_sdk import get_client
+
+from config import config
 from rag import RAG, format_timestamp
-from typing import Annotated, List, Optional, Dict, Any, TypedDict
-import os
-import asyncio
+from utils.logger import logger
+
+# Module-level RAG singleton instance for efficient reuse
+_rag_instance: Optional[RAG] = None
+
+
+def get_rag() -> RAG:
+    """Get the shared RAG singleton instance.
+    
+    Returns:
+        The RAG singleton instance
+    """
+    global _rag_instance
+    if _rag_instance is None:
+        _rag_instance = RAG()
+    return _rag_instance
 
 
 class ThreadState(TypedDict, total=False):
@@ -44,16 +69,16 @@ def create_graph():
             api_key=config.OPENAI_API_KEY
         )
 
-    def store_node(state: ThreadState):
+    def store_node(state: ThreadState) -> Dict[str, Any]:
         """Store-only node - just passes through without LLM invocation."""
-        logger.debug(f"Store node: storing message without LLM invocation")
+        logger.debug("Store node: storing message without LLM invocation")
         # Messages are already added to state via add_messages reducer
         # Just return empty dict to preserve state without adding new messages
         return {}
 
-    def chat_node(state: ThreadState):
+    def chat_node(state: ThreadState) -> Dict[str, List[AIMessage]]:
         """Chat node - invokes LLM to generate a response."""
-        logger.info(f"Chat node: invoking LLM for response")
+        logger.info("Chat node: invoking LLM for response")
         messages = state.get("messages", [])
         chat_name = state.get("chat_name", "Unknown")
         is_group = state.get("is_group", False)
@@ -65,7 +90,7 @@ def create_graph():
             return {"messages": [AIMessage(content="I don't see any messages to respond to.")]}
 
         # Filter out any messages with empty content
-        valid_messages = []
+        valid_messages: List[BaseMessage] = []
         for msg in messages:
             content = msg.content if hasattr(msg, 'content') else str(msg)
             # Handle case where content might be a list
@@ -123,7 +148,6 @@ Remember conversations and provide contextual responses based on the chat histor
             return {"messages": [response]}
         except Exception as e:
             logger.error(f"Chat node: LLM invocation failed: {e}")
-            import traceback
             logger.error(traceback.format_exc())
             # Return an error message instead of crashing
             error_response = AIMessage(
@@ -131,6 +155,7 @@ Remember conversations and provide contextual responses based on the chat histor
             return {"messages": [error_response]}
 
     def route_by_action(state: ThreadState) -> str:
+        """Route messages to store or chat node based on action."""
         action = state.get("action", None)  # Don't default to anything yet
         messages = state.get("messages", [])
         logger.info(f"[ROUTE] action={action}, num_messages={len(messages)}")
@@ -153,7 +178,7 @@ Remember conversations and provide contextual responses based on the chat histor
 
         # Use explicit action if provided, otherwise default to chat
         if action == "store":
-            logger.info(f"[ROUTE] -> store node (action=store)")
+            logger.info("[ROUTE] -> store node (action=store)")
             return "store"
 
         logger.info(f"[ROUTE] -> chat node (action={action})")
@@ -183,18 +208,16 @@ class ThreadsManager:
         Args:
             api_url: The LangGraph dev server URL
         """
-        import asyncio
         self.api_url = api_url or os.getenv(
             "LANGGRAPH_API_URL", "http://127.0.0.1:2024")
         self._async_manager = None
-        self._loop = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         self.threads: Dict[str, 'Thread'] = {}
 
         logger.info(f"ThreadsManager initialized with API URL: {self.api_url}")
 
-    def _get_loop(self):
+    def _get_loop(self) -> asyncio.AbstractEventLoop:
         """Get or create an event loop."""
-        import asyncio
         try:
             return asyncio.get_running_loop()
         except RuntimeError:
@@ -202,13 +225,11 @@ class ThreadsManager:
                 self._loop = asyncio.new_event_loop()
             return self._loop
 
-    def _run_async(self, coro):
+    def _run_async(self, coro: Any) -> Any:
         """Run an async coroutine synchronously."""
-        import asyncio
         loop = self._get_loop()
         if loop.is_running():
             # We're in an async context, create a task
-            import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(asyncio.run, coro)
                 return future.result()
@@ -216,7 +237,16 @@ class ThreadsManager:
             return loop.run_until_complete(coro)
 
     def get_thread(self, chat_id: str, chat_name: str, is_group: bool) -> 'Thread':
-        """Get or create a thread for a specific chat."""
+        """Get or create a thread for a specific chat.
+        
+        Args:
+            chat_id: The chat ID from WhatsApp
+            chat_name: Display name of the chat
+            is_group: Whether this is a group chat
+            
+        Returns:
+            Thread instance for the chat
+        """
         normalized_id = chat_id.replace("@", "_").replace(".", "_")
 
         if normalized_id not in self.threads:
@@ -235,32 +265,52 @@ class ThreadsManager:
 class Thread:
     """Represents a chat conversation thread (DM or group) in LangGraph."""
 
-    def __init__(self, api_url: str, graph_name: str, chat_id: str, chat_name: str, is_group: bool):
-        """Initialize a thread."""
+    def __init__(
+        self, 
+        api_url: str, 
+        graph_name: str, 
+        chat_id: str, 
+        chat_name: str, 
+        is_group: bool
+    ):
+        """Initialize a thread.
+        
+        Args:
+            api_url: The LangGraph API URL
+            graph_name: Name of the graph to use
+            chat_id: Normalized chat ID
+            chat_name: Display name of the chat
+            is_group: Whether this is a group chat
+        """
         self.api_url = api_url
         self.graph_name = graph_name
         self.chat_id = chat_id
         self.chat_name = chat_name
         self.is_group = is_group
-        self._thread_id = None
+        self._thread_id: Optional[str] = None
 
         logger.info(f"Thread initialized for {chat_id} ({chat_name})")
 
-    def _run_async(self, coro):
+    def _run_async(self, coro: Any) -> Any:
         """Run an async coroutine synchronously."""
-
         try:
             loop = asyncio.get_running_loop()
             # We're in an async context
-            import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(asyncio.run, coro)
                 return future.result()
         except RuntimeError:
             return asyncio.run(coro)
 
-    async def _async_ensure_thread(self, client) -> str:
-        """Ensure a thread exists for this chat."""
+    async def _async_ensure_thread(self, client: Any) -> str:
+        """Ensure a thread exists for this chat.
+        
+        Args:
+            client: The LangGraph client
+            
+        Returns:
+            The thread ID
+        """
         if self._thread_id:
             return self._thread_id
 
@@ -294,15 +344,30 @@ class Thread:
 
         return self._thread_id
 
-    def remember(self, timestamp: str, sender: str, message: str, store: bool = True) -> bool:
+    def remember(
+        self, 
+        timestamp: str, 
+        sender: str, 
+        message: str, 
+        store: bool = True
+    ) -> bool:
         """Store a message in the conversation history without triggering AI response.
 
         Sets action="store" in the input state so the graph routes to the store node
         instead of the chat node (which invokes the LLM).
 
         Also adds the message to RAG vector store for cross-thread semantic search.
+        
+        Args:
+            timestamp: Unix timestamp of the message
+            sender: Name of the message sender
+            message: The message content
+            store: If True, store only without LLM. If False, invoke LLM.
+            
+        Returns:
+            True if successful, False otherwise
         """
-        async def _remember():
+        async def _remember() -> bool:
             client = get_client(url=self.api_url)
             thread_id = await self._async_ensure_thread(client)
 
@@ -331,7 +396,8 @@ class Thread:
                 f"Stored message in thread {thread_id}: {formatted_message[:50]}...")
 
             # Add message to RAG vector store for cross-thread search
-            rag = RAG()
+            # Use the shared RAG singleton instance
+            rag = get_rag()
             rag.add_message(
                 thread_id=thread_id,
                 chat_id=self.chat_id,
@@ -347,7 +413,6 @@ class Thread:
         try:
             return self._run_async(_remember())
         except Exception as e:
-            import traceback
             logger.error(f"Error remembering message: {type(e).__name__}: {e}")
             logger.error(f"Traceback: {traceback.format_exc()}")
             return False
@@ -356,5 +421,10 @@ class Thread:
         """Return string representation of this thread."""
         return f"Thread(chat_id={self.chat_id}, chat_name={self.chat_name}, is_group={self.is_group})"
 
+    def __repr__(self) -> str:
+        """Return detailed string representation."""
+        return self.to_string()
 
+
+# Create the graph at module load time
 graph = create_graph()

@@ -20,3 +20,4 @@ langgraph-cli[inmem]
 # RAG / Vector Store dependencies
 qdrant-client
 langchain-qdrant
+retry
