@@ -30,11 +30,18 @@ class Logger:
             file_handler.setFormatter(formatter)
             self.logger.addHandler(file_handler)
 
-    def _log(self, level: str, message: str):
-        frame = inspect.currentframe().f_back.f_back
-        caller = frame.f_code.co_name
-        filename = frame.f_code.co_filename.split("/")[-1]
-        formatted = f"file: {filename} | func: {caller} | {message}"
+    def _log(self, level: str, message: str) -> None:
+        frame = inspect.currentframe()
+        if frame is not None:
+            frame = frame.f_back
+        if frame is not None:
+            frame = frame.f_back
+        if frame is not None:
+            caller = frame.f_code.co_name
+            filename = frame.f_code.co_filename.split("/")[-1]
+            formatted = f"file: {filename} | func: {caller} | {message}"
+        else:
+            formatted = message
         getattr(self.logger, level)(formatted)
 
     def debug(self, message: str):

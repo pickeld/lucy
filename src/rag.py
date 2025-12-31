@@ -14,7 +14,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams
+from qdrant_client.models import Distance, VectorParams, Filter, FieldCondition, MatchValue, Range
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -112,7 +112,7 @@ class RAG:
         """Get or create the embeddings model."""
         if RAG._embeddings is None:
             RAG._embeddings = OpenAIEmbeddings(
-                api_key=config.OPENAI_API_KEY
+                api_key=config.OPENAI_API_KEY  # type: ignore[arg-type]
             )
         return RAG._embeddings
     
@@ -142,7 +142,7 @@ class RAG:
                 self._llm = ChatOpenAI(
                     model=config.OPENAI_MODEL,
                     temperature=0.3,
-                    api_key=config.OPENAI_API_KEY
+                    api_key=config.OPENAI_API_KEY  # type: ignore[arg-type]
                 )
         return self._llm
     
@@ -224,10 +224,7 @@ class RAG:
             List of relevant Document objects with metadata
         """
         try:
-            # Build filter for Qdrant
-            from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
-            
-            conditions = []
+            conditions: List[Any] = []
             if filter_chat_name:
                 conditions.append(
                     FieldCondition(key="metadata.chat_name", match=MatchValue(value=filter_chat_name))
@@ -356,8 +353,8 @@ Message Archive Context:
 User Question: {question}"""
 
             # Build messages list with conversation history
-            from langchain_core.messages import AIMessage, BaseMessage
-            llm_messages: List[BaseMessage] = [SystemMessage(content=system_prompt)]
+            from langchain_core.messages import AIMessage
+            llm_messages: List[Any] = [SystemMessage(content=system_prompt)]
             
             # Add conversation history if provided
             if conversation_history:
@@ -499,9 +496,7 @@ User Question: {question}"""
             Dictionary with documents and metadata
         """
         try:
-            from qdrant_client.models import Filter, FieldCondition, MatchValue
-            
-            conditions = []
+            conditions: List[Any] = []
             if filter_chat_name:
                 conditions.append(
                     FieldCondition(key="metadata.chat_name", match=MatchValue(value=filter_chat_name))

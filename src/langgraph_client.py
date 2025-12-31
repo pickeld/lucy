@@ -66,7 +66,7 @@ def create_graph():
         llm = ChatOpenAI(
             model=config.OPENAI_MODEL,
             temperature=float(getattr(config, 'OPENAI_TEMPERATURE', 0.7)),
-            api_key=config.OPENAI_API_KEY
+            api_key=config.OPENAI_API_KEY  # type: ignore[arg-type]
         )
 
     def store_node(state: ThreadState) -> Dict[str, Any]:
@@ -139,11 +139,13 @@ Remember conversations and provide contextual responses based on the chat histor
         # Invoke the LLM with full message history
         try:
             response = llm.invoke([system_msg] + messages)
-            response_content = response.content if hasattr(
-                response, 'content') else str(response)
+            # Handle case where content might be a list (Gemini)
+            response_content = response.content if hasattr(response, 'content') else str(response)
+            if isinstance(response_content, list):
+                response_content = str(response_content[0]) if response_content else ""
             # Ensure we return a proper AIMessage
             if not isinstance(response, AIMessage):
-                response = AIMessage(content=response_content)
+                response = AIMessage(content=str(response_content))
 
             return {"messages": [response]}
         except Exception as e:
@@ -342,6 +344,8 @@ class Thread:
             logger.debug(
                 f"Created new thread: {self._thread_id} ({thread_name})")
 
+        # At this point _thread_id is guaranteed to be set
+        assert self._thread_id is not None
         return self._thread_id
 
     def remember(

@@ -136,6 +136,7 @@ if question:
         st.markdown(question)
 
     # Query the RAG endpoint
+    answer = ""  # Initialize answer to avoid "possibly unbound" error
     with st.chat_message("assistant"):
         with st.spinner("Searching and generating answer..."):
             try:
