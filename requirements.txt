@@ -21,3 +21,5 @@ langgraph-cli[inmem]
 qdrant-client
 langchain-qdrant
 retry
+# Data validation
+pydantic>=2.0
