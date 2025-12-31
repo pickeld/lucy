@@ -153,6 +153,42 @@ def rag_stats():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/rag/chats", methods=["GET"])
+def rag_chats():
+    """Get all unique chat names from the RAG vector store.
+    
+    Response:
+        {
+            "chats": ["Chat1", "Chat2", "Group1", ...]
+        }
+    """
+    try:
+        chats = rag.get_chat_list()
+        return jsonify({"chats": chats}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"RAG chats error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/rag/senders", methods=["GET"])
+def rag_senders():
+    """Get all unique sender names from the RAG vector store.
+    
+    Response:
+        {
+            "senders": ["Alice", "Bob", "Charlie", ...]
+        }
+    """
+    try:
+        senders = rag.get_sender_list()
+        return jsonify({"senders": senders}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"RAG senders error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
 @app.route("/cache/groups/clear", methods=["POST", "DELETE"])
 def clear_groups_cache():
     """Clear all cached group data from Redis.

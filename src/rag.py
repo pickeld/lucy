@@ -304,6 +304,78 @@ Answer:""")
             logger.error(f"Failed to get RAG stats: {e}")
             return {"error": str(e)}
     
+    def get_chat_list(self) -> List[str]:
+        """Get all unique chat names from the vector store.
+        
+        Returns:
+            List of unique chat names sorted alphabetically
+        """
+        try:
+            chat_names = set()
+            offset = None
+            
+            # Scroll through all points to collect unique chat names
+            while True:
+                records, next_offset = self.qdrant_client.scroll(
+                    collection_name=self.COLLECTION_NAME,
+                    limit=1000,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False
+                )
+                
+                for record in records:
+                    payload = record.payload or {}
+                    metadata = payload.get("metadata", {})
+                    chat_name = metadata.get("chat_name")
+                    if chat_name:
+                        chat_names.add(chat_name)
+                
+                if next_offset is None:
+                    break
+                offset = next_offset
+            
+            return sorted(list(chat_names))
+        except Exception as e:
+            logger.error(f"Failed to get chat list: {e}")
+            return []
+    
+    def get_sender_list(self) -> List[str]:
+        """Get all unique sender names from the vector store.
+        
+        Returns:
+            List of unique sender names sorted alphabetically
+        """
+        try:
+            senders = set()
+            offset = None
+            
+            # Scroll through all points to collect unique sender names
+            while True:
+                records, next_offset = self.qdrant_client.scroll(
+                    collection_name=self.COLLECTION_NAME,
+                    limit=1000,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False
+                )
+                
+                for record in records:
+                    payload = record.payload or {}
+                    metadata = payload.get("metadata", {})
+                    sender = metadata.get("sender")
+                    if sender:
+                        senders.add(sender)
+                
+                if next_offset is None:
+                    break
+                offset = next_offset
+            
+            return sorted(list(senders))
+        except Exception as e:
+            logger.error(f"Failed to get sender list: {e}")
+            return []
+    
     def browse(
         self,
         limit: int = 100,

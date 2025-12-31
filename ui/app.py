@@ -12,6 +12,45 @@ st.set_page_config(
     layout="centered"
 )
 
+
+def get_chat_list(api_url: str) -> list:
+    """Fetch all unique chat names from the RAG API.
+    
+    Args:
+        api_url: The base URL of the API
+        
+    Returns:
+        List of chat names sorted alphabetically
+    """
+    try:
+        response = requests.get(f"{api_url}/rag/chats", timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("chats", [])
+    except Exception:
+        pass
+    return []
+
+
+def get_sender_list(api_url: str) -> list:
+    """Fetch all unique sender names from the RAG API.
+    
+    Args:
+        api_url: The base URL of the API
+        
+    Returns:
+        List of sender names sorted alphabetically
+    """
+    try:
+        response = requests.get(f"{api_url}/rag/senders", timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("senders", [])
+    except Exception:
+        pass
+    return []
+
+
 st.title("💬 RAG Q&A Assistant")
 st.markdown("---")
 
@@ -21,8 +60,26 @@ with st.sidebar:
     api_url = st.text_input("API URL", value=API_BASE_URL)
     k_results = st.slider("Number of context documents (k)",
                           min_value=1, max_value=50, value=10)
-    filter_chat = st.text_input("Filter by chat name (optional)", value="")
-    filter_sender = st.text_input("Filter by sender (optional)", value="")
+    
+    # Get chat list for dropdown
+    chat_list = get_chat_list(api_url)
+    chat_options = [""] + chat_list  # Add empty option for "no filter"
+    filter_chat = st.selectbox(
+        "Filter by chat name (optional)",
+        options=chat_options,
+        index=0,
+        format_func=lambda x: "All chats" if x == "" else x
+    )
+    
+    # Get sender list for dropdown
+    sender_list = get_sender_list(api_url)
+    sender_options = [""] + sender_list  # Add empty option for "no filter"
+    filter_sender = st.selectbox(
+        "Filter by sender (optional)",
+        options=sender_options,
+        index=0,
+        format_func=lambda x: "All senders" if x == "" else x
+    )
 
     st.markdown("---")
     if st.button("Clear Chat History"):
@@ -83,7 +140,7 @@ if question:
                 response = requests.post(
                     f"{api_url}/rag/query",
                     json=payload,
-                    timeout=60
+                    timeout=300
                 )
 
                 if response.status_code == 200:
