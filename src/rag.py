@@ -267,7 +267,8 @@ class RAG:
         k: int = 10,
         filter_chat_name: Optional[str] = None,
         filter_sender: Optional[str] = None,
-        filter_days: Optional[int] = None
+        filter_days: Optional[int] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None
     ) -> str:
         """Query the RAG system with a natural language question.
         
@@ -276,6 +277,7 @@ class RAG:
         - The LLM intelligently decides whether to use the context or answer directly
         - For questions like "what day is today?" - answers directly, ignoring irrelevant context
         - For questions about messages - uses the retrieved context
+        - Maintains conversation context across multiple questions
         
         Args:
             question: Natural language question (e.g., "who said they would be late?")
@@ -283,6 +285,8 @@ class RAG:
             filter_chat_name: Optional filter by chat/group name
             filter_sender: Optional filter by sender name
             filter_days: Optional filter by number of days (e.g., 1=24h, 3=3 days, 7=week, 30=month, None=all time)
+            conversation_history: Optional list of previous conversation messages
+                                  [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
             
         Returns:
             AI-generated answer based on retrieved context or direct answer
@@ -319,6 +323,7 @@ class RAG:
 You have access to:
 1. The user's WhatsApp message history (provided as context below)
 2. Current date and time information
+3. Our previous conversation (if any)
 
 YOUR TASK: Analyze the user's question and respond appropriately:
 
@@ -332,10 +337,15 @@ IF THE QUESTION IS A GENERAL QUERY NOT REQUIRING MESSAGE HISTORY (e.g., "what da
 - IGNORE the message context - it's not relevant to these questions
 - Be concise and helpful
 
+IF THE QUESTION REFERENCES PREVIOUS CONVERSATION (e.g., "what was my previous question?", "tell me more", "explain further"):
+- Use our conversation history to understand what they're referring to
+- Provide contextual follow-up answers
+
 IMPORTANT:
 - Answer in the same language as the question
 - For date/time questions, use the current date/time provided
-- Don't say you don't have access to messages - you DO have access (see context below)"""
+- Don't say you don't have access to messages - you DO have access (see context below)
+- Remember our conversation context - the user may ask follow-up questions"""
 
             user_content = f"""Current Date/Time: {current_datetime}
 תאריך ושעה נוכחיים: {hebrew_date}
@@ -345,12 +355,24 @@ Message Archive Context:
 
 User Question: {question}"""
 
-            messages = [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=user_content)
-            ]
+            # Build messages list with conversation history
+            from langchain_core.messages import AIMessage, BaseMessage
+            llm_messages: List[BaseMessage] = [SystemMessage(content=system_prompt)]
             
-            response = self.llm.invoke(messages)
+            # Add conversation history if provided
+            if conversation_history:
+                for msg in conversation_history:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    if role == "user":
+                        llm_messages.append(HumanMessage(content=content))
+                    elif role == "assistant":
+                        llm_messages.append(AIMessage(content=content))
+            
+            # Add the current question with context
+            llm_messages.append(HumanMessage(content=user_content))
+            
+            response = self.llm.invoke(llm_messages)
             content = response.content if hasattr(response, 'content') else str(response)
             # Handle case where content might be a list
             if isinstance(content, list):

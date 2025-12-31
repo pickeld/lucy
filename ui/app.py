@@ -139,11 +139,26 @@ if question:
     with st.chat_message("assistant"):
         with st.spinner("Searching and generating answer..."):
             try:
+                # Build conversation history from session state (exclude current question)
+                # Only include previous messages, not the one we just added
+                conversation_history = []
+                if len(st.session_state.messages) > 1:
+                    # Get all messages except the last one (which is the current question)
+                    for msg in st.session_state.messages[:-1]:
+                        conversation_history.append({
+                            "role": msg["role"],
+                            "content": msg["content"]
+                        })
+                
                 # Build request payload
                 payload = {
                     "question": question,
                     "k": k_results
                 }
+
+                # Add conversation history for context
+                if conversation_history:
+                    payload["conversation_history"] = conversation_history
 
                 # Add optional filters
                 if filter_chat.strip():

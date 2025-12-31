@@ -46,7 +46,11 @@ def rag_query():
             "k": 10,  # optional, number of context documents
             "filter_chat_name": "Work Group",  # optional
             "filter_sender": "John",  # optional
-            "filter_days": 7  # optional (1=24h, 3=3 days, 7=week, 30=month, null=all time)
+            "filter_days": 7,  # optional (1=24h, 3=3 days, 7=week, 30=month, null=all time)
+            "conversation_history": [  # optional, for context-aware follow-up questions
+                {"role": "user", "content": "what did John say?"},
+                {"role": "assistant", "content": "John said..."}
+            ]
         }
 
     Response:
@@ -67,13 +71,15 @@ def rag_query():
         filter_chat_name = data.get("filter_chat_name")
         filter_sender = data.get("filter_sender")
         filter_days = data.get("filter_days")
+        conversation_history = data.get("conversation_history")
 
         answer = rag.query(
             question=question,
             k=k,
             filter_chat_name=filter_chat_name,
             filter_sender=filter_sender,
-            filter_days=filter_days
+            filter_days=filter_days,
+            conversation_history=conversation_history
         )
 
         stats = rag.get_stats()
