@@ -1,9 +1,11 @@
 import base64
 import os
 import time
+from typing import Any, Dict, Union
 
 import requests
 from flask import Flask, jsonify, redirect, render_template_string, request
+from requests.models import Response
 
 from config import config
 from langgraph_client import ThreadsManager, Thread
@@ -266,7 +268,8 @@ def test():
 @app.route("/webhook", methods=["POST"])
 def webhook():
     # logger.info(f"Received webhook: {request.json}")
-    payload = request.json.get("payload", {})
+    request_data = request.json or {}
+    payload = request_data.get("payload", {})
     try:
         if pass_filter(payload) is False:
             return jsonify({"status": "ok"}), 200
@@ -293,13 +296,14 @@ def webhook():
 @app.route("/", methods=["GET"])
 def index():
     try:
-        response: dict = send_request(
+        response: Union[Dict[str, Any], Response] = send_request(
             "GET", f"/api/sessions/{config.waha_session_name}")
         logger.debug(f"Session status: {response}")
 
-        if response.get("status") == "WORKING" and response.get("engine", {}).get("state") == "CONNECTED":
+        # Handle response - could be dict or Response object
+        if isinstance(response, dict) and response.get("status") == "WORKING" and response.get("engine", {}).get("state") == "CONNECTED":
             return "<h1>Session 'default' is already connected.</h1>", 200
-        elif response.get("status") == "SCAN_QR_CODE":
+        elif isinstance(response, dict) and response.get("status") == "SCAN_QR_CODE":
             return redirect("/qr_code")
         else:
             return redirect("/pair")
@@ -313,7 +317,8 @@ def index():
 def qr_code():
     qr_response = send_request(
         "GET", f"/api/{config.waha_session_name}/auth/qr")
-    qr_image_data = qr_response.content
+    # qr_response is a Response object for binary content
+    qr_image_data = qr_response.content if isinstance(qr_response, Response) else None
     if qr_image_data:
         qr_base64 = base64.b64encode(qr_image_data).decode("utf-8")
         html = f"<h1>Scan to Pair WhatsApp</h1><img src='data:image/png;base64,{qr_base64}'>"
