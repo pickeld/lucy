@@ -271,6 +271,12 @@ class RAG:
     ) -> str:
         """Query the RAG system with a natural language question.
         
+        Uses a HYBRID approach:
+        - Always retrieves context from the message archive
+        - The LLM intelligently decides whether to use the context or answer directly
+        - For questions like "what day is today?" - answers directly, ignoring irrelevant context
+        - For questions about messages - uses the retrieved context
+        
         Args:
             question: Natural language question (e.g., "who said they would be late?")
             k: Number of context documents to retrieve
@@ -279,40 +285,69 @@ class RAG:
             filter_days: Optional filter by number of days (e.g., 1=24h, 3=3 days, 7=week, 30=month, None=all time)
             
         Returns:
-            AI-generated answer based on retrieved context
+            AI-generated answer based on retrieved context or direct answer
         """
         try:
-            # Retrieve relevant documents
+            # Always retrieve documents for context
             docs = self.search(question, k=k, filter_chat_name=filter_chat_name, filter_sender=filter_sender, filter_days=filter_days)
             
-            if not docs:
-                return "I couldn't find any relevant messages to answer your question."
-            
-            # Build context from retrieved documents
+            # Build context from retrieved documents (may be empty)
             context_parts = []
             for doc in docs:
                 context_parts.append(doc.page_content)
             
-            context = "\n".join(context_parts)
+            context = "\n".join(context_parts) if context_parts else "[No messages found in the archive]"
             
-            # Create prompt for the LLM
-            system_prompt = """You are a helpful assistant that answers questions about WhatsApp conversations.
-You have access to message history from various chats and groups.
+            # Get current date/time for context
+            tz = ZoneInfo("Asia/Jerusalem")
+            now = datetime.now(tz)
+            current_datetime = now.strftime("%A, %B %d, %Y at %H:%M")
+            hebrew_day = {
+                "Monday": "יום שני",
+                "Tuesday": "יום שלישי",
+                "Wednesday": "יום רביעי",
+                "Thursday": "יום חמישי",
+                "Friday": "יום שישי",
+                "Saturday": "שבת",
+                "Sunday": "יום ראשון"
+            }.get(now.strftime("%A"), now.strftime("%A"))
+            hebrew_date = f"{hebrew_day}, {now.day}/{now.month}/{now.year} בשעה {now.strftime('%H:%M')}"
+            
+            # Create a HYBRID prompt that handles both cases
+            system_prompt = """You are a helpful AI assistant for a WhatsApp message archive search system.
 
-Each message in the context is formatted as: [timestamp] sender in chat_name: message
+You have access to:
+1. The user's WhatsApp message history (provided as context below)
+2. Current date and time information
 
-Based on the context provided, answer the user's question accurately.
-If you can't find the answer in the context, say so.
-Always mention WHO said something, WHEN they said it, and in WHICH chat/group."""
+YOUR TASK: Analyze the user's question and respond appropriately:
+
+IF THE QUESTION IS ABOUT MESSAGES/CONVERSATIONS (e.g., "what did X say?", "show me messages from yesterday", "who mentioned Y?", "what was discussed?"):
+- Use the message context provided below to answer
+- Mention WHO said something, WHEN they said it, and in WHICH chat/group
+- If no relevant messages are found, say "I couldn't find any relevant messages"
+
+IF THE QUESTION IS A GENERAL QUERY NOT REQUIRING MESSAGE HISTORY (e.g., "what day is today?", "hello", "what's 2+2?", "translate X"):
+- Answer directly using your knowledge and the current date/time
+- IGNORE the message context - it's not relevant to these questions
+- Be concise and helpful
+
+IMPORTANT:
+- Answer in the same language as the question
+- For date/time questions, use the current date/time provided
+- Don't say you don't have access to messages - you DO have access (see context below)"""
+
+            user_content = f"""Current Date/Time: {current_datetime}
+תאריך ושעה נוכחיים: {hebrew_date}
+
+Message Archive Context:
+{context}
+
+User Question: {question}"""
 
             messages = [
                 SystemMessage(content=system_prompt),
-                HumanMessage(content=f"""Context from message history:
-{context}
-
-Question: {question}
-
-Answer:""")
+                HumanMessage(content=user_content)
             ]
             
             response = self.llm.invoke(messages)
@@ -323,7 +358,7 @@ Answer:""")
             else:
                 answer = str(content)
             
-            logger.info(f"RAG query answered: {question[:50]}...")
+            logger.info(f"Hybrid query answered: {question[:50]}... (context_docs={len(docs)})")
             return answer
             
         except Exception as e:
