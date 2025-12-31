@@ -6,7 +6,7 @@ import httpx
 from config import config
 from contact import Contact, ContactManager
 from groups import Group, GroupManager
-from utiles.logger import logger
+from utils.logger import logger
 
 contact_manager = ContactManager()
 group_manager = GroupManager()

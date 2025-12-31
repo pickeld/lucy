@@ -8,8 +8,8 @@ from flask import Flask, jsonify, redirect, render_template_string, request
 from config import config
 from langgraph_client import ThreadsManager, Thread
 from rag import RAG
-from utiles.globals import send_request
-from utiles.logger import logger
+from utils.globals import send_request
+from utils.logger import logger
 import traceback
 
 from whatsapp import WhatsappMSG, group_manager

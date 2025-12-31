@@ -2,9 +2,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from config import config
-from utiles.globals import send_request
-from utiles.logger import logger
-from utiles.redis_conn import redis_get, redis_set, redis_delete, redis_delete_pattern
+from utils.globals import send_request
+from utils.logger import logger
+from utils.redis_conn import redis_get, redis_set, redis_delete, redis_delete_pattern
 
 
 class GroupManager:

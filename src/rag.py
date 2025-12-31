@@ -6,7 +6,7 @@ Enables queries like "who said X", "when did Y happen", "what was discussed in g
 Qdrant Dashboard: http://localhost:6333/dashboard
 """
 
-from utiles.logger import logger
+from utils.logger import logger
 from config import config
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.documents import Document

@@ -1,4 +1,4 @@
-from utiles.logger import logger
+from utils.logger import logger
 from config import config
 from langgraph.graph.message import add_messages
 from langgraph.graph import StateGraph, START, END

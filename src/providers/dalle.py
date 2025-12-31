@@ -1,6 +1,6 @@
 from config import config
 from openai import OpenAI
-from utiles.logger import Logger
+from utils.logger import Logger
 
 logger = Logger(__name__)
 
