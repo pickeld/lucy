@@ -177,15 +177,27 @@ class WhatsappMSG(ABC):
     def __str__(self) -> str:
         return f"[{self.content_type.value}] {self.group.name}/{self.contact.name}: {self.message}"
 
-    @abstractmethod
     def to_json(self) -> Dict[str, Any]:
         """Convert message to JSON format optimized for AI models.
         
-        This method must be implemented by all subclasses to provide
-        type-specific JSON serialization.
+        Combines base JSON structure with type-specific content.
+        Subclasses should override _get_content_json() to customize.
         
         Returns:
             Dictionary with standardized message structure
+        """
+        result = self._base_json()
+        result["content"] = self._get_content_json()
+        return result
+    
+    @abstractmethod
+    def _get_content_json(self) -> Dict[str, Any]:
+        """Get the type-specific content JSON structure.
+        
+        Subclasses must implement this to provide their specific content format.
+        
+        Returns:
+            Dictionary with content-specific fields (type, text, media, etc.)
         """
         pass
     

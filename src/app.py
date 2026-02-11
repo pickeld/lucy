@@ -314,34 +314,10 @@ def test():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    print("Received webhook request")
-    logger.info("Received webhook request")
+
     request_data = request.json or {}
     payload = request_data.get("payload", {})
     
-    # Log and save raw payload for debugging
-    import json
-    from datetime import datetime
-    from pathlib import Path
-    
-    # Create payloads directory at project root level (parent of src/)
-    payloads_dir = Path(__file__).parent.parent / "tmp" / "payloads"
-    payloads_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Create unique filename based on timestamp and message ID
-    msg_id = payload.get("id", "unknown")[:30].replace("/", "_").replace("@", "_")
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    content_type = payload.get("_data", {}).get("type", "text")
-    
-    # Save raw payload to file
-    payload_file = payloads_dir / f"{timestamp}_{content_type}_{msg_id}_raw.json"
-    try:
-        with open(payload_file, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        logger.warning(f"Failed to save raw payload: {e}")
-    
-
     
     try:
         if pass_filter(payload) is False:
