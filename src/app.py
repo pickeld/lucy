@@ -14,13 +14,13 @@ from utils.globals import send_request
 from utils.logger import logger
 import traceback
 
-from whatsapp import WhatsappMSG, group_manager
+from whatsapp import create_whatsapp_message, group_manager
 
 app = Flask(__name__)
 
 
-memory_manager = ThreadsManager()
-rag = RAG()
+# memory_manager = ThreadsManager()
+# rag = RAG()
 
 
 def pass_filter(payload):
@@ -267,24 +267,51 @@ def test():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    # logger.info(f"Received webhook: {request.json}")
+    print("Received webhook request")
+    logger.info("Received webhook request")
     request_data = request.json or {}
     payload = request_data.get("payload", {})
+    
+    # Log and save raw payload for debugging
+    import json
+    from datetime import datetime
+    from pathlib import Path
+    
+    # Create payloads directory relative to this file's location
+    payloads_dir = Path(__file__).parent / "tmp" / "payloads"
+    payloads_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create unique filename based on timestamp and message ID
+    msg_id = payload.get("id", "unknown")[:30].replace("/", "_").replace("@", "_")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    content_type = payload.get("_data", {}).get("type", "text")
+    
+    # Save raw payload to file
+    payload_file = payloads_dir / f"{timestamp}_{content_type}_{msg_id}_raw.json"
+    try:
+        with open(payload_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.warning(f"Failed to save raw payload: {e}")
+    
+
+    
     try:
         if pass_filter(payload) is False:
             return jsonify({"status": "ok"}), 200
 
-        msg = WhatsappMSG(payload)
-        # logger.debug(f"Received: {msg.__dict__}")
+        msg = create_whatsapp_message(payload)
+
         chat_id = msg.group.id if msg.is_group else msg.contact.number
         chat_name = msg.group.name if msg.is_group else msg.contact.name
+        logger.info(f"Received message: {chat_name} ({chat_id}) - {msg.message}")
 
-        thread: Thread = memory_manager.get_thread(
-            is_group=msg.is_group, chat_name=chat_name or "UNKNOWN", chat_id=chat_id or "UNKNOWN")
-        if msg.message:
-            thread.remember(timestamp=msg.timestamp,
-                            sender=str(msg.contact.name), message=msg.message)
-        logger.debug(f"Processed message: {thread.chat_name} || {msg}")
+        # thread: Thread = memory_manager.get_thread(
+        #     is_group=msg.is_group, chat_name=chat_name or "UNKNOWN", chat_id=chat_id or "UNKNOWN")
+        # if msg.message:
+        #     thread.remember(timestamp=str(msg.timestamp) if msg.timestamp else "0",
+        #                     sender=str(msg.contact.name), message=msg.message)
+        # logger.debug(f"Processed message: {thread.chat_name} || {msg}")
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         trace = traceback.format_exc()

@@ -1,7 +1,10 @@
-"""RAG (Retrieval Augmented Generation) for querying across all WhatsApp threads.
+"""RAG (Retrieval Augmented Generation) for querying across multiple data sources.
 
 Uses Qdrant as vector store and OpenAI embeddings for semantic search.
-Enables queries like "who said X", "when did Y happen", "what was discussed in group Z".
+Supports multiple data sources:
+- WhatsApp messages
+- Documents (PDF, Word, text files)
+- Call recordings (transcribed audio)
 
 Qdrant Dashboard: http://localhost:6333/dashboard
 """
@@ -15,10 +18,19 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, Filter, FieldCondition, MatchValue, Range
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import os
+
+# Import document classes
+from classes import (
+    BaseRAGDocument,
+    WhatsAppMessageDocument,
+    FileDocument,
+    CallRecordingDocument,
+    SourceType
+)
 
 
 def format_timestamp(timestamp: str, timezone: str = "Asia/Jerusalem") -> str:
@@ -146,6 +158,48 @@ class RAG:
                 )
         return self._llm
     
+    def add_document(self, document: BaseRAGDocument) -> bool:
+        """Add any document type to the vector store for RAG queries.
+        
+        This is the primary method for adding documents to the RAG system.
+        It accepts any BaseRAGDocument subclass (WhatsApp, File, CallRecording).
+        
+        Args:
+            document: A BaseRAGDocument instance (or subclass)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            langchain_doc = document.to_langchain_document()
+            self.vectorstore.add_documents([langchain_doc])
+            logger.debug(f"Added {document.metadata.source_type.value} document to RAG: {document.content[:50]}...")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add document to vector store: {e}")
+            return False
+    
+    def add_documents(self, documents: List[BaseRAGDocument]) -> int:
+        """Add multiple documents to the vector store in batch.
+        
+        Args:
+            documents: List of BaseRAGDocument instances
+            
+        Returns:
+            Number of successfully added documents
+        """
+        if not documents:
+            return 0
+        
+        try:
+            langchain_docs = [doc.to_langchain_document() for doc in documents]
+            self.vectorstore.add_documents(langchain_docs)
+            logger.info(f"Added {len(documents)} documents to RAG vector store")
+            return len(documents)
+        except Exception as e:
+            logger.error(f"Failed to add batch documents to vector store: {e}")
+            return 0
+    
     def add_message(
         self,
         thread_id: str,
@@ -156,7 +210,10 @@ class RAG:
         message: str,
         timestamp: str
     ) -> bool:
-        """Add a message to the vector store for RAG queries.
+        """Add a WhatsApp message to the vector store for RAG queries.
+        
+        This is a convenience method that wraps add_document() for backward
+        compatibility with existing WhatsApp message handling code.
         
         Args:
             thread_id: The LangGraph thread ID
@@ -165,42 +222,118 @@ class RAG:
             is_group: Whether this is a group chat
             sender: The message sender
             message: The message content
-            timestamp: The message timestamp
+            timestamp: The message timestamp (Unix timestamp as string)
             
         Returns:
             True if successful, False otherwise
         """
         try:
-            # Convert Unix timestamp to human-readable format
-            readable_timestamp = format_timestamp(timestamp)
-            
-            # Create document with full context
-            doc_content = f"[{readable_timestamp}] {sender} in {chat_name}: {message}"
-            
-            # Convert timestamp to integer for range filtering
-            try:
-                timestamp_int = int(timestamp)
-            except (ValueError, TypeError):
-                timestamp_int = int(datetime.now().timestamp())
-            
-            doc = Document(
-                page_content=doc_content,
-                metadata={
-                    "thread_id": thread_id,
-                    "chat_id": chat_id,
-                    "chat_name": chat_name,
-                    "is_group": is_group,
-                    "sender": sender,
-                    "timestamp": timestamp_int,
-                    "message": message
-                }
+            # Create WhatsAppMessageDocument using the new document model
+            doc = WhatsAppMessageDocument.from_webhook_payload(
+                thread_id=thread_id,
+                chat_id=chat_id,
+                chat_name=chat_name,
+                is_group=is_group,
+                sender=sender,
+                message=message,
+                timestamp=timestamp
             )
-            
-            self.vectorstore.add_documents([doc])
-            logger.debug(f"Added message to RAG vector store: {doc_content[:50]}...")
-            return True
+            return self.add_document(doc)
         except Exception as e:
-            logger.error(f"Failed to add message to vector store: {e}")
+            logger.error(f"Failed to add WhatsApp message to vector store: {e}")
+            return False
+    
+    def add_file(
+        self,
+        file_path: str,
+        content: str,
+        author: Optional[str] = None,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        tags: Optional[List[str]] = None
+    ) -> bool:
+        """Add a file document to the vector store for RAG queries.
+        
+        Convenience method for adding PDF, Word, or text documents.
+        
+        Args:
+            file_path: Path to the file
+            content: Extracted text content from the file
+            author: Document author (optional)
+            title: Document title (optional, defaults to filename)
+            description: Document description (optional)
+            tags: Optional tags for categorization
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            doc = FileDocument.from_file(
+                file_path=file_path,
+                content=content,
+                author=author,
+                title=title,
+                description=description,
+                tags=tags
+            )
+            return self.add_document(doc)
+        except Exception as e:
+            logger.error(f"Failed to add file document to vector store: {e}")
+            return False
+    
+    def add_call_recording(
+        self,
+        recording_id: str,
+        transcript: str,
+        participants: List[str],
+        duration_seconds: int,
+        call_type: str = "unknown",
+        phone_number: Optional[str] = None,
+        confidence_score: float = 1.0,
+        tags: Optional[List[str]] = None
+    ) -> bool:
+        """Add a transcribed call recording to the vector store.
+        
+        Convenience method for adding transcribed audio recordings.
+        
+        Args:
+            recording_id: Unique recording identifier
+            transcript: Transcribed text content
+            participants: List of call participants
+            duration_seconds: Call duration in seconds
+            call_type: Type of call (incoming, outgoing, conference)
+            phone_number: Primary phone number
+            confidence_score: Transcription confidence (0.0-1.0)
+            tags: Optional tags for categorization
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            from classes import CallType
+            
+            # Map string call_type to enum
+            call_type_map = {
+                "incoming": CallType.INCOMING,
+                "outgoing": CallType.OUTGOING,
+                "conference": CallType.CONFERENCE,
+                "voicemail": CallType.VOICEMAIL,
+            }
+            call_type_enum = call_type_map.get(call_type.lower(), CallType.UNKNOWN)
+            
+            doc = CallRecordingDocument.from_transcription(
+                recording_id=recording_id,
+                transcript=transcript,
+                participants=participants,
+                duration_seconds=duration_seconds,
+                call_type=call_type_enum,
+                phone_number=phone_number,
+                confidence_score=confidence_score,
+                tags=tags
+            )
+            return self.add_document(doc)
+        except Exception as e:
+            logger.error(f"Failed to add call recording to vector store: {e}")
             return False
     
     def search(

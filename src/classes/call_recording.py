@@ -1,17 +1,20 @@
 """Call recording document class for RAG system.
 
 This module provides the CallRecordingDocument class for handling
-transcribed call recordings in the RAG vector store.
+transcribed call recordings in the RAG vector store using LlamaIndex.
 """
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 from pydantic import Field, field_validator
 
 from .base import BaseRAGDocument, DocumentMetadata, SourceType
+
+if TYPE_CHECKING:
+    from llama_index.core.schema import TextNode
 
 
 class CallType(str, Enum):
@@ -210,21 +213,21 @@ class CallRecordingDocument(BaseRAGDocument):
         
         return "\n\n".join(parts)
     
-    def to_langchain_document(self) -> "Document":
-        """Convert to LangChain Document with call-specific metadata.
+    def to_llama_index_node(self) -> "TextNode":
+        """Convert to LlamaIndex TextNode with call-specific metadata.
         
         Adds call-specific fields to the standard metadata.
         
         Returns:
-            LangChain Document with full metadata
+            LlamaIndex TextNode with full metadata
         """
-        from langchain_core.documents import Document
+        from llama_index.core.schema import TextNode
         
         # Get base metadata
-        langchain_metadata = self.metadata.to_qdrant_payload()
+        node_metadata = self.metadata.to_qdrant_payload()
         
         # Add call-specific fields
-        langchain_metadata.update({
+        node_metadata.update({
             "document_id": self.id,
             "author": self.author,
             "timestamp": int(self.timestamp.timestamp()),
@@ -239,7 +242,8 @@ class CallRecordingDocument(BaseRAGDocument):
             "language_detected": self.language_detected
         })
         
-        return Document(
-            page_content=self.get_embedding_text(),
-            metadata=langchain_metadata
+        return TextNode(
+            text=self.get_embedding_text(),
+            metadata=node_metadata,
+            id_=self.id
         )

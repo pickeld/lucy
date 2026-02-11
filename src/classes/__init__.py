@@ -1,7 +1,8 @@
 """RAG Document Classes for multi-source data standardization.
 
 This package provides Pydantic v2 models for handling multiple data sources
-in the RAG system, ensuring consistent interface for vector store integration.
+in the RAG system, ensuring consistent interface for vector store integration
+with LlamaIndex.
 
 Classes:
     - BaseRAGDocument: Abstract base class for all document types
@@ -25,8 +26,8 @@ Usage:
         timestamp="1704067200"
     )
     
-    # Convert to LangChain document for vector store
-    langchain_doc = doc.to_langchain_document()
+    # Convert to LlamaIndex TextNode for vector store
+    text_node = doc.to_llama_index_node()
 """
 
 from .base import BaseRAGDocument, DocumentMetadata, SourceType

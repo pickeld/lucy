@@ -1,16 +1,19 @@
 """WhatsApp message document for RAG system.
 
 This module provides the WhatsAppMessageDocument class for handling
-WhatsApp messages in the RAG vector store.
+WhatsApp messages in the RAG vector store using LlamaIndex.
 """
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 from pydantic import Field
 
 from .base import BaseRAGDocument, DocumentMetadata, SourceType
+
+if TYPE_CHECKING:
+    from llama_index.core.schema import TextNode
 
 
 class WhatsAppMessageDocument(BaseRAGDocument):
@@ -31,7 +34,7 @@ class WhatsAppMessageDocument(BaseRAGDocument):
         media_url: URL to media file if present
     """
     
-    thread_id: str = Field(..., description="LangGraph thread ID")
+    thread_id: str = Field(..., description="Thread ID for conversation context")
     chat_id: str = Field(..., description="WhatsApp chat ID")
     chat_name: str = Field(..., description="Chat or group display name")
     is_group: bool = Field(default=False, description="Whether group chat")
@@ -66,7 +69,7 @@ class WhatsAppMessageDocument(BaseRAGDocument):
         from the existing WhatsApp webhook handler format.
         
         Args:
-            thread_id: LangGraph thread ID
+            thread_id: Thread ID for conversation context
             chat_id: WhatsApp chat ID
             chat_name: Display name of chat/group
             is_group: Whether group chat
@@ -138,21 +141,21 @@ class WhatsAppMessageDocument(BaseRAGDocument):
         formatted_time = self.format_timestamp()
         return f"[{formatted_time}] {self.sender} in {self.chat_name}: {self.message}"
     
-    def to_langchain_document(self) -> "Document":
-        """Convert to LangChain Document with WhatsApp-specific metadata.
+    def to_llama_index_node(self) -> "TextNode":
+        """Convert to LlamaIndex TextNode with WhatsApp-specific metadata.
         
         Adds WhatsApp-specific fields to the standard metadata.
         
         Returns:
-            LangChain Document with full metadata
+            LlamaIndex TextNode with full metadata
         """
-        from langchain_core.documents import Document
+        from llama_index.core.schema import TextNode
         
         # Get base metadata
-        langchain_metadata = self.metadata.to_qdrant_payload()
+        node_metadata = self.metadata.to_qdrant_payload()
         
         # Add WhatsApp-specific fields
-        langchain_metadata.update({
+        node_metadata.update({
             "document_id": self.id,
             "author": self.author,
             "timestamp": int(self.timestamp.timestamp()),
@@ -166,7 +169,8 @@ class WhatsAppMessageDocument(BaseRAGDocument):
             "media_type": self.media_type
         })
         
-        return Document(
-            page_content=self.get_embedding_text(),
-            metadata=langchain_metadata
+        return TextNode(
+            text=self.get_embedding_text(),
+            metadata=node_metadata,
+            id_=self.id
         )

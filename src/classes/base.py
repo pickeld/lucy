@@ -4,17 +4,20 @@ This module provides the foundational classes for handling multiple data sources
 in the RAG system, including WhatsApp messages, documents, and call recordings.
 
 All document types inherit from BaseRAGDocument to ensure consistent interface
-for vector store integration.
+for vector store integration with LlamaIndex.
 """
 
 from abc import ABC, abstractmethod
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field, field_validator
+
+if TYPE_CHECKING:
+    from llama_index.core.schema import TextNode
 
 
 class SourceType(str, Enum):
@@ -138,28 +141,29 @@ class BaseRAGDocument(BaseModel, ABC):
         """
         pass
     
-    def to_langchain_document(self) -> "Document":
-        """Convert to LangChain Document for vector store integration.
+    def to_llama_index_node(self) -> "TextNode":
+        """Convert to LlamaIndex TextNode for vector store integration.
         
-        Creates a LangChain Document with the embedding text as page_content
+        Creates a LlamaIndex TextNode with the embedding text as content
         and all relevant metadata for filtering and retrieval.
         
         Returns:
-            LangChain Document object ready for vector store indexing
+            LlamaIndex TextNode object ready for vector store indexing
         """
-        from langchain_core.documents import Document
+        from llama_index.core.schema import TextNode
         
         # Combine base metadata with source-specific fields
-        langchain_metadata = self.metadata.to_qdrant_payload()
-        langchain_metadata.update({
+        node_metadata = self.metadata.to_qdrant_payload()
+        node_metadata.update({
             "document_id": self.id,
             "author": self.author,
             "timestamp": int(self.timestamp.timestamp()),
         })
         
-        return Document(
-            page_content=self.get_embedding_text(),
-            metadata=langchain_metadata
+        return TextNode(
+            text=self.get_embedding_text(),
+            metadata=node_metadata,
+            id_=self.id
         )
     
     def to_dict(self) -> Dict[str, Any]:

@@ -1,18 +1,21 @@
 """File document class for RAG system.
 
 This module provides the FileDocument class for handling
-documents like PDFs, Word files, and text files in the RAG vector store.
+documents like PDFs, Word files, and text files in the RAG vector store using LlamaIndex.
 """
 
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 from pydantic import Field, field_validator
 
 from .base import BaseRAGDocument, DocumentMetadata, SourceType
+
+if TYPE_CHECKING:
+    from llama_index.core.schema import TextNode
 
 
 class FileType(str, Enum):
@@ -222,21 +225,21 @@ class FileDocument(BaseRAGDocument):
         
         return "\n\n".join(parts)
     
-    def to_langchain_document(self) -> "Document":
-        """Convert to LangChain Document with file-specific metadata.
+    def to_llama_index_node(self) -> "TextNode":
+        """Convert to LlamaIndex TextNode with file-specific metadata.
         
         Adds file-specific fields to the standard metadata.
         
         Returns:
-            LangChain Document with full metadata
+            LlamaIndex TextNode with full metadata
         """
-        from langchain_core.documents import Document
+        from llama_index.core.schema import TextNode
         
         # Get base metadata
-        langchain_metadata = self.metadata.to_qdrant_payload()
+        node_metadata = self.metadata.to_qdrant_payload()
         
         # Add file-specific fields
-        langchain_metadata.update({
+        node_metadata.update({
             "document_id": self.id,
             "author": self.author,
             "timestamp": int(self.timestamp.timestamp()),
@@ -252,7 +255,8 @@ class FileDocument(BaseRAGDocument):
             "description": self.description
         })
         
-        return Document(
-            page_content=self.get_embedding_text(),
-            metadata=langchain_metadata
+        return TextNode(
+            text=self.get_embedding_text(),
+            metadata=node_metadata,
+            id_=self.id
         )
