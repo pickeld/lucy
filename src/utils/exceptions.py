@@ -103,16 +103,16 @@ class QdrantAPIError(ExternalAPIError):
         super().__init__("Qdrant", message, status_code, response_body)
 
 
-class LangGraphAPIError(ExternalAPIError):
-    """Raised when LangGraph API requests fail."""
+class LlamaIndexAPIError(ExternalAPIError):
+    """Raised when LlamaIndex API requests fail."""
     
     def __init__(
-        self, 
-        message: str, 
+        self,
+        message: str,
         status_code: Optional[int] = None,
         response_body: Optional[str] = None
     ):
-        super().__init__("LangGraph", message, status_code, response_body)
+        super().__init__("LlamaIndex", message, status_code, response_body)
 
 
 # =============================================================================

@@ -8,8 +8,8 @@ from flask import Flask, jsonify, redirect, render_template_string, request
 from requests.models import Response
 
 from config import config
-from langgraph_client import ThreadsManager, Thread
-from rag import RAG
+from llamaindex_rag import LlamaIndexRAG, get_rag
+from conversation_memory import ThreadsManager, get_threads_manager
 from utils.globals import send_request
 from utils.logger import logger
 import traceback
@@ -19,8 +19,9 @@ from whatsapp import create_whatsapp_message, group_manager
 app = Flask(__name__)
 
 
-# memory_manager = ThreadsManager()
-# rag = RAG()
+# Initialize singletons
+rag = get_rag()
+threads_manager = get_threads_manager()
 
 
 def pass_filter(payload):
@@ -133,7 +134,7 @@ def rag_search():
         filter_sender = data.get("filter_sender")
         filter_days = data.get("filter_days")
 
-        docs = rag.search(
+        results = rag.search(
             query=query,
             k=k,
             filter_chat_name=filter_chat_name,
@@ -141,15 +142,17 @@ def rag_search():
             filter_days=filter_days
         )
 
-        results = [
+        # Convert LlamaIndex NodeWithScore to dict
+        formatted_results = [
             {
-                "content": doc.page_content,
-                "metadata": doc.metadata
+                "content": result.node.text,
+                "metadata": result.node.metadata,
+                "score": result.score
             }
-            for doc in docs
+            for result in results
         ]
 
-        return jsonify({"results": results}), 200
+        return jsonify({"results": formatted_results}), 200
 
     except Exception as e:
         trace = traceback.format_exc()
@@ -250,6 +253,50 @@ def refresh_group_cache(group_id: str):
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
+@app.route("/threads", methods=["GET"])
+def list_threads():
+    """List all active conversation threads.
+    
+    Response:
+        {
+            "threads": [
+                {"chat_id": "...", "chat_name": "...", "is_group": true, "message_count": 5}
+            ]
+        }
+    """
+    try:
+        threads = threads_manager.get_all_threads()
+        return jsonify({"threads": threads}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Failed to list threads: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/threads/<chat_id>/clear", methods=["POST", "DELETE"])
+def clear_thread(chat_id: str):
+    """Clear conversation history for a specific chat.
+    
+    Args:
+        chat_id: The chat ID to clear
+        
+    Response:
+        {
+            "status": "ok"
+        }
+    """
+    try:
+        success = threads_manager.clear_thread(chat_id)
+        if success:
+            return jsonify({"status": "ok"}), 200
+        else:
+            return jsonify({"status": "error", "message": "Thread not found"}), 404
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Failed to clear thread: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
 @app.route("/test", methods=["GET"])
 def test():
     # send a test message to yourself
@@ -306,12 +353,20 @@ def webhook():
         chat_name = msg.group.name if msg.is_group else msg.contact.name
         logger.info(f"Received message: {chat_name} ({chat_id}) - {msg.message}")
 
-        # thread: Thread = memory_manager.get_thread(
-        #     is_group=msg.is_group, chat_name=chat_name or "UNKNOWN", chat_id=chat_id or "UNKNOWN")
-        # if msg.message:
-        #     thread.remember(timestamp=str(msg.timestamp) if msg.timestamp else "0",
-        #                     sender=str(msg.contact.name), message=msg.message)
-        # logger.debug(f"Processed message: {thread.chat_name} || {msg}")
+        # Store message in conversation thread and RAG
+        if msg.message:
+            thread = threads_manager.get_thread(
+                chat_id=chat_id or "UNKNOWN",
+                chat_name=chat_name or "UNKNOWN",
+                is_group=msg.is_group
+            )
+            thread.remember(
+                timestamp=str(msg.timestamp) if msg.timestamp else "0",
+                sender=str(msg.contact.name),
+                message=msg.message
+            )
+            logger.debug(f"Processed message: {chat_name} || {msg}")
+        
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         trace = traceback.format_exc()
