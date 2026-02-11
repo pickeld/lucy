@@ -18,7 +18,6 @@ from llama_index.core import (
     VectorStoreIndex,
 )
 from llama_index.core.schema import NodeWithScore, TextNode
-from llama_index.core.vector_stores.types import VectorStoreQueryResult
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.llms.openai import OpenAI as LlamaIndexOpenAI
 from llama_index.vector_stores.qdrant import QdrantVectorStore

@@ -105,34 +105,3 @@ def send_request(
             status_code=status_code,
             response_body=response_text
         ) from e
-
-
-def send_request_safe(
-    method: str,
-    endpoint: str,
-    payload: Optional[Dict[str, Any]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    timeout: int = 30,
-    default: Any = None
-) -> Any:
-    """Send HTTP request with error handling that returns a default on failure.
-    
-    This is a safe wrapper around send_request that catches all exceptions
-    and returns a default value instead of raising.
-    
-    Args:
-        method: HTTP method (GET, POST, PUT, DELETE)
-        endpoint: API endpoint path
-        payload: Optional JSON body
-        params: Optional query parameters
-        timeout: Request timeout in seconds
-        default: Value to return on failure (default: None)
-        
-    Returns:
-        JSON response as dictionary, or default value on failure
-    """
-    try:
-        return send_request(method, endpoint, payload, params, timeout)
-    except (WAHAAPIError, requests.RequestException) as e:
-        logger.warning(f"Request failed (returning default): {e}")
-        return default if default is not None else {}
