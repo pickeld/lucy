@@ -7,6 +7,7 @@ Qdrant Dashboard: http://localhost:6333/dashboard
 """
 
 import os
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
@@ -229,10 +230,13 @@ class LlamaIndexRAG:
             }
             
             # Create LlamaIndex TextNode
+            # Qdrant requires point IDs to be UUIDs or unsigned integers
+            # Generate a deterministic UUID from the chat_id and timestamp
+            node_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{chat_id}:{timestamp}"))
             node = TextNode(
                 text=text_content,
                 metadata=metadata,
-                id_=f"{chat_id}:{timestamp}"
+                id_=node_id
             )
             
             # Insert into index
