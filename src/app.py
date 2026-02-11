@@ -145,8 +145,8 @@ def rag_search():
         # Convert LlamaIndex NodeWithScore to dict
         formatted_results = [
             {
-                "content": result.node.text,
-                "metadata": result.node.metadata,
+                "content": getattr(result.node, 'text', '') or getattr(result.node, 'get_content', lambda: '')(),
+                "metadata": getattr(result.node, 'metadata', {}),
                 "score": result.score
             }
             for result in results
@@ -324,8 +324,8 @@ def webhook():
     from datetime import datetime
     from pathlib import Path
     
-    # Create payloads directory relative to this file's location
-    payloads_dir = Path(__file__).parent / "tmp" / "payloads"
+    # Create payloads directory at project root level (parent of src/)
+    payloads_dir = Path(__file__).parent.parent / "tmp" / "payloads"
     payloads_dir.mkdir(parents=True, exist_ok=True)
     
     # Create unique filename based on timestamp and message ID

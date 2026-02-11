@@ -334,17 +334,64 @@ class LlamaIndexRAG:
                     )
                 )
             
-            # Create retriever with filters
+            # Create Qdrant filter
             qdrant_filters = Filter(must=conditions) if conditions else None
             
-            retriever = self.index.as_retriever(
-                similarity_top_k=k,
-                vector_store_kwargs={"qdrant_filters": qdrant_filters} if qdrant_filters else {}
-            )
+            # Use direct Qdrant search to avoid LlamaIndex TextNode validation issues
+            # with documents that have None text values
+            query_embedding = Settings.embed_model.get_query_embedding(query)
             
-            results = retriever.retrieve(query)
-            logger.info(f"RAG search for '{query[:50]}...' returned {len(results)} results")
-            return results
+            search_results = self.qdrant_client.query_points(
+                collection_name=self.COLLECTION_NAME,
+                query=query_embedding,
+                query_filter=qdrant_filters,
+                limit=k,
+                with_payload=True
+            ).points
+            
+            # Convert Qdrant results to NodeWithScore, filtering out invalid entries
+            valid_results = []
+            for result in search_results:
+                payload = result.payload or {}
+                
+                # Try to get text from _node_content first (LlamaIndex storage format),
+                # then fall back to reconstructing from payload fields
+                text = None
+                node_content = payload.get("_node_content")
+                if node_content and isinstance(node_content, str):
+                    try:
+                        import json
+                        content_dict = json.loads(node_content)
+                        text = content_dict.get("text")
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                
+                # Fallback: reconstruct text from payload metadata
+                if not text:
+                    chat_name = payload.get("chat_name", "Unknown")
+                    sender = payload.get("sender", "Unknown")
+                    message = payload.get("message", "")
+                    timestamp = payload.get("timestamp", 0)
+                    if message:
+                        formatted_time = format_timestamp(str(timestamp))
+                        text = f"[{formatted_time}] {sender} in {chat_name}: {message}"
+                
+                # Skip if we still don't have valid text
+                if not text:
+                    logger.warning(f"Skipping result with no valid text: point_id={result.id}")
+                    continue
+                
+                # Create TextNode with valid text
+                node = TextNode(
+                    text=text,
+                    metadata={k: v for k, v in payload.items() if not k.startswith("_")},
+                    id_=str(result.id)
+                )
+                
+                valid_results.append(NodeWithScore(node=node, score=result.score))
+            
+            logger.info(f"RAG search for '{query[:50]}...' returned {len(valid_results)} valid results")
+            return valid_results
             
         except Exception as e:
             logger.error(f"RAG search failed: {e}")
@@ -387,7 +434,10 @@ class LlamaIndexRAG:
             # Build context from results
             context_parts = []
             for result in results:
-                context_parts.append(result.node.text)
+                # Access text safely - our search method ensures nodes have valid text
+                node_text = getattr(result.node, 'text', None) or getattr(result.node, 'get_content', lambda: '')()
+                if node_text:
+                    context_parts.append(node_text)
             
             context = "\n".join(context_parts) if context_parts else "[No messages found in the archive]"
             
