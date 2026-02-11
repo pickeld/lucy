@@ -9,8 +9,11 @@ Qdrant Dashboard: http://localhost:6333/dashboard
 import os
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
+
+if TYPE_CHECKING:
+    from models.base import BaseRAGDocument
 
 from llama_index.core import (
     Settings,
@@ -192,6 +195,8 @@ class LlamaIndexRAG:
     ) -> bool:
         """Add a WhatsApp message to the vector store.
         
+        Uses WhatsAppMessageDocument model for consistent schema across all entries.
+        
         Args:
             thread_id: The conversation thread ID
             chat_id: The WhatsApp chat ID
@@ -208,40 +213,29 @@ class LlamaIndexRAG:
             True if successful, False otherwise
         """
         try:
-            # Format timestamp for display
-            formatted_time = format_timestamp(timestamp)
+            from models import WhatsAppMessageDocument
             
-            # Create text content for embedding
-            text_content = f"[{formatted_time}] {sender} in {chat_name}: {message}"
-            
-            # Create metadata
-            metadata = {
-                "thread_id": thread_id,
-                "chat_id": chat_id,
-                "chat_name": chat_name,
-                "is_group": is_group,
-                "sender": sender,
-                "message": message,
-                "timestamp": int(timestamp) if timestamp.isdigit() else 0,
-                "has_media": has_media,
-                "media_type": media_type,
-                "source_type": "whatsapp_message",
-            }
-            
-            # Create LlamaIndex TextNode
-            # Qdrant requires point IDs to be UUIDs or unsigned integers
-            # Generate a deterministic UUID from the chat_id and timestamp
-            node_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{chat_id}:{timestamp}"))
-            node = TextNode(
-                text=text_content,
-                metadata=metadata,
-                id_=node_id
+            # Create document using standardized model
+            doc = WhatsAppMessageDocument.from_webhook_payload(
+                thread_id=thread_id,
+                chat_id=chat_id,
+                chat_name=chat_name,
+                is_group=is_group,
+                sender=sender,
+                message=message,
+                timestamp=timestamp,
+                has_media=has_media,
+                media_type=media_type,
+                media_url=media_url
             )
+            
+            # Convert to LlamaIndex TextNode with standardized schema
+            node = doc.to_llama_index_node()
             
             # Insert into index
             self.index.insert_nodes([node])
             
-            logger.debug(f"Added message to RAG: {text_content[:50]}...")
+            logger.debug(f"Added message to RAG: {doc.get_embedding_text()[:50]}...")
             return True
             
         except Exception as e:
@@ -283,6 +277,69 @@ class LlamaIndexRAG:
             return len(nodes)
         except Exception as e:
             logger.error(f"Failed to add batch nodes to vector store: {e}")
+            return 0
+    
+    def add_document(self, document: "BaseRAGDocument") -> bool:
+        """Add a RAG document to the vector store with standardized schema.
+        
+        This is the preferred method for adding documents as it ensures
+        consistent schema across all source types (WhatsApp, files, calls).
+        
+        Args:
+            document: Any BaseRAGDocument subclass instance
+                     (WhatsAppMessageDocument, FileDocument, CallRecordingDocument)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            from models.base import BaseRAGDocument
+            
+            if not isinstance(document, BaseRAGDocument):
+                raise TypeError(f"Expected BaseRAGDocument, got {type(document)}")
+            
+            node = document.to_llama_index_node()
+            self.index.insert_nodes([node])
+            
+            logger.debug(f"Added {document.metadata.source_type.value} document to RAG: {document.get_embedding_text()[:50]}...")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to add document to vector store: {e}")
+            return False
+    
+    def add_documents(self, documents: List["BaseRAGDocument"]) -> int:
+        """Add multiple RAG documents to the vector store in batch.
+        
+        Ensures consistent schema across all source types.
+        
+        Args:
+            documents: List of BaseRAGDocument subclass instances
+            
+        Returns:
+            Number of successfully added documents
+        """
+        if not documents:
+            return 0
+        
+        try:
+            from models.base import BaseRAGDocument
+            
+            nodes = []
+            for doc in documents:
+                if not isinstance(doc, BaseRAGDocument):
+                    logger.warning(f"Skipping invalid document type: {type(doc)}")
+                    continue
+                nodes.append(doc.to_llama_index_node())
+            
+            if nodes:
+                self.index.insert_nodes(nodes)
+                logger.info(f"Added {len(nodes)} documents to RAG vector store")
+            
+            return len(nodes)
+            
+        except Exception as e:
+            logger.error(f"Failed to add documents to vector store: {e}")
             return 0
     
     def search(
