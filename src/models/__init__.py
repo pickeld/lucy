@@ -13,7 +13,7 @@ Classes:
     - CallRecordingDocument: Transcribed call recordings
 
 Usage:
-    from classes import WhatsAppMessageDocument, FileDocument, CallRecordingDocument
+    from models import WhatsAppMessageDocument, FileDocument, CallRecordingDocument
     
     # Create a WhatsApp message document
     doc = WhatsAppMessageDocument.from_webhook_payload(
