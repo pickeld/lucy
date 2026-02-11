@@ -88,7 +88,7 @@ class WhatsappMSG(ABC):
 
     @abstractmethod
     def to_json(self) -> Dict[str, Any]:
-        """Convert message to JSON format optimized for LangGraph/AI models.
+        """Convert message to JSON format optimized for AI models.
         
         This method must be implemented by all subclasses to provide
         type-specific JSON serialization.
@@ -112,7 +112,7 @@ class WhatsappMSG(ABC):
         chat_name = self.group.name if self.is_group else self.contact.name
         chat_type = "group" if self.is_group else "direct"
         
-        # Format message for LangGraph (same format used in Thread.remember())
+        # Format message for AI models (same format used in Thread.remember())
         formatted_time = timestamp_data.get("formatted", "")
         sender_name = self.contact.name or "Unknown"
         formatted_message = f"[{formatted_time}] {sender_name}: {self.message or ''}"
@@ -166,7 +166,7 @@ class WhatsappMSG(ABC):
         suitable for storing in the RAG vector store for semantic search.
         
         Args:
-            thread_id: The LangGraph thread ID for this conversation
+            thread_id: The conversation thread ID
             
         Returns:
             WhatsAppMessageDocument instance, or None if message has no content
@@ -323,7 +323,7 @@ class MediaMessageBase(WhatsappMSG):
         """Convert media message to RAG document with media info.
         
         Args:
-            thread_id: The LangGraph thread ID
+            thread_id: The conversation thread ID
             
         Returns:
             WhatsAppMessageDocument with media metadata

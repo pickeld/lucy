@@ -23,7 +23,7 @@ class WhatsAppMessageDocument(BaseRAGDocument):
     messages from individual chats and group conversations.
     
     Attributes:
-        thread_id: LangGraph thread ID for conversation context
+        thread_id: Conversation thread ID for context
         chat_id: WhatsApp chat ID (e.g., '972501234567@c.us' or '120363...@g.us')
         chat_name: Display name of the chat or group
         is_group: Whether this message is from a group chat
