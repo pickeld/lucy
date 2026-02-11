@@ -23,7 +23,7 @@ services:
     restart: unless-stopped
   waha:
     container_name: waha
-    image: devlikeapro/waha-plus:arm-2025.12.1
+    image: devlikeapro/waha-plus:arm
     ports:
       - "3000:3000"
     volumes:
