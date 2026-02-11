@@ -14,7 +14,7 @@ from utils.globals import send_request
 from utils.logger import logger
 import traceback
 
-from whatsapp_handler import create_whatsapp_message, group_manager
+from whatsapp import create_whatsapp_message, group_manager
 
 app = Flask(__name__)
 

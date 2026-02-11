@@ -1,3 +1,9 @@
+"""WhatsApp contact management with Redis caching.
+
+This module provides classes for managing WhatsApp contacts, including
+fetching contact information from WAHA and caching in Redis.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -10,10 +16,20 @@ from utils.redis_conn import redis_get, redis_set
 
 
 class ContactManager:
+    """Manager for WhatsApp contact operations with Redis caching."""
+    
     def __init__(self) -> None:
         pass
 
     def get_contact(self, payload) -> Contact:
+        """Get contact information from payload, using cache when available.
+        
+        Args:
+            payload: The webhook payload containing contact information
+            
+        Returns:
+            Contact object with extracted information
+        """
         _from = payload.get("from", None)
         _participant = payload.get("participant", None)
         
@@ -71,7 +87,15 @@ class ContactManager:
         contact.id = _participant or _from
         return contact
 
-    def fetch_contact(self, contact_id: str):
+    def fetch_contact(self, contact_id: str) -> Dict[str, Any]:
+        """Fetch contact information from WAHA API.
+        
+        Args:
+            contact_id: The WhatsApp contact ID
+            
+        Returns:
+            Dictionary with contact information
+        """
         params = {"contactId": contact_id, "session": config.waha_session_name}
         try:
             response = send_request(
@@ -84,6 +108,25 @@ class ContactManager:
 
 @dataclass
 class Contact:
+    """Represents a WhatsApp contact.
+    
+    Attributes:
+        id: WhatsApp contact ID (e.g., '1234567890@c.us')
+        number: Phone number
+        name: Display name (from contact list or pushname)
+        pushname: Name set by the user themselves
+        short_name: Shortened version of name
+        status_muted: Whether status updates are muted
+        is_business: Whether this is a business account
+        is_enterprise: Whether this is an enterprise account
+        type: Contact type
+        is_me: Whether this is the current user
+        is_user: Whether this is a user contact
+        is_group: Whether this is a group
+        is_wa_contact: Whether this is a WhatsApp contact
+        is_my_contact: Whether this is in the address book
+        is_blocked: Whether this contact is blocked
+    """
     id: Optional[str] = None
     number: Optional[str] = None
     name: Optional[str] = None
@@ -103,7 +146,15 @@ class Contact:
     def __str__(self) -> str:
         return f"Name: {self.name}, Number: {self.number}"
 
-    def extract(self, data) -> "Contact":
+    def extract(self, data: Dict[str, Any]) -> "Contact":
+        """Extract contact information from API response data.
+        
+        Args:
+            data: Dictionary with contact data from WAHA API
+            
+        Returns:
+            Self with extracted data
+        """
         self.id = data.get("id")
         self.number = data.get("number")
         self.name = data.get("name", data.get("pushname"))
@@ -121,7 +172,12 @@ class Contact:
         self.is_blocked = bool(data.get("isBlocked", False))
         return self
 
-    def to_dict(self):
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert contact to dictionary representation.
+        
+        Returns:
+            Dictionary with all contact attributes
+        """
         return {
             k: v for k, v in self.__dict__.items()
             if not k.startswith("_") and not callable(v)
