@@ -5,7 +5,7 @@ messages (text, image, voice, etc.) with a common base class and type-specific
 subclasses for specialized processing.
 
 Usage:
-    >>> from whatsapp import create_whatsapp_message
+    >>> from whatsapp_handler import create_whatsapp_message
     >>> msg = create_whatsapp_message(payload)
     >>> json_output = msg.to_json()
 """
@@ -25,7 +25,7 @@ from config import config
 from contact import Contact, ContactManager
 from groups import Group, GroupManager
 from utils.logger import logger
-from classes import WhatsAppMessageDocument
+from models import WhatsAppMessageDocument
 
 
 class ContentType(str, Enum):
