@@ -5,21 +5,26 @@ streamlit
 python-dotenv
 qrcode[pil]
 redis
-# LangGraph and LangChain dependencies
-langgraph
-langgraph-cli
-langgraph-sdk
-langgraph-checkpoint-postgres
-langchain
-langchain-openai
-langchain-google-genai
-langchain-postgres
-langsmith
+httpx
+
+# LlamaIndex Core
+llama-index>=0.10.0
+llama-index-core>=0.10.0
+
+# LlamaIndex Integrations
+llama-index-llms-openai>=0.1.0
+llama-index-llms-gemini>=0.1.0
+llama-index-embeddings-openai>=0.1.0
+llama-index-vector-stores-qdrant>=0.2.0
+
+# Vector Store
+qdrant-client>=1.7.0
+
+# Database (for conversation memory)
 psycopg[binary]
-langgraph-cli[inmem]
-# RAG / Vector Store dependencies
-qdrant-client
-langchain-qdrant
-retry
+
 # Data validation
 pydantic>=2.0
+
+# Utilities
+retry
