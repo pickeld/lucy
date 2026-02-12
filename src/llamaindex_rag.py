@@ -738,6 +738,70 @@ class LlamaIndexRAG:
             logger.error(f"Failed to add documents to vector store: {e}")
             return 0
     
+    # Field-aware full-text search scores: sender matches are most valuable
+    # because users often ask "what did X say about Y?"
+    FULLTEXT_SCORE_SENDER = 0.95
+    FULLTEXT_SCORE_CHAT_NAME = 0.85
+    FULLTEXT_SCORE_MESSAGE = 0.75
+    
+    def _fulltext_search_by_field(
+        self,
+        field_name: str,
+        query: str,
+        score: float,
+        k: int = 10,
+        must_conditions: Optional[List] = None,
+    ) -> List[NodeWithScore]:
+        """Search a single metadata field with full-text matching.
+        
+        Args:
+            field_name: Qdrant payload field to search (sender, chat_name, message)
+            query: Text to search for
+            score: Score to assign to matches from this field
+            k: Max results
+            must_conditions: Additional filter conditions
+            
+        Returns:
+            List of NodeWithScore with the specified score
+        """
+        try:
+            qdrant_filter = Filter(
+                must=(must_conditions or []) + [
+                    FieldCondition(key=field_name, match=MatchText(text=query))
+                ]
+            )
+            
+            results, _ = self.qdrant_client.scroll(
+                collection_name=self.COLLECTION_NAME,
+                scroll_filter=qdrant_filter,
+                limit=k,
+                with_payload=True,
+                with_vectors=False,
+            )
+            
+            nodes = []
+            for record in results:
+                payload = record.payload or {}
+                chat_name = payload.get("chat_name", "Unknown")
+                sender = payload.get("sender", "Unknown")
+                message = payload.get("message", "")
+                timestamp = payload.get("timestamp", 0)
+                
+                if message:
+                    formatted_time = format_timestamp(str(timestamp))
+                    text = f"[{formatted_time}] {sender} in {chat_name}: {message}"
+                    node = TextNode(
+                        text=text,
+                        metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
+                        id_=str(record.id),
+                    )
+                    nodes.append(NodeWithScore(node=node, score=score))
+            
+            return nodes
+        except Exception as e:
+            logger.debug(f"Full-text search on '{field_name}' failed: {e}")
+            return []
+    
     def _fulltext_search(
         self,
         query: str,
@@ -745,7 +809,11 @@ class LlamaIndexRAG:
         filter_chat_name: Optional[str] = None,
         filter_days: Optional[int] = None
     ) -> List[NodeWithScore]:
-        """Perform full-text search on metadata fields (sender, chat_name, message).
+        """Perform field-aware full-text search on metadata fields.
+        
+        Runs separate queries per field (sender, chat_name, message) with
+        different scores to prioritize sender matches over message content
+        matches. Results are deduplicated by node ID, keeping the highest score.
         
         Args:
             query: Text to search for
@@ -754,11 +822,11 @@ class LlamaIndexRAG:
             filter_days: Optional time filter
             
         Returns:
-            List of matching NodeWithScore objects
+            List of matching NodeWithScore objects with field-aware scores
         """
         try:
-            # Build filter conditions
-            must_conditions = []
+            # Build common filter conditions
+            must_conditions: List = []
             
             if filter_chat_name:
                 must_conditions.append(
@@ -771,50 +839,37 @@ class LlamaIndexRAG:
                     FieldCondition(key="timestamp", range=Range(gte=min_timestamp))
                 )
             
-            # Full-text search conditions - at least one must match
-            # Use Filter with 'should' to match any of: sender, chat_name, or message
-            qdrant_filter = Filter(
-                must=must_conditions if must_conditions else None,
-                should=[
-                    FieldCondition(key="sender", match=MatchText(text=query)),
-                    FieldCondition(key="chat_name", match=MatchText(text=query)),
-                    FieldCondition(key="message", match=MatchText(text=query))
-                ]  # type: ignore[arg-type]
-            )
+            # Search each field separately with different scores
+            field_searches = [
+                ("sender", self.FULLTEXT_SCORE_SENDER),
+                ("chat_name", self.FULLTEXT_SCORE_CHAT_NAME),
+                ("message", self.FULLTEXT_SCORE_MESSAGE),
+            ]
             
-            # Scroll through matching documents (no vector search)
-            results, _ = self.qdrant_client.scroll(
-                collection_name=self.COLLECTION_NAME,
-                scroll_filter=qdrant_filter,
-                limit=k,
-                with_payload=True,
-                with_vectors=False
-            )
+            # Collect all results, dedup by node ID keeping highest score
+            best_scores: Dict[str, float] = {}
+            best_nodes: Dict[str, NodeWithScore] = {}
             
-            # Convert to NodeWithScore format
-            nodes = []
-            for record in results:
-                payload = record.payload or {}
-                
-                # Reconstruct text
-                chat_name = payload.get("chat_name", "Unknown")
-                sender = payload.get("sender", "Unknown")
-                message = payload.get("message", "")
-                timestamp = payload.get("timestamp", 0)
-                
-                if message:
-                    formatted_time = format_timestamp(str(timestamp))
-                    text = f"[{formatted_time}] {sender} in {chat_name}: {message}"
-                    
-                    node = TextNode(
-                        text=text,
-                        metadata={k: v for k, v in payload.items() if not k.startswith("_")},
-                        id_=str(record.id)
-                    )
-                    # Full-text matches get a high score to prioritize them
-                    nodes.append(NodeWithScore(node=node, score=1.0))
+            for field_name, field_score in field_searches:
+                results = self._fulltext_search_by_field(
+                    field_name=field_name,
+                    query=query,
+                    score=field_score,
+                    k=k,
+                    must_conditions=must_conditions if must_conditions else None,
+                )
+                for nws in results:
+                    node_id = nws.node.id_ if nws.node else None
+                    if not node_id:
+                        continue
+                    nws_score = nws.score or 0.0
+                    if node_id not in best_scores or nws_score > best_scores[node_id]:
+                        best_scores[node_id] = nws_score
+                        best_nodes[node_id] = nws
             
-            return nodes
+            # Sort by score descending, return top-k
+            sorted_nodes = sorted(best_nodes.values(), key=lambda n: n.score or 0.0, reverse=True)[:k]
+            return sorted_nodes
             
         except Exception as e:
             logger.debug(f"Full-text search failed (indexes may not exist): {e}")

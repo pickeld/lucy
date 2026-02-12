@@ -36,12 +36,24 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom CSS
+# Custom CSS — WhatsApp-inspired theme
 st.markdown("""
 <style>
     .stApp {
         max-width: 1200px;
         margin: 0 auto;
+    }
+    /* WhatsApp-style chat bubbles */
+    [data-testid="stChatMessage"][data-testid-type="user"] .stMarkdown {
+        background-color: #DCF8C6;
+        border-radius: 10px;
+        padding: 8px 12px;
+    }
+    [data-testid="stChatMessage"][data-testid-type="assistant"] .stMarkdown {
+        background-color: #FFFFFF;
+        border-radius: 10px;
+        padding: 8px 12px;
+        border: 1px solid #e0e0e0;
     }
     .search-result {
         background-color: #f0f2f6;
@@ -63,6 +75,15 @@ st.markdown("""
     .context-label {
         font-weight: bold;
         color: #2e7d32;
+    }
+    /* Connection status indicator */
+    .status-connected {
+        color: #25D366;
+        font-weight: bold;
+    }
+    .status-disconnected {
+        color: #dc3545;
+        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
