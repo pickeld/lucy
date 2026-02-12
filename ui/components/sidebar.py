@@ -140,7 +140,7 @@ def _render_conversation_item(convo: dict) -> None:
             _load_conversation(convo_id)
 
     with col_dots:
-        if st.button("⋯", key=f"dots_{convo_id}"):
+        if st.button("⋮", key=f"dots_{convo_id}"):
             # Toggle menu: if already open, close it; otherwise open it
             if menu_open:
                 st.session_state.menu_open_id = None
