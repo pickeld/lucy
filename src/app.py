@@ -1,11 +1,11 @@
 import base64
 import os
-import sys
 import time
+import traceback
+import uuid
 from typing import Any, Dict, Optional, Union
 
 # Force unbuffered output for immediate logging
-# Set PYTHONUNBUFFERED equivalent at runtime
 os.environ['PYTHONUNBUFFERED'] = '1'
 
 print("🚀 Starting WhatsApp-GPT application...", flush=True)
@@ -21,14 +21,10 @@ print("✅ Config loaded", flush=True)
 from llamaindex_rag import get_rag
 print("✅ RAG module imported", flush=True)
 
-from session import get_session_manager, ConversationSession, EntityType
-print("✅ Session module imported", flush=True)
-
 from utils.globals import send_request
 from utils.logger import logger
+from utils.redis_conn import get_redis_client
 print("✅ Utils imported", flush=True)
-
-import traceback
 
 from whatsapp import create_whatsapp_message, group_manager
 print("✅ WhatsApp module imported", flush=True)
@@ -40,9 +36,80 @@ print("✅ Flask app created", flush=True)
 # Initialize singletons
 rag = get_rag()
 print("✅ RAG instance initialized", flush=True)
-session_manager = get_session_manager()
-print("✅ Session manager initialized", flush=True)
 
+
+# =============================================================================
+# CONVERSATION FILTER STATE (simple Redis hash per conversation)
+# =============================================================================
+
+FILTER_KEY_PREFIX = "filters:"
+FILTER_TTL = int(settings.session_ttl_minutes) * 60
+
+
+def get_conversation_filters(conversation_id: str) -> Dict[str, str]:
+    """Get stored filters for a conversation from Redis hash.
+    
+    Args:
+        conversation_id: The conversation identifier
+        
+    Returns:
+        Dictionary of filter key-value pairs (may be empty)
+    """
+    try:
+        redis = get_redis_client()
+        key = f"{FILTER_KEY_PREFIX}{conversation_id}"
+        filters = redis.hgetall(key)
+        return filters or {}
+    except Exception as e:
+        logger.debug(f"Failed to get conversation filters: {e}")
+        return {}
+
+
+def set_conversation_filters(conversation_id: str, filters: Dict[str, str]) -> None:
+    """Store filters for a conversation as a Redis hash with TTL.
+    
+    Args:
+        conversation_id: The conversation identifier
+        filters: Dictionary of filter key-value pairs to store
+    """
+    try:
+        redis = get_redis_client()
+        key = f"{FILTER_KEY_PREFIX}{conversation_id}"
+        # Remove empty values before storing
+        clean_filters = {k: v for k, v in filters.items() if v}
+        if clean_filters:
+            redis.hset(key, mapping=clean_filters)
+            redis.expire(key, FILTER_TTL)
+        else:
+            redis.delete(key)
+    except Exception as e:
+        logger.debug(f"Failed to set conversation filters: {e}")
+
+
+def delete_conversation(conversation_id: str) -> bool:
+    """Delete all data for a conversation (filters + chat history).
+    
+    Args:
+        conversation_id: The conversation identifier
+        
+    Returns:
+        True if anything was deleted
+    """
+    try:
+        redis = get_redis_client()
+        filter_key = f"{FILTER_KEY_PREFIX}{conversation_id}"
+        deleted = redis.delete(filter_key)
+        # Chat history in RedisChatStore is keyed internally by conversation_id
+        # and will auto-expire via TTL set in RedisChatStore
+        return deleted > 0
+    except Exception as e:
+        logger.debug(f"Failed to delete conversation: {e}")
+        return False
+
+
+# =============================================================================
+# WEBHOOK FILTER
+# =============================================================================
 
 def pass_filter(payload):
     """Filter out non-message webhook events.
@@ -64,6 +131,10 @@ def pass_filter(payload):
     return True
 
 
+# =============================================================================
+# HEALTH CHECK
+# =============================================================================
+
 @app.route("/health", methods=["GET"])
 def health():
     """Health check endpoint that verifies connectivity to dependencies."""
@@ -72,7 +143,6 @@ def health():
     
     # Check Redis
     try:
-        from utils.redis_conn import get_redis_client
         redis_client = get_redis_client()
         redis_client.ping()
         status["dependencies"]["redis"] = "connected"
@@ -112,30 +182,33 @@ def health():
     return jsonify(status), 200 if overall_healthy else 503
 
 
+# =============================================================================
+# RAG QUERY & SEARCH ENDPOINTS
+# =============================================================================
+
 @app.route("/rag/query", methods=["POST"])
 def rag_query():
     """Query the RAG system with a natural language question.
 
+    Uses LlamaIndex CondensePlusContextChatEngine for automatic
+    conversation management, query reformulation, and context retrieval.
+
     Request body:
         {
             "question": "who said they would be late?",
-            "session_id": "uuid",  # optional, for context-aware conversations
+            "conversation_id": "uuid",  # optional, for multi-turn conversations
             "k": 10,  # optional, number of context documents
-            "filter_chat_name": "Work Group",  # optional (auto-set from session if not provided)
-            "filter_sender": "John",  # optional (auto-set from session if not provided)
-            "filter_days": 7,  # optional (1=24h, 3=3 days, 7=week, 30=month, null=all time)
-            "conversation_history": [  # optional, deprecated - use session_id instead
-                {"role": "user", "content": "what did John say?"},
-                {"role": "assistant", "content": "John said..."}
-            ]
+            "filter_chat_name": "Work Group",  # optional
+            "filter_sender": "John",  # optional
+            "filter_days": 7  # optional (1=24h, 3=3 days, 7=week, 30=month, null=all time)
         }
 
     Response:
         {
             "answer": "...",
             "question": "...",
-            "session_id": "...",
-            "context": {"chat_filter": "...", "sender_filter": "..."},
+            "conversation_id": "...",
+            "filters": {"chat_name": "...", "sender": "..."},
             "stats": {"total_documents": 123}
         }
     """
@@ -146,79 +219,55 @@ def rag_query():
         if not question:
             return jsonify({"error": "Missing 'question' in request body"}), 400
 
-        # Session management
-        session_id = data.get("session_id")
-        session: Optional[ConversationSession] = None
-        
-        if session_id:
-            session = session_manager.get_session(session_id)
-        
-        if session is None:
-            # Create new session
-            session = session_manager.create_session()
-        
+        # Get or generate conversation ID
+        conversation_id = data.get("conversation_id") or str(uuid.uuid4())
         k = data.get("k", 10)
         
-        # Use filters from request, falling back to session context
-        filter_chat_name = data.get("filter_chat_name") or session.active_chat_filter
-        filter_sender = data.get("filter_sender") or session.active_sender_filter
-        filter_days = data.get("filter_days")
+        # Load persisted filters, then override with any explicit request params
+        filters = get_conversation_filters(conversation_id)
         
-        # Update session context if explicit filters provided
-        if data.get("filter_chat_name"):
-            session.set_chat_context(data.get("filter_chat_name"))
-        if data.get("filter_sender"):
-            session.set_sender_context(data.get("filter_sender"))
+        if data.get("filter_chat_name") is not None:
+            if data["filter_chat_name"]:
+                filters["chat_name"] = data["filter_chat_name"]
+            else:
+                filters.pop("chat_name", None)
         
-        # Auto-detect chat/sender mentions in the question and update context
-        chat_list = rag.get_chat_list()
-        sender_list = rag.get_sender_list()
-        session_manager.extract_and_track_entities(
-            session, question, known_chats=chat_list, known_senders=sender_list
-        )
+        if data.get("filter_sender") is not None:
+            if data["filter_sender"]:
+                filters["sender"] = data["filter_sender"]
+            else:
+                filters.pop("sender", None)
         
-        # Re-check filters after entity extraction (may have updated)
-        filter_chat_name = filter_chat_name or session.active_chat_filter
+        if data.get("filter_days") is not None:
+            if data["filter_days"]:
+                filters["days"] = str(data["filter_days"])
+            else:
+                filters.pop("days", None)
         
-        # Get conversation history from session or request
-        conversation_history = data.get("conversation_history")
-        if not conversation_history and session.turns:
-            conversation_history = session.get_conversation_history(max_turns=10)
-
-        answer = rag.query(
-            question=question,
+        # Persist updated filters
+        set_conversation_filters(conversation_id, filters)
+        
+        # Create chat engine with filters and conversation memory
+        chat_engine = rag.create_chat_engine(
+            conversation_id=conversation_id,
+            filter_chat_name=filters.get("chat_name"),
+            filter_sender=filters.get("sender"),
+            filter_days=int(filters["days"]) if filters.get("days") else None,
             k=k,
-            filter_chat_name=filter_chat_name,
-            filter_sender=filter_sender,
-            filter_days=filter_days,
-            conversation_history=conversation_history
         )
         
-        # Record this turn in the session
-        session_manager.add_turn_to_session(
-            session=session,
-            user_query=question,
-            assistant_response=answer,
-            filters={
-                "chat": filter_chat_name,
-                "sender": filter_sender,
-                "days": filter_days
-            }
-        )
+        # Single call handles: condense → retrieve → generate → store in memory
+        response = chat_engine.chat(question)
+        answer = str(response)
 
         stats = rag.get_stats()
 
         return jsonify({
             "answer": answer,
             "question": question,
-            "session_id": session.session_id,
-            "context": {
-                "chat_filter": session.active_chat_filter,
-                "sender_filter": session.active_sender_filter,
-                "entities_tracked": list(session.mentioned_entities.keys()),
-                "turn_number": session.current_turn_number
-            },
-            "stats": stats
+            "conversation_id": conversation_id,
+            "filters": filters,
+            "stats": stats,
         }), 200
 
     except Exception as e:
@@ -335,227 +384,32 @@ def rag_senders():
 
 
 # =============================================================================
-# SESSION MANAGEMENT ENDPOINTS
+# CONVERSATION MANAGEMENT ENDPOINTS
 # =============================================================================
 
-@app.route("/session/create", methods=["POST"])
-def create_session():
-    """Create a new conversation session.
+@app.route("/conversation/<conversation_id>", methods=["DELETE"])
+def delete_conversation_endpoint(conversation_id: str):
+    """Delete a conversation's filters and chat history.
     
-    Request body (all optional):
-        {
-            "initial_chat": "Family Group",  # optional initial chat filter
-            "initial_sender": "John"          # optional initial sender filter
-        }
+    Chat history in RedisChatStore auto-expires via TTL, but this
+    endpoint allows explicit cleanup.
     
     Response:
         {
-            "session_id": "uuid",
-            "created_at": "...",
-            "context": {...}
+            "status": "ok",
+            "conversation_id": "..."
         }
     """
     try:
-        data = request.json or {}
-        initial_chat = data.get("initial_chat")
-        initial_sender = data.get("initial_sender")
-        
-        session = session_manager.create_session(
-            initial_chat=initial_chat,
-            initial_sender=initial_sender
-        )
-        
+        delete_conversation(conversation_id)
         return jsonify({
-            "session_id": session.session_id,
-            "created_at": session.created_at.isoformat(),
-            "context": {
-                "chat_filter": session.active_chat_filter,
-                "sender_filter": session.active_sender_filter,
-                "summary": session.get_context_summary()
-            }
-        }), 201
-        
-    except Exception as e:
-        trace = traceback.format_exc()
-        logger.error(f"Session create error: {e}\n{trace}")
-        return jsonify({"error": str(e), "traceback": trace}), 500
-
-
-@app.route("/session/<session_id>", methods=["GET"])
-def get_session(session_id: str):
-    """Get session state by ID.
-    
-    Response:
-        {
-            "session_id": "...",
-            "context": {...},
-            "history": [...],
-            "entities": {...}
-        }
-    """
-    try:
-        session = session_manager.get_session(session_id)
-        
-        if session is None:
-            return jsonify({"error": "Session not found or expired"}), 404
-        
-        return jsonify({
-            "session_id": session.session_id,
-            "created_at": session.created_at.isoformat(),
-            "last_activity": session.last_activity.isoformat(),
-            "context": {
-                "chat_filter": session.active_chat_filter,
-                "sender_filter": session.active_sender_filter,
-                "time_range": session.active_time_range,
-                "summary": session.get_context_summary()
-            },
-            "history": session.get_conversation_history(),
-            "entities": {
-                name: {
-                    "type": info.entity_type.value,
-                    "mentions": info.mentions_count,
-                    "last_turn": info.last_mentioned_turn
-                }
-                for name, info in session.mentioned_entities.items()
-            },
-            "turn_count": session.current_turn_number,
-            "facts_count": len(session.established_facts)
+            "status": "ok",
+            "conversation_id": conversation_id,
         }), 200
-        
     except Exception as e:
         trace = traceback.format_exc()
-        logger.error(f"Session get error: {e}\n{trace}")
+        logger.error(f"Conversation delete error: {e}\n{trace}")
         return jsonify({"error": str(e), "traceback": trace}), 500
-
-
-@app.route("/session/<session_id>", methods=["DELETE"])
-def delete_session(session_id: str):
-    """Delete a session.
-    
-    Response:
-        {
-            "status": "ok",
-            "deleted": true
-        }
-    """
-    try:
-        deleted = session_manager.delete_session(session_id)
-        
-        return jsonify({
-            "status": "ok",
-            "deleted": deleted
-        }), 200
-        
-    except Exception as e:
-        trace = traceback.format_exc()
-        logger.error(f"Session delete error: {e}\n{trace}")
-        return jsonify({"error": str(e), "traceback": trace}), 500
-
-
-@app.route("/session/<session_id>/context", methods=["PUT", "PATCH"])
-def update_session_context(session_id: str):
-    """Update session context (chat/sender filters).
-    
-    Request body:
-        {
-            "chat_name": "Family Group",  # set chat filter (null to clear)
-            "sender_name": "John"          # set sender filter (null to clear)
-        }
-    
-    Response:
-        {
-            "status": "ok",
-            "context": {...}
-        }
-    """
-    try:
-        session = session_manager.get_session(session_id)
-        
-        if session is None:
-            return jsonify({"error": "Session not found or expired"}), 404
-        
-        data = request.json or {}
-        
-        # Update context (None means don't change, empty string means clear)
-        if "chat_name" in data:
-            chat_val = data["chat_name"]
-            session.set_chat_context(chat_val if chat_val else None)
-        
-        if "sender_name" in data:
-            sender_val = data["sender_name"]
-            session.set_sender_context(sender_val if sender_val else None)
-        
-        session_manager.save_session(session)
-        
-        return jsonify({
-            "status": "ok",
-            "context": {
-                "chat_filter": session.active_chat_filter,
-                "sender_filter": session.active_sender_filter,
-                "summary": session.get_context_summary()
-            }
-        }), 200
-        
-    except Exception as e:
-        trace = traceback.format_exc()
-        logger.error(f"Session context update error: {e}\n{trace}")
-        return jsonify({"error": str(e), "traceback": trace}), 500
-
-
-@app.route("/session/<session_id>/clear", methods=["POST"])
-def clear_session_context(session_id: str):
-    """Clear all session context (filters, entities, history).
-    
-    Response:
-        {
-            "status": "ok"
-        }
-    """
-    try:
-        session = session_manager.get_session(session_id)
-        
-        if session is None:
-            return jsonify({"error": "Session not found or expired"}), 404
-        
-        # Clear all context
-        session.active_chat_filter = None
-        session.active_sender_filter = None
-        session.active_time_range = None
-        session.mentioned_entities.clear()
-        session.resolved_references.clear()
-        session.turns.clear()
-        session.retrieved_context.clear()
-        session.established_facts.clear()
-        
-        session_manager.save_session(session)
-        
-        return jsonify({"status": "ok"}), 200
-        
-    except Exception as e:
-        trace = traceback.format_exc()
-        logger.error(f"Session clear error: {e}\n{trace}")
-        return jsonify({"error": str(e), "traceback": trace}), 500
-
-
-@app.route("/session/stats", methods=["GET"])
-def session_stats():
-    """Get session management statistics.
-    
-    Response:
-        {
-            "active_sessions": 5,
-            "ttl_minutes": 30,
-            "max_history": 20
-        }
-    """
-    try:
-        stats = session_manager.get_session_stats()
-        return jsonify(stats), 200
-    except Exception as e:
-        trace = traceback.format_exc()
-        logger.error(f"Session stats error: {e}\n{trace}")
-        return jsonify({"error": str(e), "traceback": trace}), 500
-
 
 
 # =============================================================================
@@ -688,6 +542,10 @@ def refresh_group_cache(group_id: str):
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
+# =============================================================================
+# TEST & WEBHOOK ENDPOINTS
+# =============================================================================
+
 @app.route("/test", methods=["GET"])
 def test():
     # send a test message to yourself
@@ -740,6 +598,10 @@ def webhook():
             f"Error processing webhook: {e} ::: {payload}\n{trace}")
         return jsonify({"error": str(e), "traceback": trace}), 500
 
+
+# =============================================================================
+# WAHA SESSION MANAGEMENT (WhatsApp pairing)
+# =============================================================================
 
 @app.route("/", methods=["GET"])
 def index():

@@ -5,6 +5,7 @@ import json
 import logging
 import sys
 import os
+import uuid
 from typing import Optional, Dict, Any
 
 # Configure logging to stderr (which Streamlit doesn't capture)
@@ -127,64 +128,11 @@ def get_rag_stats(api_url: str) -> dict:
     return {}
 
 
-def create_session(api_url: str, initial_chat: Optional[str] = None) -> Optional[str]:
-    """Create a new conversation session."""
+def delete_conversation(api_url: str, conversation_id: str) -> bool:
+    """Delete a conversation's data (filters + chat history)."""
     try:
-        payload = {}
-        if initial_chat:
-            payload["initial_chat"] = initial_chat
-        
-        response = requests.post(
-            f"{api_url}/session/create",
-            json=payload,
-            timeout=10
-        )
-        if response.status_code == 201:
-            data = response.json()
-            return data.get("session_id")
-    except Exception as e:
-        st.error(f"Failed to create session: {e}")
-    return None
-
-
-def get_session_info(api_url: str, session_id: str) -> Optional[Dict[str, Any]]:
-    """Get session information."""
-    try:
-        response = requests.get(f"{api_url}/session/{session_id}", timeout=10)
-        if response.status_code == 200:
-            return response.json()
-    except Exception:
-        pass
-    return None
-
-
-def clear_session_context(api_url: str, session_id: str) -> bool:
-    """Clear session context."""
-    try:
-        response = requests.post(f"{api_url}/session/{session_id}/clear", timeout=10)
-        return response.status_code == 200
-    except Exception:
-        pass
-    return False
-
-
-def update_session_context(
-    api_url: str,
-    session_id: str,
-    chat_name: Optional[str] = None,
-    sender_name: Optional[str] = None
-) -> bool:
-    """Update session context filters."""
-    try:
-        payload = {}
-        if chat_name is not None:
-            payload["chat_name"] = chat_name
-        if sender_name is not None:
-            payload["sender_name"] = sender_name
-        
-        response = requests.put(
-            f"{api_url}/session/{session_id}/context",
-            json=payload,
+        response = requests.delete(
+            f"{api_url}/conversation/{conversation_id}",
             timeout=10
         )
         return response.status_code == 200
@@ -207,16 +155,11 @@ print("Initializing session state...", flush=True)
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "session_id" not in st.session_state:
-    st.session_state.session_id = None
+if "conversation_id" not in st.session_state:
+    st.session_state.conversation_id = None
 
-if "active_context" not in st.session_state:
-    st.session_state.active_context = {
-        "chat_filter": None,
-        "sender_filter": None,
-        "entities_tracked": [],
-        "turn_number": 0
-    }
+if "active_filters" not in st.session_state:
+    st.session_state.active_filters = {}
 
 if "api_url" not in st.session_state:
     st.session_state.api_url = API_BASE_URL
@@ -287,24 +230,27 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # Session info
-    st.subheader("🧠 Session")
-    if st.session_state.session_id:
-        st.caption(f"ID: `{st.session_state.session_id[:8]}...`")
-        st.caption(f"Turn: {st.session_state.active_context.get('turn_number', 0)}")
+    # Conversation info
+    st.subheader("🧠 Conversation")
+    if st.session_state.conversation_id:
+        st.caption(f"ID: `{st.session_state.conversation_id[:8]}...`")
+        st.caption(f"Messages: {len(st.session_state.messages)}")
         
-        if st.button("🔄 New Session", key="new_session"):
-            st.session_state.session_id = None
+        # Show active filters
+        filters = st.session_state.active_filters
+        if filters:
+            if filters.get("chat_name"):
+                st.caption(f"💬 {filters['chat_name']}")
+            if filters.get("sender"):
+                st.caption(f"👤 {filters['sender']}")
+        
+        if st.button("🔄 New Conversation", key="new_conversation"):
+            st.session_state.conversation_id = None
             st.session_state.messages = []
-            st.session_state.active_context = {
-                "chat_filter": None,
-                "sender_filter": None,
-                "entities_tracked": [],
-                "turn_number": 0
-            }
+            st.session_state.active_filters = {}
             st.rerun()
     else:
-        st.caption("No active session")
+        st.caption("No active conversation")
     
     st.markdown("---")
     
@@ -323,7 +269,7 @@ with st.sidebar:
 # =============================================================================
 
 st.title("💬 WhatsApp RAG Assistant")
-st.caption("Powered by LlamaIndex + Qdrant • Session-aware conversations")
+st.caption("Powered by LlamaIndex CondensePlusContextChatEngine + Qdrant")
 
 # Create tabs
 tab_chat, tab_search = st.tabs(["💬 Chat", "🔍 Search"])
@@ -331,22 +277,21 @@ tab_chat, tab_search = st.tabs(["💬 Chat", "🔍 Search"])
 # === CHAT TAB ===
 with tab_chat:
     # Context indicator box
-    ctx = st.session_state.active_context
-    has_context = ctx.get("chat_filter") or ctx.get("sender_filter") or ctx.get("entities_tracked")
+    filters = st.session_state.active_filters
+    has_filters = filters.get("chat_name") or filters.get("sender")
     
-    if has_context:
+    if has_filters:
         context_parts = []
-        if ctx.get("chat_filter"):
-            context_parts.append(f"💬 **Chat:** {ctx['chat_filter']}")
-        if ctx.get("sender_filter"):
-            context_parts.append(f"👤 **Sender:** {ctx['sender_filter']}")
-        if ctx.get("entities_tracked"):
-            entities = ctx["entities_tracked"][:5]  # Show max 5
-            context_parts.append(f"🏷️ **Tracking:** {', '.join(entities)}")
+        if filters.get("chat_name"):
+            context_parts.append(f"💬 **Chat:** {filters['chat_name']}")
+        if filters.get("sender"):
+            context_parts.append(f"👤 **Sender:** {filters['sender']}")
+        if filters.get("days"):
+            context_parts.append(f"📅 **Days:** {filters['days']}")
         
         st.markdown(
             f"""<div class="context-box">
-            <span class="context-label">🧠 Active Context:</span> {' | '.join(context_parts)}
+            <span class="context-label">🧠 Active Filters:</span> {' | '.join(context_parts)}
             </div>""",
             unsafe_allow_html=True
         )
@@ -354,26 +299,16 @@ with tab_chat:
     # Control buttons row
     col1, col2, col3 = st.columns([5, 1, 1])
     with col2:
-        if st.button("🧹 Clear Context", key="clear_context", disabled=not has_context):
-            if st.session_state.session_id:
-                clear_session_context(api_url, st.session_state.session_id)
-            st.session_state.active_context = {
-                "chat_filter": None,
-                "sender_filter": None,
-                "entities_tracked": [],
-                "turn_number": 0
-            }
+        if st.button("🧹 Clear Filters", key="clear_filters", disabled=not has_filters):
+            st.session_state.active_filters = {}
             st.rerun()
     with col3:
         if st.button("🗑️ Clear Chat", key="clear_chat"):
+            if st.session_state.conversation_id:
+                delete_conversation(api_url, st.session_state.conversation_id)
             st.session_state.messages = []
-            st.session_state.session_id = None
-            st.session_state.active_context = {
-                "chat_filter": None,
-                "sender_filter": None,
-                "entities_tracked": [],
-                "turn_number": 0
-            }
+            st.session_state.conversation_id = None
+            st.session_state.active_filters = {}
             st.rerun()
     
     # Display chat history
@@ -397,17 +332,17 @@ with tab_chat:
         with st.chat_message("assistant"):
             with st.spinner("🔍 Searching and generating answer..."):
                 try:
-                    # Build request payload with session support
+                    # Build request payload
                     payload = {
                         "question": question,
                         "k": k_results
                     }
                     
-                    # Include session ID if we have one
-                    if st.session_state.session_id:
-                        payload["session_id"] = st.session_state.session_id
+                    # Include conversation ID if we have one
+                    if st.session_state.conversation_id:
+                        payload["conversation_id"] = st.session_state.conversation_id
                     
-                    # Include explicit filters from sidebar (override session)
+                    # Include explicit filters from sidebar
                     if filter_chat.strip():
                         payload["filter_chat_name"] = filter_chat.strip()
                     if filter_sender.strip():
@@ -426,12 +361,12 @@ with tab_chat:
                         data = response.json()
                         raw_answer = data.get("answer", "No answer received")
                         
-                        # Update session state from response
-                        if data.get("session_id"):
-                            st.session_state.session_id = data["session_id"]
+                        # Update conversation state from response
+                        if data.get("conversation_id"):
+                            st.session_state.conversation_id = data["conversation_id"]
                         
-                        if data.get("context"):
-                            st.session_state.active_context = data["context"]
+                        if data.get("filters"):
+                            st.session_state.active_filters = data["filters"]
                         
                         # Parse response
                         if isinstance(raw_answer, str):
@@ -461,9 +396,10 @@ with tab_chat:
                         
                         st.markdown(answer)
                         
-                        # Show context update notification
-                        if data.get("context", {}).get("chat_filter"):
-                            st.caption(f"📍 Context: {data['context']['chat_filter']}")
+                        # Show filter context if active
+                        active_filters = data.get("filters", {})
+                        if active_filters.get("chat_name"):
+                            st.caption(f"📍 Chat: {active_filters['chat_name']}")
                     else:
                         error_data = response.json()
                         answer = f"❌ Error ({response.status_code}): {error_data.get('error', 'Unknown error')}"
@@ -546,4 +482,4 @@ with tab_search:
 
 # Footer
 st.markdown("---")
-st.caption("WhatsApp RAG Assistant • Powered by LlamaIndex + Qdrant • Session-aware context tracking")
+st.caption("WhatsApp RAG Assistant • Powered by LlamaIndex CondensePlusContextChatEngine + Qdrant")

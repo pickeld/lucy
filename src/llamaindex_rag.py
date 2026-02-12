@@ -1,7 +1,8 @@
 """LlamaIndex RAG (Retrieval Augmented Generation) for WhatsApp messages.
 
 Uses Qdrant as vector store and OpenAI embeddings for semantic search.
-Replaces the previous LangChain-based RAG implementation.
+Uses LlamaIndex CondensePlusContextChatEngine for multi-turn conversations
+with automatic query reformulation and Redis-backed chat memory.
 
 Qdrant Dashboard: http://localhost:6333/dashboard
 """
@@ -21,9 +22,13 @@ from llama_index.core import (
     StorageContext,
     VectorStoreIndex,
 )
-from llama_index.core.schema import NodeWithScore, TextNode
+from llama_index.core.chat_engine import CondensePlusContextChatEngine
+from llama_index.core.memory import ChatMemoryBuffer
+from llama_index.core.retrievers import BaseRetriever
+from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.llms.openai import OpenAI as LlamaIndexOpenAI
+from llama_index.storage.chat_store.redis import RedisChatStore
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
@@ -64,10 +69,68 @@ def format_timestamp(timestamp: str, timezone: str = "Asia/Jerusalem") -> str:
         return str(timestamp)
 
 
+class WhatsAppRetriever(BaseRetriever):
+    """Custom retriever that wraps existing hybrid search with metadata filters.
+    
+    Delegates to LlamaIndexRAG.search() which handles:
+    - Vector similarity search (Qdrant)
+    - Full-text search on metadata (sender, chat_name, message)
+    - Reciprocal Rank Fusion for merging results
+    - Minimum similarity score thresholding
+    
+    This preserves all existing search capabilities while integrating
+    with LlamaIndex's CondensePlusContextChatEngine.
+    """
+    
+    def __init__(
+        self,
+        rag: "LlamaIndexRAG",
+        k: int = 10,
+        filter_chat_name: Optional[str] = None,
+        filter_sender: Optional[str] = None,
+        filter_days: Optional[int] = None,
+        **kwargs: Any,
+    ):
+        """Initialize the WhatsApp retriever.
+        
+        Args:
+            rag: The LlamaIndexRAG instance to delegate search to
+            k: Number of results to retrieve
+            filter_chat_name: Optional filter by chat/group name
+            filter_sender: Optional filter by sender name
+            filter_days: Optional filter by recency in days
+        """
+        super().__init__(**kwargs)
+        self._rag = rag
+        self._k = k
+        self._filter_chat_name = filter_chat_name
+        self._filter_sender = filter_sender
+        self._filter_days = filter_days
+    
+    def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
+        """Retrieve relevant WhatsApp messages using hybrid search.
+        
+        Args:
+            query_bundle: The query bundle from the chat engine
+            
+        Returns:
+            List of NodeWithScore from hybrid search
+        """
+        return self._rag.search(
+            query=query_bundle.query_str,
+            k=self._k,
+            filter_chat_name=self._filter_chat_name,
+            filter_sender=self._filter_sender,
+            filter_days=self._filter_days,
+        )
+
+
 class LlamaIndexRAG:
     """LlamaIndex-based RAG for WhatsApp message search and retrieval.
     
     Uses Qdrant server as vector store and OpenAI embeddings.
+    Uses CondensePlusContextChatEngine for multi-turn conversations
+    with automatic query reformulation and Redis-backed chat memory.
     Connects to Qdrant server at QDRANT_HOST:QDRANT_PORT (default: localhost:6333).
     
     Dashboard available at: http://localhost:6333/dashboard
@@ -77,6 +140,7 @@ class LlamaIndexRAG:
     _index = None
     _qdrant_client = None
     _vector_store = None
+    _chat_store = None
     
     COLLECTION_NAME = settings.rag_collection_name
     VECTOR_SIZE = 1536  # OpenAI embedding dimension
@@ -890,134 +954,121 @@ class LlamaIndexRAG:
             logger.error(f"RAG search failed: {e}")
             return []
     
-    def query(
-        self,
-        question: str,
-        k: int = 10,
-        filter_chat_name: Optional[str] = None,
-        filter_sender: Optional[str] = None,
-        filter_days: Optional[int] = None,
-        conversation_history: Optional[List[Dict[str, str]]] = None
-    ) -> str:
-        """Query the RAG system with a natural language question.
+    # =========================================================================
+    # Chat Engine (LlamaIndex built-in conversation management)
+    # =========================================================================
+    
+    @property
+    def chat_store(self) -> RedisChatStore:
+        """Get or create the Redis-backed chat store (singleton).
         
-        Uses LlamaIndex query engine with retrieved context.
-        
-        Args:
-            question: Natural language question
-            k: Number of context documents to retrieve
-            filter_chat_name: Optional filter by chat/group name
-            filter_sender: Optional filter by sender name
-            filter_days: Optional filter by number of days
-            conversation_history: Optional previous conversation messages
-            
-        Returns:
-            AI-generated answer based on retrieved context
+        Uses RedisChatStore from llama-index-storage-chat-store-redis
+        for automatic persistence of conversation history in Redis.
         """
-        try:
-            # Ensure LLM is configured (lazy init for faster startup)
-            self._ensure_llm_configured()
-            
-            # Get relevant documents
-            results = self.search(
-                query=question,
-                k=k,
-                filter_chat_name=filter_chat_name,
-                filter_sender=filter_sender,
-                filter_days=filter_days
+        if LlamaIndexRAG._chat_store is None:
+            redis_url = f"redis://{settings.redis_host}:{settings.redis_port}"
+            ttl_seconds = int(settings.session_ttl_minutes) * 60
+            LlamaIndexRAG._chat_store = RedisChatStore(
+                redis_url=redis_url,
+                ttl=ttl_seconds,
             )
-            
-            # Build context from results with token-aware truncation
-            context_parts = []
-            total_tokens = 0
-            
-            try:
-                import tiktoken
-                enc = tiktoken.encoding_for_model("gpt-4o")
-            except (ImportError, KeyError):
-                enc = None
-            
-            for result in results:
-                # Access text safely - our search method ensures nodes have valid text
-                node_text = getattr(result.node, 'text', None) or getattr(result.node, 'get_content', lambda: '')()
-                if not node_text:
-                    continue
-                
-                # Estimate token count
-                if enc:
-                    text_tokens = len(enc.encode(node_text))
-                else:
-                    text_tokens = len(node_text) // 4  # Rough fallback: ~4 chars/token
-                
-                if total_tokens + text_tokens > self.MAX_CONTEXT_TOKENS:
-                    logger.debug(
-                        f"Context token limit reached ({total_tokens}/{self.MAX_CONTEXT_TOKENS}), "
-                        f"using {len(context_parts)} of {len(results)} results"
-                    )
-                    break
-                
-                context_parts.append(node_text)
-                total_tokens += text_tokens
-            
-            context = "\n".join(context_parts) if context_parts else "[No messages found in the archive]"
-            
-            # Get current date/time
-            tz = ZoneInfo("Asia/Jerusalem")
-            now = datetime.now(tz)
-            current_datetime = now.strftime("%A, %B %d, %Y at %H:%M")
-            hebrew_day = {
-                "Monday": "יום שני",
-                "Tuesday": "יום שלישי",
-                "Wednesday": "יום רביעי",
-                "Thursday": "יום חמישי",
-                "Friday": "יום שישי",
-                "Saturday": "שבת",
-                "Sunday": "יום ראשון"
-            }.get(now.strftime("%A"), now.strftime("%A"))
-            hebrew_date = f"{hebrew_day}, {now.day}/{now.month}/{now.year} בשעה {now.strftime('%H:%M')}"
-            
-            # Build prompt with conversation history
-            history_text = ""
-            if conversation_history:
-                history_parts = []
-                for msg in conversation_history:
-                    role = msg.get("role", "user")
-                    content = msg.get("content", "")
-                    history_parts.append(f"{role.capitalize()}: {content}")
-                history_text = "\n\nConversation History:\n" + "\n".join(history_parts)
-            
-            # Create query prompt with structured instructions
-            prompt = f"""You are a helpful AI assistant for a WhatsApp message archive search system.
-You have access to retrieved messages from the archive below.
+            logger.info(f"RedisChatStore initialized at {redis_url} (TTL={ttl_seconds}s)")
+        return LlamaIndexRAG._chat_store
+    
+    def _build_system_prompt(self) -> str:
+        """Build the system prompt with current date/time.
+        
+        Returns:
+            System prompt string with dynamic date injection
+        """
+        tz = ZoneInfo("Asia/Jerusalem")
+        now = datetime.now(tz)
+        current_datetime = now.strftime("%A, %B %d, %Y at %H:%M")
+        hebrew_day = {
+            "Monday": "יום שני",
+            "Tuesday": "יום שלישי",
+            "Wednesday": "יום רביעי",
+            "Thursday": "יום חמישי",
+            "Friday": "יום שישי",
+            "Saturday": "שבת",
+            "Sunday": "יום ראשון"
+        }.get(now.strftime("%A"), now.strftime("%A"))
+        hebrew_date = f"{hebrew_day}, {now.day}/{now.month}/{now.year} בשעה {now.strftime('%H:%M')}"
+        
+        return f"""You are a helpful AI assistant for a WhatsApp message archive search system.
+You have access to retrieved messages from the archive that will be provided as context.
 
 Current Date/Time: {current_datetime}
 תאריך ושעה נוכחיים: {hebrew_date}
 
-=== Retrieved Messages ({len(context_parts)} results) ===
-{context}
-=== End of Retrieved Messages ==={history_text}
-
-User Question: {question}
-
 Instructions:
-1. ANALYZE the retrieved messages above to find information relevant to the question.
-2. CITE specific messages when possible (mention who said what and when).
+1. ANALYZE the retrieved messages to find information relevant to the question.
+2. CITE specific messages when possible — mention who said what and when.
 3. If multiple messages are relevant, SYNTHESIZE them into a coherent answer.
 4. If the retrieved messages don't contain enough information to answer confidently, say so clearly — do NOT fabricate information.
 5. If the question is general (like "what day is today?"), answer directly without referencing the archive.
 6. Answer in the SAME LANGUAGE as the question.
 7. Be concise but thorough. Prefer specific facts over vague summaries."""
-
-            # Use LlamaIndex LLM for response
-            response = Settings.llm.complete(prompt)
-            answer = str(response)
+    
+    def create_chat_engine(
+        self,
+        conversation_id: str,
+        filter_chat_name: Optional[str] = None,
+        filter_sender: Optional[str] = None,
+        filter_days: Optional[int] = None,
+        k: int = 10,
+    ) -> CondensePlusContextChatEngine:
+        """Create a chat engine with memory and filters for a conversation.
+        
+        The chat engine automatically handles:
+        - Condensing follow-up questions into standalone questions
+        - Retrieving relevant context using hybrid search
+        - Maintaining conversation history in Redis
+        - Generating answers with full context
+        
+        Args:
+            conversation_id: Unique conversation identifier (used as Redis key)
+            filter_chat_name: Optional filter by chat/group name
+            filter_sender: Optional filter by sender name
+            filter_days: Optional filter by recency in days
+            k: Number of context documents to retrieve
             
-            logger.info(f"RAG query answered: {question[:50]}... (context_docs={len(results)})")
-            return answer
-            
-        except Exception as e:
-            logger.error(f"RAG query failed: {e}")
-            return f"Sorry, I encountered an error: {str(e)}"
+        Returns:
+            CondensePlusContextChatEngine ready for .chat() calls
+        """
+        # Ensure LLM is configured (lazy init for faster startup)
+        self._ensure_llm_configured()
+        
+        # Memory backed by Redis with token limit
+        token_limit = int(settings.session_max_history) * 200  # ~200 tokens per turn
+        memory = ChatMemoryBuffer.from_defaults(
+            chat_store=self.chat_store,
+            chat_store_key=conversation_id,
+            token_limit=token_limit,
+        )
+        
+        # Custom retriever wrapping existing hybrid search
+        retriever = WhatsAppRetriever(
+            rag=self,
+            k=k,
+            filter_chat_name=filter_chat_name,
+            filter_sender=filter_sender,
+            filter_days=filter_days,
+        )
+        
+        # Build system prompt with current datetime
+        system_prompt = self._build_system_prompt()
+        
+        engine = CondensePlusContextChatEngine.from_defaults(
+            retriever=retriever,
+            memory=memory,
+            llm=Settings.llm,
+            system_prompt=system_prompt,
+            verbose=(settings.get("log_level", "INFO") == "DEBUG"),
+        )
+        
+        logger.debug(f"Created chat engine for conversation {conversation_id}")
+        return engine
     
     def get_stats(self) -> Dict[str, Any]:
         """Get statistics about the vector store.

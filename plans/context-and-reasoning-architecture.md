@@ -1,5 +1,11 @@
 # Context Management and Reasoning Architecture
 
+> **⚠️ SUPERSEDED**: The custom session management described in this document (Phase 1) has been
+> replaced by LlamaIndex's built-in `CondensePlusContextChatEngine` + `RedisChatStore` + `ChatMemoryBuffer`.
+> See [`plans/llamaindex-chat-engine-migration.md`](llamaindex-chat-engine-migration.md) for the current approach.
+> The `src/session/` module has been deleted. Conversation history, query reformulation, and
+> context management are now handled natively by LlamaIndex's chat engine.
+
 ## Executive Summary
 
 This document outlines a comprehensive architecture for maintaining context and enabling advanced reasoning when querying WhatsApp group chats. The solution addresses three critical capabilities:
