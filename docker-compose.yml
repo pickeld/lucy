@@ -33,43 +33,7 @@ services:
     env_file:
       - .env
     restart: unless-stopped
-  # NOTE: PostgreSQL is currently not used by the application.
-  # It was originally provisioned for LangGraph checkpointer which has been removed.
-  # Kept here for future use (analytics, message metadata, etc.).
-  # Uncomment if needed, or remove to save resources.
-  #
-  # db:
-  #   image: pgvector/pgvector:pg17        # Postgres + pgvector baked in
-  #   container_name: db
-  #   restart: unless-stopped
-  #   environment:
-  #     POSTGRES_DB: langgraph
-  #     POSTGRES_USER: postgres
-  #     POSTGRES_PASSWORD: postgres
-  #   ports:
-  #     - "5432:5432"
-  #   volumes:
-  #     - pg_data:/var/lib/postgresql/data
-  #     - ./scripts:/docker-entrypoint-initdb.d
-  #   healthcheck:
-  #     test: ["CMD-SHELL", "pg_isready -U postgres"]
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 5
-  # pgadmin:
-  #   image: dpage/pgadmin4:latest
-  #   restart: unless-stopped
-  #   environment:
-  #     PGADMIN_DEFAULT_EMAIL: admin@local.dev
-  #     PGADMIN_DEFAULT_PASSWORD: admin123
-  #   ports:
-  #     - "5080:80"
-  #   volumes:
-  #     - pgadmin_data:/var/lib/pgadmin
-
-  # Qdrant - Vector Database with built-in Web UI Dashboard
-  # API: http://localhost:6333
-  # Dashboard: http://localhost:6333/dashboard
+ 
   qdrant:
     image: qdrant/qdrant:latest
     container_name: qdrant

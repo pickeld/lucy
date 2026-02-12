@@ -60,6 +60,7 @@ _DEFAULTS = {
     "show_settings": False,
     "renaming_conversation_id": None,
     "sidebar_search": "",
+    "menu_open_id": None,
 }
 
 for key, default in _DEFAULTS.items():

@@ -135,19 +135,49 @@ section[data-testid="stSidebar"] .stButton > button[data-testid="stBaseButton-pr
     border-style: solid !important;
 }
 
-/* Action buttons (Rename / Delete) — very small, muted */
-section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] .stButton > button {
-    font-size: 0.72rem !important;
-    padding: 4px 8px !important;
+/* Three-dot (⋯) menu button — small, subtle, blends with sidebar */
+/* Targets the narrow column button in conversation rows */
+section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child .stButton > button {
+    background: transparent !important;
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    color: #555 !important;
+    padding: 2px !important;
     min-height: 0 !important;
-    opacity: 0.7 !important;
-    color: #999 !important;
+    font-size: 1rem !important;
+    border-radius: 4px !important;
+    line-height: 1 !important;
+    opacity: 0.3;
+    transition: opacity 0.15s ease;
 }
 
-section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] .stButton > button:hover {
+section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child .stButton > button:hover {
     opacity: 1 !important;
     color: #ECECEC !important;
     background-color: #333 !important;
+}
+
+/* Inline action buttons (Rename / Delete) — small, muted */
+section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] .stButton > button[data-testid="stBaseButton-secondary"] {
+    font-size: 0.75rem !important;
+    padding: 4px 8px !important;
+    min-height: 0 !important;
+    opacity: 0.8 !important;
+    color: #AAA !important;
+    border: 1px solid #444 !important;
+    border-radius: 6px !important;
+    font-size: 0.82rem !important;
+    text-align: left !important;
+}
+
+section[data-testid="stSidebar"] .stPopover [data-testid="stPopoverBody"] .stButton > button:hover {
+    background-color: #3A3A3A !important;
+}
+
+/* Conversation rows — tighter alignment */
+section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] {
+    align-items: center !important;
 }
 
 /* =======================================================================
