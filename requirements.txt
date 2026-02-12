@@ -20,9 +20,6 @@ llama-index-vector-stores-qdrant>=0.2.0
 # Vector Store
 qdrant-client>=1.7.0
 
-# Database (for conversation memory)
-psycopg[binary]
-
 # Data validation
 pydantic>=2.0
 
