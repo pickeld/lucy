@@ -6,7 +6,8 @@ import logging
 import sys
 import os
 import uuid
-from typing import Optional, Dict, Any
+from datetime import datetime, timezone
+from typing import Optional, Dict, Any, List
 
 # Configure logging to stderr (which Streamlit doesn't capture)
 logging.basicConfig(
@@ -36,7 +37,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom CSS — WhatsApp-inspired theme
+# Custom CSS — WhatsApp-inspired theme + chat list styles
 st.markdown("""
 <style>
     .stApp {
@@ -84,6 +85,23 @@ st.markdown("""
     .status-disconnected {
         color: #dc3545;
         font-weight: bold;
+    }
+    /* Chat list item styles */
+    .chat-item-active {
+        background-color: #e8f4ea;
+        border-left: 3px solid #25D366;
+        padding: 4px 8px;
+        border-radius: 4px;
+        margin-bottom: 2px;
+    }
+    .chat-item {
+        padding: 4px 8px;
+        border-radius: 4px;
+        margin-bottom: 2px;
+    }
+    .chat-time {
+        font-size: 0.7rem;
+        color: #888;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -169,17 +187,94 @@ def export_chat_history(messages: list) -> str:
     return "\n".join(lines)
 
 
+# =============================================================================
+# CONVERSATION API HELPERS
+# =============================================================================
+
+def fetch_conversations(api_url: str, limit: int = 50) -> List[Dict[str, Any]]:
+    """Fetch the list of previous conversations from the backend."""
+    try:
+        response = requests.get(
+            f"{api_url}/conversations",
+            params={"limit": limit},
+            timeout=10,
+        )
+        if response.status_code == 200:
+            return response.json().get("conversations", [])
+    except requests.exceptions.ConnectionError:
+        logger.warning("Connection error fetching conversations - API may not be running")
+    except Exception as e:
+        logger.error(f"Error fetching conversations: {e}")
+    return []
+
+
+def fetch_conversation(api_url: str, conversation_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch a single conversation with all messages."""
+    try:
+        response = requests.get(
+            f"{api_url}/conversations/{conversation_id}",
+            timeout=10,
+        )
+        if response.status_code == 200:
+            return response.json()
+    except Exception as e:
+        logger.error(f"Error fetching conversation {conversation_id}: {e}")
+    return None
+
+
 def delete_conversation(api_url: str, conversation_id: str) -> bool:
-    """Delete a conversation's data (filters + chat history)."""
+    """Delete a conversation's data (SQLite + Redis)."""
     try:
         response = requests.delete(
-            f"{api_url}/conversation/{conversation_id}",
-            timeout=10
+            f"{api_url}/conversations/{conversation_id}",
+            timeout=10,
         )
         return response.status_code == 200
     except Exception:
         pass
     return False
+
+
+def rename_conversation(api_url: str, conversation_id: str, title: str) -> bool:
+    """Rename a conversation."""
+    try:
+        response = requests.put(
+            f"{api_url}/conversations/{conversation_id}",
+            json={"title": title},
+            timeout=10,
+        )
+        return response.status_code == 200
+    except Exception:
+        pass
+    return False
+
+
+def relative_time(timestamp_str: Optional[str]) -> str:
+    """Convert an ISO timestamp string to a relative time display (e.g., '2h ago')."""
+    if not timestamp_str:
+        return ""
+    try:
+        # Parse ISO timestamp (SQLite format: 'YYYY-MM-DD HH:MM:SS' or ISO)
+        ts = timestamp_str.replace("T", " ").split(".")[0]
+        dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        diff = now - dt
+        seconds = int(diff.total_seconds())
+        if seconds < 60:
+            return "just now"
+        elif seconds < 3600:
+            mins = seconds // 60
+            return f"{mins}m ago"
+        elif seconds < 86400:
+            hours = seconds // 3600
+            return f"{hours}h ago"
+        elif seconds < 604800:
+            days = seconds // 86400
+            return f"{days}d ago"
+        else:
+            return dt.strftime("%d/%m/%Y")
+    except Exception:
+        return ""
 
 
 logger.info("✅ Imports and functions loaded successfully")
@@ -205,6 +300,10 @@ if "active_filters" not in st.session_state:
 if "api_url" not in st.session_state:
     st.session_state.api_url = API_BASE_URL
 
+# Track which conversation is being renamed (None = not renaming)
+if "renaming_conversation_id" not in st.session_state:
+    st.session_state.renaming_conversation_id = None
+
 
 # =============================================================================
 # SIDEBAR
@@ -217,11 +316,114 @@ with st.sidebar:
     logger.info("Rendering sidebar header...")
     print("Rendering sidebar header...", flush=True)
     st.image("https://upload.wikimedia.org/wikipedia/commons/6/6b/WhatsApp.svg", width=50)
+
+    # ------------------------------------------------------------------
+    # PREVIOUS CHATS SECTION (at top, like ChatGPT)
+    # ------------------------------------------------------------------
+
+    # New Chat button
+    if st.button("➕ New Chat", key="new_chat_btn", use_container_width=True, type="primary"):
+        st.session_state.conversation_id = None
+        st.session_state.messages = []
+        st.session_state.active_filters = {}
+        st.session_state.renaming_conversation_id = None
+        st.rerun()
+
+    api_url = st.session_state.api_url
+
+    # Fetch conversation list
+    conversations_list = fetch_conversations(api_url, limit=50)
+
+    if conversations_list:
+        st.caption(f"📝 Previous Chats ({len(conversations_list)})")
+
+        for convo in conversations_list:
+            convo_id = convo["id"]
+            convo_title = convo.get("title", "Untitled") or "Untitled"
+            convo_time = relative_time(convo.get("updated_at"))
+            msg_count = convo.get("message_count", 0)
+            is_active = convo_id == st.session_state.conversation_id
+
+            # Renaming mode for this conversation
+            if st.session_state.renaming_conversation_id == convo_id:
+                new_title = st.text_input(
+                    "Rename",
+                    value=convo_title,
+                    key=f"rename_input_{convo_id}",
+                    label_visibility="collapsed",
+                )
+                col_save, col_cancel = st.columns(2)
+                with col_save:
+                    if st.button("✓", key=f"rename_save_{convo_id}"):
+                        if new_title.strip():
+                            rename_conversation(api_url, convo_id, new_title.strip())
+                        st.session_state.renaming_conversation_id = None
+                        st.rerun()
+                with col_cancel:
+                    if st.button("✗", key=f"rename_cancel_{convo_id}"):
+                        st.session_state.renaming_conversation_id = None
+                        st.rerun()
+                continue
+
+            # Normal display: clickable conversation + action buttons
+            # Display title with active indicator
+            display_title = convo_title[:40] + ("…" if len(convo_title) > 40 else "")
+            prefix = "▶ " if is_active else ""
+            label = f"{prefix}{display_title}"
+
+            col_title, col_actions = st.columns([5, 2])
+            with col_title:
+                if st.button(
+                    label,
+                    key=f"load_{convo_id}",
+                    use_container_width=True,
+                    disabled=is_active,
+                ):
+                    # Load conversation from API
+                    loaded = fetch_conversation(api_url, convo_id)
+                    if loaded:
+                        st.session_state.conversation_id = convo_id
+                        st.session_state.messages = [
+                            {"role": m["role"], "content": m["content"]}
+                            for m in loaded.get("messages", [])
+                        ]
+                        st.session_state.active_filters = loaded.get("filters", {})
+                        st.session_state.renaming_conversation_id = None
+                        st.rerun()
+
+            with col_actions:
+                subcol1, subcol2 = st.columns(2)
+                with subcol1:
+                    if st.button("✏️", key=f"rename_{convo_id}", help="Rename"):
+                        st.session_state.renaming_conversation_id = convo_id
+                        st.rerun()
+                with subcol2:
+                    if st.button("🗑", key=f"del_{convo_id}", help="Delete"):
+                        delete_conversation(api_url, convo_id)
+                        # If we deleted the active conversation, clear state
+                        if convo_id == st.session_state.conversation_id:
+                            st.session_state.conversation_id = None
+                            st.session_state.messages = []
+                            st.session_state.active_filters = {}
+                        st.rerun()
+
+            # Show time and message count below title
+            if convo_time or msg_count:
+                time_str = convo_time or ""
+                count_str = f"{msg_count} msgs" if msg_count else ""
+                separator = " · " if time_str and count_str else ""
+                st.caption(f"    {time_str}{separator}{count_str}")
+
+    st.markdown("---")
+
+    # ------------------------------------------------------------------
+    # SETTINGS SECTION
+    # ------------------------------------------------------------------
     st.header("⚙️ Settings")
-    
+
     api_url = st.text_input("API URL", value=st.session_state.api_url)
     st.session_state.api_url = api_url
-    
+
     # Connection status indicator
     health = check_api_health(api_url)
     api_status = health.get("status", "unreachable")
@@ -232,10 +434,10 @@ with st.sidebar:
     else:
         st.markdown('<span class="status-disconnected">🔴 API Unreachable</span>', unsafe_allow_html=True)
     k_results = st.slider("Context documents (k)", min_value=1, max_value=50, value=10)
-    
+
     st.markdown("---")
     st.subheader("🔍 Filters")
-    
+
     # Get chat list for dropdown
     logger.info("Fetching chat list...")
     print("Fetching chat list...", flush=True)
@@ -249,7 +451,7 @@ with st.sidebar:
         index=0,
         format_func=lambda x: "All chats" if x == "" else x
     )
-    
+
     # Get sender list for dropdown
     logger.info("Fetching sender list...")
     print("Fetching sender list...", flush=True)
@@ -263,7 +465,7 @@ with st.sidebar:
         index=0,
         format_func=lambda x: "All senders" if x == "" else x
     )
-    
+
     # Date range filter
     DATE_RANGE_OPTIONS = {
         "All time": None,
@@ -280,13 +482,13 @@ with st.sidebar:
     filter_days = DATE_RANGE_OPTIONS[filter_date_range]
 
     st.markdown("---")
-    
+
     # Conversation info
     st.subheader("🧠 Conversation")
     if st.session_state.conversation_id:
         st.caption(f"ID: `{st.session_state.conversation_id[:8]}...`")
         st.caption(f"Messages: {len(st.session_state.messages)}")
-        
+
         # Show active filters
         filters = st.session_state.active_filters
         if filters:
@@ -294,29 +496,22 @@ with st.sidebar:
                 st.caption(f"💬 {filters['chat_name']}")
             if filters.get("sender"):
                 st.caption(f"👤 {filters['sender']}")
-        
-        col_new, col_export = st.columns(2)
-        with col_new:
-            if st.button("🔄 New", key="new_conversation"):
-                st.session_state.conversation_id = None
-                st.session_state.messages = []
-                st.session_state.active_filters = {}
-                st.rerun()
-        with col_export:
-            if st.session_state.messages:
-                export_text = export_chat_history(st.session_state.messages)
-                st.download_button(
-                    "📥 Export",
-                    data=export_text,
-                    file_name="chat_history.txt",
-                    mime="text/plain",
-                    key="export_chat",
-                )
+
+        if st.session_state.messages:
+            export_text = export_chat_history(st.session_state.messages)
+            st.download_button(
+                "📥 Export Chat",
+                data=export_text,
+                file_name="chat_history.txt",
+                mime="text/plain",
+                key="export_chat",
+                use_container_width=True,
+            )
     else:
         st.caption("No active conversation")
-    
+
     st.markdown("---")
-    
+
     # Show RAG stats
     st.subheader("📊 Statistics")
     stats = get_rag_stats(api_url)
@@ -342,7 +537,7 @@ with tab_chat:
     # Context indicator box
     filters = st.session_state.active_filters
     has_filters = filters.get("chat_name") or filters.get("sender")
-    
+
     if has_filters:
         context_parts = []
         if filters.get("chat_name"):
@@ -351,14 +546,14 @@ with tab_chat:
             context_parts.append(f"👤 **Sender:** {filters['sender']}")
         if filters.get("days"):
             context_parts.append(f"📅 **Days:** {filters['days']}")
-        
+
         st.markdown(
             f"""<div class="context-box">
             <span class="context-label">🧠 Active Filters:</span> {' | '.join(context_parts)}
             </div>""",
             unsafe_allow_html=True
         )
-    
+
     # Control buttons row
     col1, col2, col3 = st.columns([5, 1, 1])
     with col2:
@@ -373,23 +568,23 @@ with tab_chat:
             st.session_state.conversation_id = None
             st.session_state.active_filters = {}
             st.rerun()
-    
+
     # Display chat history
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-    
+
     # Question input
     question = st.chat_input("Ask a question about your WhatsApp messages...")
-    
+
     if question:
         # Add user message to chat history
         st.session_state.messages.append({"role": "user", "content": question})
-        
+
         # Display user message
         with st.chat_message("user"):
             st.markdown(question)
-        
+
         # Query the RAG endpoint
         answer = ""
         with st.chat_message("assistant"):
@@ -400,11 +595,11 @@ with tab_chat:
                         "question": question,
                         "k": k_results
                     }
-                    
+
                     # Include conversation ID if we have one
                     if st.session_state.conversation_id:
                         payload["conversation_id"] = st.session_state.conversation_id
-                    
+
                     # Include explicit filters from sidebar
                     if filter_chat.strip():
                         payload["filter_chat_name"] = filter_chat.strip()
@@ -412,25 +607,25 @@ with tab_chat:
                         payload["filter_sender"] = filter_sender.strip()
                     if filter_days is not None:
                         payload["filter_days"] = filter_days
-                    
+
                     # Call the RAG query endpoint
                     response = requests.post(
                         f"{api_url}/rag/query",
                         json=payload,
                         timeout=300
                     )
-                    
+
                     if response.status_code == 200:
                         data = response.json()
                         raw_answer = data.get("answer", "No answer received")
-                        
+
                         # Update conversation state from response
                         if data.get("conversation_id"):
                             st.session_state.conversation_id = data["conversation_id"]
-                        
+
                         if data.get("filters"):
                             st.session_state.active_filters = data["filters"]
-                        
+
                         # Parse response
                         if isinstance(raw_answer, str):
                             stripped = raw_answer.strip()
@@ -443,7 +638,7 @@ with tab_chat:
                                         raw_answer = json.loads(stripped)
                                     except json.JSONDecodeError:
                                         pass
-                        
+
                         if isinstance(raw_answer, dict):
                             answer = raw_answer.get("text", str(raw_answer))
                         elif isinstance(raw_answer, list):
@@ -456,9 +651,9 @@ with tab_chat:
                             answer = "\n".join(texts)
                         else:
                             answer = str(raw_answer)
-                        
+
                         st.markdown(answer)
-                        
+
                         # Show source citations as expandable section
                         sources = data.get("sources", [])
                         if sources:
@@ -469,14 +664,14 @@ with tab_chat:
                                     sender = src.get("sender", "Unknown")
                                     chat = src.get("chat_name", "Unknown")
                                     content = src.get("content", "")
-                                    
+
                                     st.markdown(
                                         f"**{i+1}. {sender}** in _{chat}_{score_str}\n\n"
                                         f"> {content[:200]}{'...' if len(content) > 200 else ''}"
                                     )
                                     if i < len(sources) - 1:
                                         st.divider()
-                        
+
                         # Show filter context if active
                         active_filters = data.get("filters", {})
                         if active_filters.get("chat_name"):
@@ -485,7 +680,7 @@ with tab_chat:
                         error_data = response.json()
                         answer = f"❌ Error ({response.status_code}): {error_data.get('error', 'Unknown error')}"
                         st.error(answer)
-                
+
                 except requests.exceptions.ConnectionError:
                     answer = "❌ Connection error: Could not connect to the API. Make sure the server is running."
                     st.error(answer)
@@ -495,7 +690,7 @@ with tab_chat:
                 except Exception as e:
                     answer = f"❌ Unexpected error: {str(e)}"
                     st.error(answer)
-        
+
         # Add assistant response to chat history
         st.session_state.messages.append({"role": "assistant", "content": answer})
 
@@ -504,13 +699,13 @@ with tab_chat:
 with tab_search:
     st.subheader("🔍 Semantic Search")
     st.caption("Search for specific messages using natural language")
-    
+
     search_query = st.text_input("Search query", placeholder="meeting tomorrow...")
-    
+
     col1, col2 = st.columns([1, 5])
     with col1:
         search_k = st.number_input("Results", min_value=1, max_value=100, value=20)
-    
+
     if st.button("🔍 Search", type="primary"):
         if search_query:
             with st.spinner("Searching..."):
@@ -525,23 +720,23 @@ with tab_search:
                         payload["filter_sender"] = filter_sender.strip()
                     if filter_days is not None:
                         payload["filter_days"] = filter_days
-                    
+
                     response = requests.post(
                         f"{api_url}/rag/search",
                         json=payload,
                         timeout=60
                     )
-                    
+
                     if response.status_code == 200:
                         data = response.json()
                         results = data.get("results", [])
-                        
+
                         st.success(f"Found {len(results)} results")
-                        
+
                         for i, result in enumerate(results):
                             with st.expander(f"📝 Result {i+1} (Score: {result.get('score', 'N/A'):.4f})", expanded=i < 3):
                                 st.markdown(result.get("content", "No content"))
-                                
+
                                 # Show metadata
                                 metadata = result.get("metadata", {})
                                 if metadata:
@@ -554,7 +749,7 @@ with tab_search:
                                         st.caption(f"📅 {metadata.get('timestamp', 'N/A')}")
                     else:
                         st.error(f"Search failed: {response.text}")
-                
+
                 except Exception as e:
                     st.error(f"Search error: {str(e)}")
         else:

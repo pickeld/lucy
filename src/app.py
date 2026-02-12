@@ -29,6 +29,9 @@ from utils.logger import logger
 from utils.redis_conn import get_redis_client
 print("✅ Utils imported", flush=True)
 
+import conversations_db
+print("✅ Conversations DB imported", flush=True)
+
 from whatsapp import create_whatsapp_message, group_manager
 print("✅ WhatsApp module imported", flush=True)
 
@@ -102,8 +105,8 @@ def set_conversation_filters(conversation_id: str, filters: Dict[str, str]) -> N
         logger.debug(f"Failed to set conversation filters: {e}")
 
 
-def delete_conversation(conversation_id: str) -> bool:
-    """Delete all data for a conversation (filters + chat history).
+def delete_conversation_data(conversation_id: str) -> bool:
+    """Delete all data for a conversation (Redis filters + chat history + SQLite).
     
     Args:
         conversation_id: The conversation identifier
@@ -111,16 +114,23 @@ def delete_conversation(conversation_id: str) -> bool:
     Returns:
         True if anything was deleted
     """
+    deleted_any = False
     try:
         redis = get_redis_client()
         filter_key = f"{FILTER_KEY_PREFIX}{conversation_id}"
-        deleted = redis.delete(filter_key)
-        # Chat history in RedisChatStore is keyed internally by conversation_id
-        # and will auto-expire via TTL set in RedisChatStore
-        return deleted > 0
+        if redis.delete(filter_key):
+            deleted_any = True
     except Exception as e:
-        logger.debug(f"Failed to delete conversation: {e}")
-        return False
+        logger.debug(f"Failed to delete Redis conversation data: {e}")
+    
+    # Delete from SQLite (persistent store)
+    try:
+        if conversations_db.delete_conversation(conversation_id):
+            deleted_any = True
+    except Exception as e:
+        logger.debug(f"Failed to delete SQLite conversation data: {e}")
+    
+    return deleted_any
 
 
 # =============================================================================
@@ -264,6 +274,27 @@ def rag_query():
         # Persist updated filters
         set_conversation_filters(conversation_id, filters)
         
+        # --- Conversation persistence: create if new ---
+        is_new_conversation = not conversations_db.conversation_exists(conversation_id)
+        if is_new_conversation:
+            title = conversations_db._generate_title(question)
+            conversations_db.create_conversation(
+                conversation_id=conversation_id,
+                title=title,
+                filters=filters,
+            )
+            logger.info(f"Created new conversation: {conversation_id} — '{title}'")
+        else:
+            # Update filters in SQLite if they changed
+            conversations_db.update_conversation_filters(conversation_id, filters)
+        
+        # --- Restore Redis chat memory from SQLite if expired ---
+        conversations_db.restore_chat_memory_if_needed(
+            conversation_id=conversation_id,
+            chat_store=rag.chat_store,
+            max_messages=int(settings.session_max_history) * 2,  # user+assistant pairs
+        )
+        
         # Create chat engine with filters and conversation memory
         chat_engine = rag.create_chat_engine(
             conversation_id=conversation_id,
@@ -276,6 +307,10 @@ def rag_query():
         # Single call handles: condense → retrieve → generate → store in memory
         response = chat_engine.chat(question)
         answer = str(response)
+        
+        # --- Persist messages to SQLite ---
+        conversations_db.add_message(conversation_id, "user", question)
+        conversations_db.add_message(conversation_id, "assistant", answer)
 
         # Extract source documents from the response for citations
         sources = []
@@ -562,12 +597,108 @@ def rag_reset():
 # CONVERSATION MANAGEMENT ENDPOINTS
 # =============================================================================
 
-@app.route("/conversation/<conversation_id>", methods=["DELETE"])
-def delete_conversation_endpoint(conversation_id: str):
-    """Delete a conversation's filters and chat history.
+@app.route("/conversations", methods=["GET"])
+def list_conversations_endpoint():
+    """List all conversations sorted by most recently updated.
     
-    Chat history in RedisChatStore auto-expires via TTL, but this
-    endpoint allows explicit cleanup.
+    Query params:
+        limit: Max number of conversations (default 50)
+        offset: Number to skip for pagination (default 0)
+    
+    Response:
+        {
+            "conversations": [
+                {
+                    "id": "uuid",
+                    "title": "What did John say about...",
+                    "created_at": "2024-01-15T10:30:00",
+                    "updated_at": "2024-01-15T10:35:00",
+                    "message_count": 4,
+                    "filters": {}
+                }
+            ]
+        }
+    """
+    try:
+        limit = min(request.args.get("limit", 50, type=int), 200)
+        offset = request.args.get("offset", 0, type=int)
+        convos = conversations_db.list_conversations(limit=limit, offset=offset)
+        return jsonify({"conversations": convos}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"List conversations error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/conversations/<conversation_id>", methods=["GET"])
+def get_conversation_endpoint(conversation_id: str):
+    """Get a single conversation with all its messages.
+    
+    Response:
+        {
+            "id": "uuid",
+            "title": "...",
+            "messages": [
+                {"role": "user", "content": "...", "created_at": "..."},
+                {"role": "assistant", "content": "...", "created_at": "..."}
+            ],
+            ...
+        }
+    """
+    try:
+        convo = conversations_db.get_conversation(conversation_id)
+        if not convo:
+            return jsonify({"error": "Conversation not found"}), 404
+        return jsonify(convo), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Get conversation error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/conversations", methods=["POST"])
+def create_conversation_endpoint():
+    """Create a new empty conversation.
+    
+    Request body (optional):
+        {
+            "title": "My conversation",
+            "filters": {"chat_name": "Work Group"}
+        }
+    
+    Response:
+        {
+            "id": "uuid",
+            "title": "...",
+            ...
+        }
+    """
+    try:
+        data = request.json or {}
+        conversation_id = str(uuid.uuid4())
+        title = data.get("title", "New Chat")
+        filters = data.get("filters", {})
+        
+        convo = conversations_db.create_conversation(
+            conversation_id=conversation_id,
+            title=title,
+            filters=filters,
+        )
+        return jsonify(convo), 201
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Create conversation error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/conversations/<conversation_id>", methods=["PUT"])
+def update_conversation_endpoint(conversation_id: str):
+    """Update a conversation (currently: rename title).
+    
+    Request body:
+        {
+            "title": "New title"
+        }
     
     Response:
         {
@@ -576,7 +707,39 @@ def delete_conversation_endpoint(conversation_id: str):
         }
     """
     try:
-        delete_conversation(conversation_id)
+        data = request.json or {}
+        title = data.get("title")
+        
+        if title is None:
+            return jsonify({"error": "Missing 'title' in request body"}), 400
+        
+        if not conversations_db.conversation_exists(conversation_id):
+            return jsonify({"error": "Conversation not found"}), 404
+        
+        conversations_db.update_conversation_title(conversation_id, title)
+        return jsonify({
+            "status": "ok",
+            "conversation_id": conversation_id,
+        }), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Update conversation error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/conversations/<conversation_id>", methods=["DELETE"])
+@app.route("/conversation/<conversation_id>", methods=["DELETE"])  # backwards compat
+def delete_conversation_endpoint(conversation_id: str):
+    """Delete a conversation and all its data (SQLite + Redis).
+    
+    Response:
+        {
+            "status": "ok",
+            "conversation_id": "..."
+        }
+    """
+    try:
+        delete_conversation_data(conversation_id)
         return jsonify({
             "status": "ok",
             "conversation_id": conversation_id,
