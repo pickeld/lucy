@@ -110,19 +110,32 @@ class WhatsAppRetriever(BaseRetriever):
     def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         """Retrieve relevant WhatsApp messages using hybrid search.
         
+        Always returns at least one node so the chat engine's synthesizer
+        can generate a proper response (it returns "Empty Response" on empty input).
+        
         Args:
             query_bundle: The query bundle from the chat engine
             
         Returns:
-            List of NodeWithScore from hybrid search
+            List of NodeWithScore from hybrid search (never empty)
         """
-        return self._rag.search(
+        results = self._rag.search(
             query=query_bundle.query_str,
             k=self._k,
             filter_chat_name=self._filter_chat_name,
             filter_sender=self._filter_sender,
             filter_days=self._filter_days,
         )
+        
+        # Ensure at least one node so the synthesizer doesn't return "Empty Response"
+        if not results:
+            placeholder = TextNode(
+                text="[No relevant messages found in the WhatsApp archive for this query]",
+                metadata={"source": "system", "note": "no_results"},
+            )
+            results = [NodeWithScore(node=placeholder, score=0.0)]
+        
+        return results
 
 
 class LlamaIndexRAG:
@@ -1059,11 +1072,24 @@ Instructions:
         # Build system prompt with current datetime
         system_prompt = self._build_system_prompt()
         
+        # Context prompt template — handles both populated and empty context
+        context_prompt = (
+            "Here are the relevant messages from the WhatsApp archive:\n"
+            "-----\n"
+            "{context_str}\n"
+            "-----\n"
+            "If no messages are shown above, inform the user that no relevant "
+            "messages were found in the archive for their query and suggest "
+            "they try different keywords or broaden their search.\n"
+            "Use the chat history and the context above to answer the user's question."
+        )
+        
         engine = CondensePlusContextChatEngine.from_defaults(
             retriever=retriever,
             memory=memory,
             llm=Settings.llm,
             system_prompt=system_prompt,
+            context_prompt=context_prompt,
             verbose=(settings.get("log_level", "INFO") == "DEBUG"),
         )
         
