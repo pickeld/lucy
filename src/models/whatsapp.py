@@ -131,45 +131,32 @@ class WhatsAppMessageDocument(BaseRAGDocument):
         return f"[{formatted_time}] {self.sender} in {self.chat_name}: {self.message}"
     
     def get_embedding_text(self) -> str:
-        """Get optimized text for embedding generation.
+        """Get lean text optimized for embedding generation.
         
-        Creates a semantically rich text that helps embeddings understand:
-        - Who sent the message (full name as sender)
-        - Where it was sent (chat/group name)
-        - The message content
+        Focuses the embedding on the actual message content with minimal
+        sender/chat context. Metadata like timestamps, first/last name splits,
+        and chat type are NOT included because:
+        - They are already stored as filterable Qdrant payload fields
+        - They dilute the semantic signal of the actual message
+        - Date-based queries should use timestamp filters, not embedding similarity
         
-        The format is designed to answer questions like:
-        - "What did X say?"
-        - "What is X's last name?"
-        - "Messages in Y group"
+        The sender name IS included because users often ask "what did X say about Y?"
+        and the name must be in the embedding for this to match semantically.
         
         Returns:
             Text optimized for semantic embedding and retrieval
         """
-        formatted_time = self.format_timestamp()
-        
-        # Parse sender name parts for better semantic understanding
-        sender_parts = self.sender.split() if self.sender else []
-        
-        # Build semantically explicit text
-        parts = [f"Date: {formatted_time}"]
+        parts = []
         
         if self.sender:
-            parts.append(f"Sender name: {self.sender}")
-            # If sender has multiple parts (first + last name), make it explicit
-            if len(sender_parts) >= 2:
-                parts.append(f"First name: {sender_parts[0]}")
-                parts.append(f"Last name: {' '.join(sender_parts[1:])}")
+            parts.append(self.sender)
         
-        if self.chat_name:
-            if self.is_group:
-                parts.append(f"Group: {self.chat_name}")
-            else:
-                parts.append(f"Chat with: {self.chat_name}")
+        if self.chat_name and self.is_group:
+            parts.append(f"in {self.chat_name}")
         
-        parts.append(f"Message: {self.message}")
+        parts.append(self.message)
         
-        return " | ".join(parts)
+        return " ".join(parts)
     
     def to_llama_index_node(self) -> "TextNode":
         """Convert to LlamaIndex TextNode with WhatsApp-specific metadata.
