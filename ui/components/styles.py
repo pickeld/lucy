@@ -90,27 +90,43 @@ section[data-testid="stSidebar"] hr {
    2. SIDEBAR BUTTONS
    ======================================================================= */
 
-/* Default sidebar buttons — ghost style */
+/* All sidebar buttons — clean, borderless by default (conversation items) */
 section[data-testid="stSidebar"] .stButton > button {
     background-color: transparent !important;
     color: #ECECEC !important;
-    border: 1px solid #444 !important;
+    border: none !important;
     border-radius: 8px !important;
     transition: background-color 0.15s ease;
-    font-size: 0.875rem !important;
+    font-size: 0.85rem !important;
+    text-align: left !important;
+    padding: 8px 12px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
 }
 
 section[data-testid="stSidebar"] .stButton > button:hover {
-    background-color: #2A2A2A !important;
-    border-color: #555 !important;
+    background-color: #212121 !important;
 }
 
-/* Primary button (New Chat) */
+/* Active/disabled conversation button — subtle highlight */
+section[data-testid="stSidebar"] .stButton > button:disabled {
+    background-color: #2A2A2A !important;
+    color: #ECECEC !important;
+    opacity: 1 !important;
+    border-left: 3px solid #10A37F !important;
+    cursor: default !important;
+}
+
+/* Primary button (New Chat) — distinct with dashed border */
 section[data-testid="stSidebar"] .stButton > button[kind="primary"],
 section[data-testid="stSidebar"] .stButton > button[data-testid="stBaseButton-primary"] {
     background-color: transparent !important;
     border: 1px dashed #555 !important;
     color: #ECECEC !important;
+    text-align: center !important;
+    padding: 10px 16px !important;
+    margin-bottom: 8px !important;
 }
 
 section[data-testid="stSidebar"] .stButton > button[kind="primary"]:hover,
@@ -119,39 +135,18 @@ section[data-testid="stSidebar"] .stButton > button[data-testid="stBaseButton-pr
     border-style: solid !important;
 }
 
-/* Conversation list buttons — minimal / no border */
-section[data-testid="stSidebar"] .conv-list .stButton > button {
-    border: none !important;
-    text-align: left !important;
-    padding: 6px 10px !important;
-    border-radius: 8px !important;
-    font-size: 0.85rem !important;
-    white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
-}
-
-section[data-testid="stSidebar"] .conv-list .stButton > button:hover {
-    background-color: #212121 !important;
-}
-
-/* Active conversation button */
-section[data-testid="stSidebar"] .conv-active .stButton > button {
-    background-color: #2A2A2A !important;
-    border-left: 3px solid #10A37F !important;
-}
-
-/* Small action buttons (rename, delete) */
-section[data-testid="stSidebar"] .conv-actions .stButton > button {
-    border: none !important;
-    padding: 2px 6px !important;
+/* Action buttons (Rename / Delete) — very small, muted */
+section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] .stButton > button {
+    font-size: 0.72rem !important;
+    padding: 4px 8px !important;
     min-height: 0 !important;
-    font-size: 0.75rem !important;
-    opacity: 0.6;
+    opacity: 0.7 !important;
+    color: #999 !important;
 }
 
-section[data-testid="stSidebar"] .conv-actions .stButton > button:hover {
-    opacity: 1;
+section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] .stButton > button:hover {
+    opacity: 1 !important;
+    color: #ECECEC !important;
     background-color: #333 !important;
 }
 
