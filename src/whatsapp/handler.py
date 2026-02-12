@@ -87,6 +87,16 @@ class WhatsappMSG(ABC):
         self.timestamp: Optional[int] = payload.get("timestamp")
         self.message: Optional[str] = payload.get("body", None)
         self.to: Optional[str] = payload.get("to", None)
+        self.from_me: bool = payload.get("fromMe", False)
+        
+        # For outgoing direct messages, resolve the recipient so we can
+        # identify the chat by the other person's name (not "Me").
+        self.recipient: Optional[Contact] = None
+        if self.from_me and not self.is_group and self.to:
+            try:
+                self.recipient = contact_manager.get_contact_by_id(self.to)
+            except Exception as e:
+                logger.warning(f"Failed to resolve recipient {self.to}: {e}")
 
     def __str__(self) -> str:
         return f"[{self.content_type.value}] {self.group.name}/{self.contact.name}: {self.message}"
@@ -112,10 +122,19 @@ class WhatsappMSG(ABC):
         # Format timestamp
         timestamp_data = self._format_timestamp()
         
-        # Determine chat info
-        chat_id = self.group.id if self.is_group else self.contact.id
-        chat_name = self.group.name if self.is_group else self.contact.name
-        chat_type = "group" if self.is_group else "direct"
+        # Determine chat info — for outgoing DMs, use recipient as the chat
+        if self.is_group:
+            chat_id = self.group.id
+            chat_name = self.group.name
+            chat_type = "group"
+        elif self.from_me and self.recipient:
+            chat_id = self.recipient.id
+            chat_name = self.recipient.name
+            chat_type = "direct"
+        else:
+            chat_id = self.contact.id
+            chat_name = self.contact.name
+            chat_type = "direct"
         
         # Format message for AI models (same format used in Thread.remember())
         formatted_time = timestamp_data.get("formatted", "")
@@ -179,9 +198,16 @@ class WhatsappMSG(ABC):
         if not self.message:
             return None
         
-        # Determine chat_id and chat_name based on group/direct message
-        chat_id = self.group.id if self.is_group else self.contact.id
-        chat_name = self.group.name if self.is_group else self.contact.name
+        # Determine chat_id and chat_name — for outgoing DMs, use recipient
+        if self.is_group:
+            chat_id = self.group.id
+            chat_name = self.group.name
+        elif self.from_me and self.recipient:
+            chat_id = self.recipient.id
+            chat_name = self.recipient.name
+        else:
+            chat_id = self.contact.id
+            chat_name = self.contact.name
         
         return WhatsAppMessageDocument.from_webhook_payload(
             thread_id=thread_id,
@@ -336,8 +362,16 @@ class MediaMessageBase(WhatsappMSG):
         # Include caption or description in the RAG document
         message_content = self.message or f"[{self.content_type.value} attachment]"
         
-        chat_id = self.group.id if self.is_group else self.contact.id
-        chat_name = self.group.name if self.is_group else self.contact.name
+        # Determine chat_id and chat_name — for outgoing DMs, use recipient
+        if self.is_group:
+            chat_id = self.group.id
+            chat_name = self.group.name
+        elif self.from_me and self.recipient:
+            chat_id = self.recipient.id
+            chat_name = self.recipient.name
+        else:
+            chat_id = self.contact.id
+            chat_name = self.contact.name
         
         return WhatsAppMessageDocument.from_webhook_payload(
             thread_id=thread_id,

@@ -912,8 +912,21 @@ def _process_webhook_payload(payload: Dict[str, Any]) -> None:
     try:
         msg = create_whatsapp_message(payload)
 
-        chat_id = msg.group.id if msg.is_group else msg.contact.number
-        chat_name = msg.group.name if msg.is_group else msg.contact.name
+        # Determine chat identification:
+        # - Group messages: use group info
+        # - Outgoing DMs (from_me): use recipient as the chat identity
+        # - Incoming DMs: use sender contact as the chat identity
+        if msg.is_group:
+            chat_id = msg.group.id
+            chat_name = msg.group.name
+        elif msg.from_me and msg.recipient:
+            chat_id = msg.recipient.number or msg.recipient.id
+            chat_name = msg.recipient.name
+        else:
+            chat_id = msg.contact.number
+            chat_name = msg.contact.name
+
+        sender = str(msg.contact.name or "Unknown")
         logger.info(f"Processing message: {chat_name} ({chat_id}) - {msg.message}")
 
         # Store message in RAG vector store
@@ -923,7 +936,7 @@ def _process_webhook_payload(payload: Dict[str, Any]) -> None:
                 chat_id=chat_id or "UNKNOWN",
                 chat_name=chat_name or "UNKNOWN",
                 is_group=msg.is_group,
-                sender=str(msg.contact.name),
+                sender=sender,
                 message=msg.message,
                 timestamp=str(msg.timestamp) if msg.timestamp else "0"
             )

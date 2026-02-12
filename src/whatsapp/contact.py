@@ -87,6 +87,34 @@ class ContactManager:
         contact.id = _participant or _from
         return contact
 
+    def get_contact_by_id(self, contact_id: str) -> Contact:
+        """Get a Contact object by WhatsApp ID, using cache when available.
+        
+        Unlike get_contact() which parses a webhook payload, this method
+        takes a raw WhatsApp ID (e.g. '972501234567@c.us') and returns
+        the resolved Contact.
+        
+        Args:
+            contact_id: The WhatsApp contact ID (e.g., '972501234567@c.us')
+            
+        Returns:
+            Contact object with resolved information
+        """
+        contact_data = redis_get(f"contact:{contact_id}")
+        if not contact_data:
+            contact_data = self.fetch_contact(contact_id)
+            if contact_data:
+                redis_set(f"contact:{contact_id}", contact_data)
+        contact = Contact()
+        if contact_data:
+            contact.extract(contact_data)
+        else:
+            contact.id = contact_id
+            # Extract phone number from the ID (strip @c.us suffix)
+            if contact_id and contact_id.endswith("@c.us"):
+                contact.number = contact_id.replace("@c.us", "")
+        return contact
+
     def fetch_contact(self, contact_id: str) -> Dict[str, Any]:
         """Fetch contact information from WAHA API.
         
