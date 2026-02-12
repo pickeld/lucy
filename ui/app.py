@@ -71,11 +71,12 @@ st.markdown("""
 # API HELPER FUNCTIONS
 # =============================================================================
 
+@st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_chat_list(api_url: str) -> list:
-    """Fetch all unique chat names from the RAG API."""
+    """Fetch all unique chat names from the RAG API (cached 5 min)."""
     logger.debug(f"Fetching chat list from {api_url}/rag/chats")
     try:
-        response = requests.get(f"{api_url}/rag/chats", timeout=5)
+        response = requests.get(f"{api_url}/rag/chats", timeout=10)
         logger.debug(f"Chat list response: {response.status_code}")
         if response.status_code == 200:
             data = response.json()
@@ -89,11 +90,12 @@ def get_chat_list(api_url: str) -> list:
     return []
 
 
+@st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_sender_list(api_url: str) -> list:
-    """Fetch all unique sender names from the RAG API."""
+    """Fetch all unique sender names from the RAG API (cached 5 min)."""
     logger.debug(f"Fetching sender list from {api_url}/rag/senders")
     try:
-        response = requests.get(f"{api_url}/rag/senders", timeout=5)
+        response = requests.get(f"{api_url}/rag/senders", timeout=10)
         logger.debug(f"Sender list response: {response.status_code}")
         if response.status_code == 200:
             data = response.json()
@@ -107,11 +109,12 @@ def get_sender_list(api_url: str) -> list:
     return []
 
 
+@st.cache_data(ttl=60)  # Cache for 1 minute
 def get_rag_stats(api_url: str) -> dict:
-    """Fetch RAG statistics."""
+    """Fetch RAG statistics (cached 1 min)."""
     logger.debug(f"Fetching RAG stats from {api_url}/rag/stats")
     try:
-        response = requests.get(f"{api_url}/rag/stats", timeout=5)
+        response = requests.get(f"{api_url}/rag/stats", timeout=10)
         logger.debug(f"RAG stats response: {response.status_code}")
         if response.status_code == 200:
             return response.json()

@@ -133,13 +133,43 @@ class WhatsAppMessageDocument(BaseRAGDocument):
     def get_embedding_text(self) -> str:
         """Get optimized text for embedding generation.
         
-        Includes context (sender, chat) to improve semantic search quality.
+        Creates a semantically rich text that helps embeddings understand:
+        - Who sent the message (full name as sender)
+        - Where it was sent (chat/group name)
+        - The message content
+        
+        The format is designed to answer questions like:
+        - "What did X say?"
+        - "What is X's last name?"
+        - "Messages in Y group"
         
         Returns:
-            Text optimized for embedding
+            Text optimized for semantic embedding and retrieval
         """
         formatted_time = self.format_timestamp()
-        return f"[{formatted_time}] {self.sender} in {self.chat_name}: {self.message}"
+        
+        # Parse sender name parts for better semantic understanding
+        sender_parts = self.sender.split() if self.sender else []
+        
+        # Build semantically explicit text
+        parts = [f"Date: {formatted_time}"]
+        
+        if self.sender:
+            parts.append(f"Sender name: {self.sender}")
+            # If sender has multiple parts (first + last name), make it explicit
+            if len(sender_parts) >= 2:
+                parts.append(f"First name: {sender_parts[0]}")
+                parts.append(f"Last name: {' '.join(sender_parts[1:])}")
+        
+        if self.chat_name:
+            if self.is_group:
+                parts.append(f"Group: {self.chat_name}")
+            else:
+                parts.append(f"Chat with: {self.chat_name}")
+        
+        parts.append(f"Message: {self.message}")
+        
+        return " | ".join(parts)
     
     def to_llama_index_node(self) -> "TextNode":
         """Convert to LlamaIndex TextNode with WhatsApp-specific metadata.

@@ -6,6 +6,7 @@ Replaces the previous LangChain-based RAG implementation.
 Qdrant Dashboard: http://localhost:6333/dashboard
 """
 
+import json
 import os
 import uuid
 from datetime import datetime
@@ -41,6 +42,7 @@ from qdrant_client.models import (
 
 from config import config
 from utils.logger import logger
+from utils.redis_conn import get_redis_client
 
 
 def format_timestamp(timestamp: str, timezone: str = "Asia/Jerusalem") -> str:
@@ -287,6 +289,7 @@ class LlamaIndexRAG:
         """Add a WhatsApp message to the vector store.
         
         Uses WhatsAppMessageDocument model for consistent schema across all entries.
+        Also incrementally updates the Redis-cached chat and sender lists.
         
         Args:
             thread_id: The conversation thread ID
@@ -325,6 +328,9 @@ class LlamaIndexRAG:
             
             # Insert into index
             self.index.insert_nodes([node])
+            
+            # Incrementally update cached chat/sender sets in Redis
+            self._update_cached_lists(chat_name=chat_name, sender=sender)
             
             logger.debug(f"Added message to RAG: {doc.get_embedding_text()[:50]}...")
             return True
@@ -778,73 +784,141 @@ Instructions:
             logger.error(f"Failed to get RAG stats: {e}")
             return {"error": str(e)}
     
+    # =========================================================================
+    # Cached chat/sender list methods (Redis-backed)
+    # =========================================================================
+    
+    REDIS_CHAT_SET_KEY = "rag:chat_names"
+    REDIS_SENDER_SET_KEY = "rag:sender_names"
+    REDIS_LISTS_TTL = 3600  # 1 hour TTL for the cached sets
+    
+    def _update_cached_lists(self, chat_name: Optional[str] = None, sender: Optional[str] = None) -> None:
+        """Incrementally add a chat name and/or sender to the Redis cached sets.
+        
+        Called on every add_message() so the cache stays up-to-date without
+        needing a full Qdrant collection scan.
+        
+        Args:
+            chat_name: Chat/group name to add (if not None)
+            sender: Sender name to add (if not None)
+        """
+        try:
+            redis = get_redis_client()
+            if chat_name:
+                redis.sadd(self.REDIS_CHAT_SET_KEY, chat_name)
+            if sender:
+                redis.sadd(self.REDIS_SENDER_SET_KEY, sender)
+        except Exception as e:
+            logger.debug(f"Failed to update cached lists in Redis: {e}")
+    
+    def _rebuild_cached_list(self, field_name: str, redis_key: str) -> List[str]:
+        """Rebuild a cached list by scanning the full Qdrant collection.
+        
+        This is the fallback when the Redis cache is empty (first run or after
+        Redis restart). Results are stored in a Redis SET for fast subsequent access.
+        
+        Args:
+            field_name: Qdrant payload field to extract unique values from
+            redis_key: Redis SET key to store the results
+            
+        Returns:
+            Sorted list of unique values
+        """
+        values = set()
+        offset = None
+        
+        while True:
+            records, next_offset = self.qdrant_client.scroll(
+                collection_name=self.COLLECTION_NAME,
+                limit=1000,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False
+            )
+            
+            for record in records:
+                payload = record.payload or {}
+                value = payload.get(field_name)
+                if value:
+                    values.add(value)
+            
+            if next_offset is None:
+                break
+            offset = next_offset
+        
+        # Store in Redis SET for fast access
+        try:
+            redis = get_redis_client()
+            if values:
+                redis.delete(redis_key)
+                redis.sadd(redis_key, *values)
+                redis.expire(redis_key, self.REDIS_LISTS_TTL)
+            logger.info(f"Rebuilt cached {field_name} list: {len(values)} unique values")
+        except Exception as e:
+            logger.warning(f"Failed to cache {field_name} list in Redis: {e}")
+        
+        return sorted(list(values))
+    
     def get_chat_list(self) -> List[str]:
-        """Get all unique chat names from the vector store.
+        """Get all unique chat names, using Redis cache when available.
+        
+        First checks Redis SET for cached values. If empty, falls back to
+        a full Qdrant collection scan and caches the result.
         
         Returns:
             List of unique chat names sorted alphabetically
         """
         try:
-            chat_names = set()
-            offset = None
-            
-            while True:
-                records, next_offset = self.qdrant_client.scroll(
-                    collection_name=self.COLLECTION_NAME,
-                    limit=1000,
-                    offset=offset,
-                    with_payload=True,
-                    with_vectors=False
-                )
-                
-                for record in records:
-                    payload = record.payload or {}
-                    chat_name = payload.get("chat_name")
-                    if chat_name:
-                        chat_names.add(chat_name)
-                
-                if next_offset is None:
-                    break
-                offset = next_offset
-            
-            return sorted(list(chat_names))
+            redis = get_redis_client()
+            cached: set = redis.smembers(self.REDIS_CHAT_SET_KEY)  # type: ignore[assignment]
+            if cached:
+                return sorted(list(cached))
+        except Exception as e:
+            logger.debug(f"Redis cache miss for chat list: {e}")
+        
+        # Cache miss — rebuild from Qdrant
+        try:
+            return self._rebuild_cached_list("chat_name", self.REDIS_CHAT_SET_KEY)
         except Exception as e:
             logger.error(f"Failed to get chat list: {e}")
             return []
     
     def get_sender_list(self) -> List[str]:
-        """Get all unique sender names from the vector store.
+        """Get all unique sender names, using Redis cache when available.
+        
+        First checks Redis SET for cached values. If empty, falls back to
+        a full Qdrant collection scan and caches the result.
         
         Returns:
             List of unique sender names sorted alphabetically
         """
         try:
-            senders = set()
-            offset = None
-            
-            while True:
-                records, next_offset = self.qdrant_client.scroll(
-                    collection_name=self.COLLECTION_NAME,
-                    limit=1000,
-                    offset=offset,
-                    with_payload=True,
-                    with_vectors=False
-                )
-                
-                for record in records:
-                    payload = record.payload or {}
-                    sender = payload.get("sender")
-                    if sender:
-                        senders.add(sender)
-                
-                if next_offset is None:
-                    break
-                offset = next_offset
-            
-            return sorted(list(senders))
+            redis = get_redis_client()
+            cached: set = redis.smembers(self.REDIS_SENDER_SET_KEY)  # type: ignore[assignment]
+            if cached:
+                return sorted(list(cached))
+        except Exception as e:
+            logger.debug(f"Redis cache miss for sender list: {e}")
+        
+        # Cache miss — rebuild from Qdrant
+        try:
+            return self._rebuild_cached_list("sender", self.REDIS_SENDER_SET_KEY)
         except Exception as e:
             logger.error(f"Failed to get sender list: {e}")
             return []
+    
+    def invalidate_list_caches(self) -> None:
+        """Invalidate the Redis-cached chat and sender lists.
+        
+        Forces a full rebuild on next access. Useful after bulk operations
+        or data cleanup.
+        """
+        try:
+            redis = get_redis_client()
+            redis.delete(self.REDIS_CHAT_SET_KEY, self.REDIS_SENDER_SET_KEY)
+            logger.info("Invalidated cached chat/sender lists")
+        except Exception as e:
+            logger.warning(f"Failed to invalidate list caches: {e}")
 
 
 # Create singleton instance getter
