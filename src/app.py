@@ -45,10 +45,20 @@ print("✅ Session manager initialized", flush=True)
 
 
 def pass_filter(payload):
-    if payload.get('event') == "message_ack" or \
-            payload.get("from").endswith("@newsletter") or \
-            payload.get("from").endswith("@broadcast") or \
-            payload.get("_data", {}).get("type") in ["e2e_notification", "notification_template"]:
+    """Filter out non-message webhook events.
+    
+    Returns False for events that should be ignored (acks, newsletters,
+    broadcasts, system notifications).
+    """
+    if payload.get('event') == "message_ack":
+        return False
+    
+    from_field = payload.get("from") or ""
+    if from_field.endswith("@newsletter") or from_field.endswith("@broadcast"):
+        return False
+    
+    data_type = payload.get("_data", {}).get("type")
+    if data_type in ["e2e_notification", "notification_template"]:
         return False
 
     return True
@@ -56,7 +66,32 @@ def pass_filter(payload):
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "up"}), 200
+    """Health check endpoint that verifies connectivity to dependencies."""
+    status = {"status": "up", "dependencies": {}}
+    overall_healthy = True
+    
+    # Check Redis
+    try:
+        from utils.redis_conn import get_redis_client
+        redis_client = get_redis_client()
+        redis_client.ping()
+        status["dependencies"]["redis"] = "connected"
+    except Exception as e:
+        status["dependencies"]["redis"] = f"error: {str(e)}"
+        overall_healthy = False
+    
+    # Check Qdrant
+    try:
+        rag.qdrant_client.get_collections()
+        status["dependencies"]["qdrant"] = "connected"
+    except Exception as e:
+        status["dependencies"]["qdrant"] = f"error: {str(e)}"
+        overall_healthy = False
+    
+    if not overall_healthy:
+        status["status"] = "degraded"
+    
+    return jsonify(status), 200 if overall_healthy else 503
 
 
 @app.route("/rag/query", methods=["POST"])
