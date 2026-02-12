@@ -135,44 +135,68 @@ section[data-testid="stSidebar"] .stButton > button[data-testid="stBaseButton-pr
     border-style: solid !important;
 }
 
-/* Three-dot (⋯) menu button — small, subtle, blends with sidebar */
-/* Targets the narrow column button in conversation rows */
-section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child .stButton > button {
+/* ⋮ Popover column — hidden by default, shown on row hover */
+section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child {
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:hover [data-testid="stColumn"]:last-child {
+    opacity: 1;
+}
+
+/* Popover trigger button — transparent, no border */
+section[data-testid="stSidebar"] .stPopover > button,
+section[data-testid="stSidebar"] [data-testid="stPopover"] > button {
     background: transparent !important;
     background-color: transparent !important;
     border: none !important;
     box-shadow: none !important;
-    color: #555 !important;
-    padding: 2px !important;
+    color: #888 !important;
+    padding: 2px 4px !important;
     min-height: 0 !important;
-    font-size: 1rem !important;
+    min-width: 0 !important;
+    font-size: 1.1rem !important;
     border-radius: 4px !important;
     line-height: 1 !important;
-    opacity: 0.3;
-    transition: opacity 0.15s ease;
 }
 
-section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] [data-testid="stColumn"]:last-child .stButton > button:hover {
-    opacity: 1 !important;
+section[data-testid="stSidebar"] .stPopover > button:hover,
+section[data-testid="stSidebar"] [data-testid="stPopover"] > button:hover {
     color: #ECECEC !important;
     background-color: #333 !important;
 }
 
-/* Inline action buttons (Rename / Delete) — small, muted */
-section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] .stButton > button[data-testid="stBaseButton-secondary"] {
-    font-size: 0.75rem !important;
-    padding: 4px 8px !important;
-    min-height: 0 !important;
-    opacity: 0.8 !important;
-    color: #AAA !important;
-    border: 1px solid #444 !important;
+/* HIDE the dropdown arrow SVG inside popover trigger */
+section[data-testid="stSidebar"] .stPopover > button svg,
+section[data-testid="stSidebar"] [data-testid="stPopover"] > button svg,
+section[data-testid="stSidebar"] .stPopover > button > span:last-child,
+section[data-testid="stSidebar"] .stPopover > button > div:last-child:not(:first-child) {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    visibility: hidden !important;
+}
+
+/* Popover dropdown panel */
+[data-testid="stPopoverBody"] {
+    border-radius: 10px !important;
+    padding: 4px !important;
+    min-width: 140px !important;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15) !important;
+}
+
+/* Buttons inside popover dropdown */
+[data-testid="stPopoverBody"] .stButton > button {
+    border: none !important;
     border-radius: 6px !important;
-    font-size: 0.82rem !important;
+    padding: 8px 14px !important;
+    font-size: 0.85rem !important;
     text-align: left !important;
 }
 
-section[data-testid="stSidebar"] .stPopover [data-testid="stPopoverBody"] .stButton > button:hover {
-    background-color: #3A3A3A !important;
+[data-testid="stPopoverBody"] .stButton > button:hover {
+    background-color: #F0F0F0 !important;
 }
 
 /* Conversation rows — tighter alignment */

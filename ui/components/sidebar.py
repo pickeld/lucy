@@ -125,9 +125,11 @@ def _render_conversation_item(convo: dict) -> None:
                 st.rerun()
         return
 
-    # ── NORMAL DISPLAY: [title] [⋯] ─────────────────────────────
+    # ── NORMAL DISPLAY: [title] [⋮ popover] ─────────────────────
     display_title = convo_title[:35] + ("…" if len(convo_title) > 35 else "")
 
+    # Wrap in a container div for CSS hover targeting
+    st.markdown('<div class="conv-row">', unsafe_allow_html=True)
     col_title, col_dots = st.columns([9, 1])
 
     with col_title:
@@ -140,31 +142,18 @@ def _render_conversation_item(convo: dict) -> None:
             _load_conversation(convo_id)
 
     with col_dots:
-        if st.button("⋮", key=f"dots_{convo_id}"):
-            # Toggle menu: if already open, close it; otherwise open it
-            if menu_open:
-                st.session_state.menu_open_id = None
-            else:
-                st.session_state.menu_open_id = convo_id
-            st.rerun()
-
-    # ── INLINE ACTION MENU (shown when ⋯ is toggled) ────────────
-    if menu_open:
-        col_rename, col_delete = st.columns(2)
-        with col_rename:
+        with st.popover("⋮"):
             if st.button("✏️ Rename", key=f"rename_{convo_id}", use_container_width=True):
                 st.session_state.renaming_conversation_id = convo_id
-                st.session_state.menu_open_id = None
                 st.rerun()
-        with col_delete:
             if st.button("🗑️ Delete", key=f"del_{convo_id}", use_container_width=True):
                 delete_conversation(convo_id)
-                st.session_state.menu_open_id = None
                 if convo_id == st.session_state.get("conversation_id"):
                     st.session_state.conversation_id = None
                     st.session_state.messages = []
                     st.session_state.active_filters = {}
                 st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 def _load_conversation(convo_id: str) -> None:
