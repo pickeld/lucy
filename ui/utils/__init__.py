@@ -1,1 +1,1 @@
-"""UI utility modules for WhatsApp RAG Assistant."""
+"""UI utility modules for RAG Assistant."""
