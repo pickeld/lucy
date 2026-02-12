@@ -49,14 +49,9 @@ flowchart TB
 
 ### 1.1 Error Handling & Resilience
 
-**Current Issues:**
-- ~~Generic exception handling in [`src/app.py`](src/app.py) webhook endpoint~~
-- ~~No retry logic for external API calls~~
-- Silent failures in some Redis operations
-
 **Completed ✅:**
-- [x] Implement custom exception classes for different error types - Created [`src/utils/exceptions.py`](src/utils/exceptions.py)
-- [x] Add retry logic with exponential backoff for WAHA calls - Updated [`src/utils/globals.py`](src/utils/globals.py)
+- [x] Implement custom exception classes — [`src/utils/exceptions.py`](src/utils/exceptions.py)
+- [x] Add retry logic with exponential backoff for WAHA calls — [`src/utils/globals.py`](src/utils/globals.py)
 
 **Remaining:**
 - [ ] Add circuit breaker pattern for external services
@@ -65,13 +60,8 @@ flowchart TB
 
 ### 1.2 Type Hints & Documentation
 
-**Current Issues:**
-- ~~Inconsistent type hints across modules~~
-- ~~Missing docstrings in some functions~~
-- No API documentation (OpenAPI/Swagger)
-
 **Completed ✅:**
-- [x] Add complete type hints using Python 3.9+ syntax - Updated in [`src/langgraph_client.py`](src/langgraph_client.py), [`src/utils/globals.py`](src/utils/globals.py), [`src/config.py`](src/config.py)
+- [x] Add complete type hints using Python 3.9+ syntax
 - [x] Add comprehensive docstrings following Google style
 
 **Remaining:**
@@ -79,27 +69,17 @@ flowchart TB
 
 ### 1.3 Testing
 
-**Current Issues:**
-- Only [`helpers/tests_qa.py`](helpers/tests_qa.py) exists - minimal test coverage
-- No unit tests for core logic
-- No integration tests
-
-**Recommendations:**
+**Remaining:**
 - [ ] Add pytest test suite with fixtures
-- [ ] Create unit tests for RAG, LangGraph client, and message processing
+- [ ] Create unit tests for RAG and message processing
 - [ ] Add integration tests for webhook flow
 - [ ] Set up CI/CD with GitHub Actions
 
 ### 1.4 Code Organization
 
-**Current Issues:**
-- ~~Typo in folder name: `utiles` should be `utils`~~
-- Some circular import potential between modules
-- ~~Config class loads from relative path which can break~~
-
 **Completed ✅:**
-- [x] Rename `src/utiles/` to [`src/utils/`](src/utils/) - Done
-- [x] Fix config loading to use absolute paths or environment-first approach - Updated [`src/config.py`](src/config.py)
+- [x] Rename `src/utiles/` to `src/utils/`
+- [x] Fix config loading — now SQLite-backed via `settings_db.py`
 
 **Remaining:**
 - [ ] Use dependency injection pattern for managers
@@ -110,36 +90,26 @@ flowchart TB
 
 ### 2.1 Async/Await Throughout
 
-**Current Issues:**
-- Mixed sync/async code in [`src/langgraph_client.py`](src/langgraph_client.py)
-- Blocking calls in webhook handlers
-- Thread pool workarounds for async in sync context
-
 **Recommendations:**
 - [ ] Migrate Flask to Quart or FastAPI for native async
 - [ ] Use async Redis client (aioredis)
-- [ ] Make all LangGraph calls properly async
 
 ### 2.2 Message Queue Integration
 
-**Current Issues:**
-- Synchronous webhook processing can timeout
-- No message deduplication
-- Lost messages if processing fails
+**Completed (partial) ✅:**
+- [x] Message deduplication — `_message_exists()` in `llamaindex_rag.py`
 
-**Recommendations:**
+**Remaining:**
 - [ ] Add Celery or Redis Queue for async message processing
 - [ ] Implement message acknowledgment pattern
 - [ ] Add dead letter queue for failed messages
 
 ### 2.3 Caching Strategy
 
-**Current Issues:**
-- Basic Redis caching for contacts/groups only
-- No caching for LLM responses
-- RAG results not cached
+**Completed (partial) ✅:**
+- [x] Redis SET caching for chat/sender lists with incremental updates
 
-**Recommendations:**
+**Remaining:**
 - [ ] Add semantic caching for similar RAG queries
 - [ ] Cache frequent LLM responses with TTL
 - [ ] Implement cache warming for common queries
@@ -191,39 +161,23 @@ flowchart TB
 
 ### 4.1 RAG Optimization
 
-**Current Issues:**
-- Full vector scan for get_chat_list and get_sender_list
-- No batch processing for embeddings
-- Single-threaded embedding generation
-
-**Recommendations:**
-- [ ] Create payload indexes in Qdrant for metadata filtering
-- [ ] Batch embed messages before storing
-- [ ] Add hybrid search (keyword + semantic)
-- [ ] Implement RAG result reranking
-
-### 4.2 LangGraph Optimization
-
-**Current Issues:**
-- ~~New RAG instance created per message in `src/langgraph_client.py`~~
-- Thread lookup on every message
-- No connection pooling
-
 **Completed ✅:**
-- [x] Use singleton RAG instance properly - Added `get_rag()` function in [`src/langgraph_client.py`](src/langgraph_client.py)
+- [x] Redis SET caching for chat/sender lists (no more full collection scans)
+- [x] Payload indexes in Qdrant for metadata filtering
+- [x] Hybrid search (keyword + semantic) with RRF fusion
+- [x] Minimum similarity score threshold
 
 **Remaining:**
-- [ ] Add thread ID caching
-- [ ] Implement connection pooling for PostgreSQL
+- [ ] Batch embed messages before storing
+- [ ] Implement RAG result reranking
+
+### 4.2 LangGraph Optimization — ✅ N/A (REMOVED)
+
+LangGraph client was removed. RAG now uses LlamaIndex `CondensePlusContextChatEngine` directly.
 
 ### 4.3 Media Handling
 
-**Current Issues:**
-- Synchronous media download blocks webhook
-- No media compression
-- Debug images saved without cleanup
-
-**Recommendations:**
+**Remaining:**
 - [ ] Async media download with streaming
 - [ ] Add image compression before storage
 - [ ] Implement cleanup job for temporary files
@@ -234,7 +188,7 @@ flowchart TB
 
 ### 5.1 AI Response to Messages (High Priority)
 
-**Current State:** Messages are stored but the bot doesnt actively respond
+**Current State:** Messages are stored but the bot doesn't actively respond. `??` and `!!` prefixes are configured but not checked.
 
 **Feature:**
 - [ ] Add configurable trigger keywords/prefixes for AI responses
@@ -244,7 +198,7 @@ flowchart TB
 
 ### 5.2 Voice Message Support (High Priority)
 
-**Current State:** Audio messages are filtered out in [`src/whatsapp.py:29`](src/whatsapp.py:29)
+**Current State:** Voice messages are now handled by `VoiceMessage` class but transcription is not implemented.
 
 **Feature:**
 - [ ] Integrate Whisper API for speech-to-text
@@ -254,7 +208,7 @@ flowchart TB
 
 ### 5.3 Multi-Modal AI (Medium Priority)
 
-**Current State:** Images are downloaded but not processed by AI
+**Current State:** Images are downloaded by `ImageMessage` class but not analyzed by AI.
 
 **Feature:**
 - [ ] Use GPT-4 Vision for image understanding
@@ -379,40 +333,32 @@ flowchart TB
 | Fix the `utiles` typo - Rename to `utils` | ✅ Done |
 | Add custom exception classes | ✅ Done |
 | Add retry logic for API calls | ✅ Done |
-| Fix config loading with absolute paths | ✅ Done |
-| Fix RAG singleton usage - Remove per-message instantiation | ✅ Done |
+| Fix config loading with absolute paths | ✅ Done (SQLite-backed) |
+| Fix RAG singleton usage | ✅ Done |
 | Add type hints and docstrings | ✅ Done |
+| Add Qdrant payload indexes | ✅ Done |
+| Add basic health checks | ✅ Done |
 | Add webhook signature verification | ⏳ Pending |
 | Implement AI response trigger - Add `??` prefix handling | ⏳ Pending |
-| Add Qdrant payload indexes | ⏳ Pending |
-| Add basic health checks | ⏳ Pending |
 
 ---
 
-## Files Modified (2024-12-31)
+## Architecture Changes Since Original Plan (2024-12-31)
 
-| File | Change |
-|------|--------|
-| `src/utils/` | Renamed from `src/utiles/` |
-| [`src/utils/exceptions.py`](src/utils/exceptions.py) | New - Custom exception hierarchy |
-| [`src/utils/globals.py`](src/utils/globals.py) | Added retry decorator and improved type hints |
-| [`src/utils/logger.py`](src/utils/logger.py) | Updated imports |
-| [`src/utils/redis_conn.py`](src/utils/redis_conn.py) | Updated imports |
-| [`src/config.py`](src/config.py) | Improved with absolute path detection and env-first approach |
-| [`src/langgraph_client.py`](src/langgraph_client.py) | Fixed RAG singleton, added type hints, improved docs |
-| [`src/app.py`](src/app.py) | Updated imports |
-| [`src/rag.py`](src/rag.py) | Updated imports |
-| [`src/whatsapp.py`](src/whatsapp.py) | Updated imports |
-| [`src/contact.py`](src/contact.py) | Updated imports |
-| [`src/groups.py`](src/groups.py) | Updated imports |
-| [`src/providers/dalle.py`](src/providers/dalle.py) | Updated imports |
+The following major architectural changes have been made since this plan was written:
 
----
+1. **LangGraph removed** — Replaced by LlamaIndex `CondensePlusContextChatEngine`
+2. **Custom session module removed** — `src/session/` deleted, replaced by `RedisChatStore`
+3. **Config system replaced** — Custom `.env` parser → SQLite-backed `settings_db.py`
+4. **RAG system rewritten** — `src/rag.py` → `src/llamaindex_rag.py` with Qdrant
+5. **WhatsApp handler rewritten** — Single class → class hierarchy with factory function
+6. **Document models added** — `src/models/` with Pydantic v2 classes
+7. **Settings UI added** — `ui/pages/1_Settings.py`
 
-## Questions for Discussion
-
-1. **What is the primary use case?** Personal assistant, business automation, or both?
-2. **Should the bot auto-respond to all messages or only triggered ones?**
-3. **Are there specific integrations you need most urgently?**
-4. **What is the expected message volume?** Affects architecture decisions.
-5. **Is local LLM support a priority for cost or privacy reasons?**
+Files referenced in this plan that no longer exist:
+- `src/langgraph_client.py` → removed
+- `src/rag.py` → replaced by `src/llamaindex_rag.py`
+- `src/whatsapp.py` → replaced by `src/whatsapp/handler.py`
+- `src/contact.py` → replaced by `src/whatsapp/contact.py`
+- `src/groups.py` → replaced by `src/whatsapp/group.py`
+- `src/providers/dalle.py` → removed

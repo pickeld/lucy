@@ -46,7 +46,7 @@ flowchart LR
 
 ## Issues Found (Ranked by Impact)
 
-### 🔴 Issue 1: No Message Grouping — Loss of Conversational Context
+### 🔴 Issue 1: No Message Grouping — Loss of Conversational Context ⏳ PENDING
 
 **File:** [`src/llamaindex_rag.py:add_message()`](src/llamaindex_rag.py:276)
 
@@ -81,7 +81,7 @@ This gives each embedded chunk enough context for the LLM to understand what is 
 
 ---
 
-### 🔴 Issue 2: Embedding Text is Bloated with Redundant Metadata
+### ~~🔴 Issue 2: Embedding Text is Bloated with Redundant Metadata~~ ✅ DONE
 
 **File:** [`src/models/whatsapp.py:get_embedding_text()`](src/models/whatsapp.py:133)
 
@@ -97,107 +97,29 @@ This wastes ~60% of the embedding tokens on metadata that:
 - Is already filterable via Qdrant filters
 - Dilutes the semantic signal of the actual message content
 
-**Impact:** The embedding vector represents "Date: 31/12/2024 10:30 | Sender name: David Pickel..." more than it represents the actual message "hello everyone". Semantic search for _"greetings"_ may not find this message because the embedding is dominated by metadata noise.
-
-**Recommendation:** Lean embedding text focused on semantic content:
-
-```python
-# Proposed:
-def get_embedding_text(self) -> str:
-    parts = []
-    if self.sender:
-        parts.append(f"{self.sender}")
-    if self.chat_name and self.is_group:
-        parts.append(f"in {self.chat_name}")
-    parts.append(self.message)
-    return " ".join(parts)
-    # Result: "David Pickel in Family Chat: hello everyone"
-```
-
-**Note:** Sender name should remain in the embedding (but shorter) because users often ask _"what did David say about X?"_ — the name must be in the embedding for this to work semantically. Dates should NOT be in the embedding because date filtering is better done via metadata filters.
-
-**Migration consideration:** Changing the embedding text format means existing embeddings become inconsistent with new ones. Options:
-1. **Re-index all** — Best quality, requires downtime
-2. **New collection** — Run both collections during transition
-3. **Accept gradual drift** — New messages use new format, old ones stay as-is (acceptable for chat data where recency matters most)
+**Applied:** `WhatsAppMessageDocument.get_embedding_text()` in `models/whatsapp.py` now uses lean format: `"{sender} in {chat_name} {message}"`. Metadata stored as Qdrant payload fields for filtering.
 
 ---
 
-### 🟡 Issue 3: Legacy Embedding Model
+### ~~🟡 Issue 3: Legacy Embedding Model~~ ✅ DONE
 
-**File:** [`src/llamaindex_rag.py:_configure_embedding()`](src/llamaindex_rag.py:116)
-
-**Problem:** Using `text-embedding-ada-002` (legacy). OpenAI's `text-embedding-3-small` is:
-- **5x cheaper** per token
-- **Better quality** on MTEB benchmarks
-- **Same dimensions** (1536) — drop-in replacement
-- Supports **dimension reduction** if storage is a concern
-
-**Recommendation:** Switch to `text-embedding-3-small`. This is already noted in the [current improvements plan](plans/current-improvements-plan.md) but deserves emphasis because it directly affects retrieval quality AND cost.
+**Applied:** Upgraded to `text-embedding-3-large` with `dimensions=1024` for optimal Hebrew+English multilingual support. Configurable via `settings.embedding_model`.
 
 ---
 
-### 🟡 Issue 4: Naive Hybrid Search Merge
+### ~~🟡 Issue 4: Naive Hybrid Search Merge~~ ✅ DONE
 
-**File:** [`src/llamaindex_rag.py:search()`](src/llamaindex_rag.py:524)
-
-**Problem:** The hybrid merge strategy has three issues:
-
-1. **All full-text results get score=1.0** regardless of match quality
-2. **Full-text results are inserted at position 0** (before all vector results), even if the vector results are more relevant
-3. **No score normalization** between the two search types
-
-```python
-# Current (line 654):
-for ft_result in fulltext_results:
-    if ft_result.node and ft_result.node.id_ not in seen_ids:
-        merged.insert(0, ft_result)  # Always at the beginning!
-```
-
-**Impact:** A query like _"what is the latest news?"_ will surface any message containing the word "news" (full-text match) before semantically relevant messages about current events (vector match).
-
-**Recommendation:** Implement Reciprocal Rank Fusion (RRF):
-
-```python
-def reciprocal_rank_fusion(vector_results, fulltext_results, k=60):
-    """Merge results using RRF scoring."""
-    scores = {}
-    for rank, result in enumerate(vector_results):
-        node_id = result.node.id_
-        scores[node_id] = scores.get(node_id, 0) + 1.0 / (k + rank + 1)
-    for rank, result in enumerate(fulltext_results):
-        node_id = result.node.id_
-        scores[node_id] = scores.get(node_id, 0) + 1.0 / (k + rank + 1)
-    # Sort by combined score, return top-k
-```
-
-RRF is the standard approach for hybrid search and doesn't require score normalization.
+**Applied:** `_reciprocal_rank_fusion()` method in `llamaindex_rag.py` merges vector and full-text results using standard RRF scoring with `rrf_k=60`.
 
 ---
 
-### 🟡 Issue 5: No Relevance Score Threshold
+### ~~🟡 Issue 5: No Relevance Score Threshold~~ ✅ DONE
 
-**File:** [`src/llamaindex_rag.py:search()`](src/llamaindex_rag.py:524)
-
-**Problem:** All results are returned regardless of cosine similarity score. With `k=10`, the system returns 10 results even if only 2 are relevant. Low-scoring results pollute the LLM context and can cause hallucinations.
-
-**Example:** Query _"what did David say about the project deadline?"_ returns:
-- Score 0.92: David's message about the deadline ✅
-- Score 0.85: David's message about another project ✅
-- Score 0.41: Random message mentioning "project" ❌
-- Score 0.38: Random message mentioning "David" ❌
-
-**Recommendation:** Add a configurable minimum score threshold:
-
-```python
-MINIMUM_SIMILARITY_SCORE = 0.5  # Configurable via env
-
-valid_results = [r for r in results if r.score >= MINIMUM_SIMILARITY_SCORE]
-```
+**Applied:** `MINIMUM_SIMILARITY_SCORE` (configurable via `settings.rag_min_score`) filters out low-scoring vector results before merging.
 
 ---
 
-### 🟡 Issue 6: Embedding Waste on Low-Value Messages
+### 🟡 Issue 6: Embedding Waste on Low-Value Messages ⏳ PENDING
 
 **File:** [`src/llamaindex_rag.py:add_message()`](src/llamaindex_rag.py:276)
 
@@ -227,101 +149,25 @@ These messages should still be stored in conversation chunks (Issue 1) for conte
 
 ---
 
-### 🟢 Issue 7: Missing Qdrant Payload Indexes
+### ~~🟢 Issue 7: Missing Qdrant Payload Indexes~~ ✅ DONE
 
-**File:** [`src/llamaindex_rag.py:_ensure_text_indexes()`](src/llamaindex_rag.py:222)
-
-**Problem:** Only text indexes are created. The `timestamp`, `is_group`, and `source_type` fields have no payload indexes, meaning filters on these fields require Qdrant to scan all points.
-
-**Recommendation:** Add keyword/integer indexes:
-
-```python
-# Integer index on timestamp for range queries
-self.qdrant_client.create_payload_index(
-    collection_name=self.COLLECTION_NAME,
-    field_name="timestamp",
-    field_schema=PayloadSchemaType.INTEGER
-)
-
-# Keyword index on source_type for filtering
-self.qdrant_client.create_payload_index(
-    collection_name=self.COLLECTION_NAME,
-    field_name="source_type",
-    field_schema=PayloadSchemaType.KEYWORD
-)
-
-# Bool index on is_group
-self.qdrant_client.create_payload_index(
-    collection_name=self.COLLECTION_NAME,
-    field_name="is_group",
-    field_schema=PayloadSchemaType.BOOL
-)
-```
+**Applied:** `_ensure_payload_indexes()` creates indexes on `timestamp` (INTEGER), `source_type` (KEYWORD), `is_group` (BOOL), and `source_id` (KEYWORD).
 
 ---
 
-### 🟢 Issue 8: No Message Deduplication
+### ~~🟢 Issue 8: No Message Deduplication~~ ✅ DONE
 
-**File:** [`src/llamaindex_rag.py:add_message()`](src/llamaindex_rag.py:276)
-
-**Problem:** If WAHA retries a webhook (due to timeout/error), the same message is stored multiple times. The `source_id` is `{chat_id}:{timestamp}`, but no check is performed before insertion.
-
-**Recommendation:** Check for existing documents before inserting:
-
-```python
-def _message_exists(self, chat_id: str, timestamp: str) -> bool:
-    source_id = f"{chat_id}:{timestamp}"
-    results, _ = self.qdrant_client.scroll(
-        collection_name=self.COLLECTION_NAME,
-        scroll_filter=Filter(must=[
-            FieldCondition(key="source_id", match=MatchValue(value=source_id))
-        ]),
-        limit=1,
-        with_payload=False,
-        with_vectors=False
-    )
-    return len(results) > 0
-```
-
-Add a `source_id` keyword index to make this check efficient.
+**Applied:** `_message_exists()` checks for existing `source_id` via Qdrant scroll with keyword index before inserting.
 
 ---
 
-### 🟢 Issue 9: Context Window Not Managed in query()
+### ~~🟢 Issue 9: Context Window Not Managed in query()~~ ✅ DONE
 
-**File:** [`src/llamaindex_rag.py:query()`](src/llamaindex_rag.py:668)
-
-**Problem:** The `query()` method concatenates all retrieved results into a single context string with no size limit:
-
-```python
-context = "\n".join(context_parts)  # Could be arbitrarily large
-```
-
-With `k=10` and long messages, the prompt could exceed the model's context window or waste tokens on less-relevant results.
-
-**Recommendation:** Implement token-aware context building:
-
-```python
-import tiktoken
-
-MAX_CONTEXT_TOKENS = 3000  # Leave room for prompt + response
-
-enc = tiktoken.encoding_for_model("gpt-4o")
-context_parts = []
-total_tokens = 0
-
-for result in results:
-    text = result.node.text
-    tokens = len(enc.encode(text))
-    if total_tokens + tokens > MAX_CONTEXT_TOKENS:
-        break
-    context_parts.append(text)
-    total_tokens += tokens
-```
+**Applied:** The manual `query()` method was replaced by `CondensePlusContextChatEngine` which handles context window management via `ChatMemoryBuffer` with configurable `token_limit`. `MAX_CONTEXT_TOKENS` is configurable via `settings.rag_max_context_tokens`.
 
 ---
 
-### 🟢 Issue 10: Collection Name is Misleading
+### 🟢 Issue 10: Collection Name is Misleading ⏳ PENDING
 
 **File:** [`src/llamaindex_rag.py:COLLECTION_NAME`](src/llamaindex_rag.py:81)
 
@@ -331,7 +177,7 @@ for result in results:
 
 ---
 
-### 🟢 Issue 11: Full-text Search Doesn't Distinguish Field Relevance
+### 🟢 Issue 11: Full-text Search Doesn't Distinguish Field Relevance ⏳ PENDING
 
 **File:** [`src/llamaindex_rag.py:_fulltext_search()`](src/llamaindex_rag.py:442)
 
@@ -350,60 +196,21 @@ message_results = search_by_field("message", query, score=0.75)
 
 ---
 
-### 🟢 Issue 12: No Metadata-Only Search Path
+### ~~🟢 Issue 12: No Metadata-Only Search Path~~ ✅ DONE
 
-**File:** [`src/llamaindex_rag.py:search()`](src/llamaindex_rag.py:524)
-
-**Problem:** Queries like _"show me all messages from David in Family Group last week"_ trigger a full vector search when only metadata filters are needed. This wastes an embedding API call and may return less relevant results than a pure metadata filter.
-
-**Recommendation:** Detect filter-only queries and skip vector search:
-
-```python
-def search(self, query, k, filter_chat_name, filter_sender, filter_days,
-           metadata_only=False):
-    if metadata_only or self._is_filter_only_query(query):
-        return self._metadata_search(filter_chat_name, filter_sender, filter_days, k)
-    # ... existing hybrid search
-```
+**Applied:** `search()` accepts `metadata_only=True` parameter and `_metadata_search()` method handles filter-only queries without vector search.
 
 ---
 
-### 🟢 Issue 13: Redis Cache TTL vs Incremental Updates Conflict
+### ~~🟢 Issue 13: Redis Cache TTL vs Incremental Updates Conflict~~ ✅ DONE
 
-**File:** [`src/llamaindex_rag.py:REDIS_LISTS_TTL`](src/llamaindex_rag.py:793)
-
-**Problem:** The Redis cache for chat/sender lists has a 1-hour TTL (`REDIS_LISTS_TTL = 3600`), but the cache is incrementally updated on every `add_message()` call. The TTL can cause the cache to expire and trigger a full Qdrant scan rebuild, even though the cache was being kept current incrementally.
-
-**Recommendation:** Either:
-1. Remove the TTL entirely (rely on incremental updates + manual invalidation)
-2. Set a much longer TTL (24h) as a safety net
-3. Refresh TTL on every incremental update
-
-Option 3 is simplest:
-```python
-def _update_cached_lists(self, chat_name=None, sender=None):
-    redis = get_redis_client()
-    if chat_name:
-        redis.sadd(self.REDIS_CHAT_SET_KEY, chat_name)
-        redis.expire(self.REDIS_CHAT_SET_KEY, self.REDIS_LISTS_TTL)  # Reset TTL
-    if sender:
-        redis.sadd(self.REDIS_SENDER_SET_KEY, sender)
-        redis.expire(self.REDIS_SENDER_SET_KEY, self.REDIS_LISTS_TTL)  # Reset TTL
-```
+**Applied:** `_update_cached_lists()` refreshes TTL on every incremental update via `redis.expire()` after each `sadd()`.
 
 ---
 
-### 🟢 Issue 14: LLM Prompt in query() Lacks Structure
+### ~~🟢 Issue 14: LLM Prompt in query() Lacks Structure~~ ✅ DONE
 
-**File:** [`src/llamaindex_rag.py:query()`](src/llamaindex_rag.py:741)
-
-**Problem:** The prompt sent to the LLM is basic — no structured output format, no source attribution, no chain-of-thought, no use of session established facts.
-
-**Recommendation:** Enhance prompt with:
-- Source attribution instructions ("cite specific messages")
-- Structured thinking ("first identify relevant messages, then synthesize")
-- Session context ("established facts from this conversation: ...")
-- Confidence indication ("if unsure, say so")
+**Applied:** `_build_system_prompt()` includes structured instructions: cite specific messages, synthesize multiple sources, don't fabricate, answer in same language, with current date/time in both English and Hebrew.
 
 ---
 
@@ -448,37 +255,34 @@ flowchart LR
 
 ## Implementation Priority
 
-### Phase 1: High Impact, Low Risk
-These changes improve quality and reduce cost without requiring re-indexing.
+### ~~Phase 1: High Impact, Low Risk~~ ✅ ALL DONE
 
-| # | Change | Impact | Files |
-|---|--------|--------|-------|
-| 1 | Add relevance score threshold | Reduces hallucinations | `llamaindex_rag.py` |
-| 2 | Fix hybrid search merge with RRF | Better result ranking | `llamaindex_rag.py` |
-| 3 | Add missing Qdrant payload indexes | Faster filtered queries | `llamaindex_rag.py` |
-| 4 | Add message deduplication | Prevents duplicates | `llamaindex_rag.py` |
-| 5 | Refresh Redis cache TTL on updates | Prevents unnecessary rebuilds | `llamaindex_rag.py` |
-| 6 | Token-aware context building | Prevents context overflow | `llamaindex_rag.py` |
+| # | Change | Status |
+|---|--------|--------|
+| 1 | Add relevance score threshold | ✅ Done |
+| 2 | Fix hybrid search merge with RRF | ✅ Done |
+| 3 | Add missing Qdrant payload indexes | ✅ Done |
+| 4 | Add message deduplication | ✅ Done |
+| 5 | Refresh Redis cache TTL on updates | ✅ Done |
+| 6 | Token-aware context building | ✅ Done (via ChatMemoryBuffer) |
 
-### Phase 2: Medium Impact, Requires Embedding Changes
-These improve embedding quality but affect new messages only (old ones keep old format).
+### Phase 2: Medium Impact ⚠️ MOSTLY DONE
 
-| # | Change | Impact | Files |
-|---|--------|--------|-------|
-| 7 | Upgrade to text-embedding-3-small | Better quality, lower cost | `llamaindex_rag.py` |
-| 8 | Lean embedding text (remove metadata bloat) | Better semantic search | `models/whatsapp.py` |
-| 9 | Filter low-value messages from embedding | Cost savings | `llamaindex_rag.py` |
-| 10 | Enhanced LLM prompt with source attribution | Better answers | `llamaindex_rag.py` |
+| # | Change | Status |
+|---|--------|--------|
+| 7 | Upgrade embedding model | ✅ Done (text-embedding-3-large) |
+| 8 | Lean embedding text | ✅ Done |
+| 9 | Filter low-value messages from embedding | ⏳ Pending |
+| 10 | Enhanced LLM prompt | ✅ Done |
 
-### Phase 3: Architectural Improvements
-These require more design work and testing.
+### Phase 3: Architectural Improvements ⚠️ MOSTLY PENDING
 
-| # | Change | Impact | Files |
-|---|--------|--------|-------|
-| 11 | Conversation chunking (sliding window) | Major context improvement | `llamaindex_rag.py`, new buffer logic |
-| 12 | Field-aware full-text search scoring | Better name/chat queries | `llamaindex_rag.py` |
-| 13 | Metadata-only search path | Skip unnecessary embeddings | `llamaindex_rag.py` |
-| 14 | Rename collection to "knowledge_base" | Clarity (do during re-index) | `llamaindex_rag.py` |
+| # | Change | Status |
+|---|--------|--------|
+| 11 | Conversation chunking (sliding window) | ⏳ Pending |
+| 12 | Field-aware full-text search scoring | ⏳ Pending |
+| 13 | Metadata-only search path | ✅ Done |
+| 14 | Rename collection to "knowledge_base" | ⏳ Pending |
 
 ---
 

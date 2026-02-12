@@ -2,9 +2,9 @@
 
 ## Executive Summary
 
-This document outlines recommended improvements and new features for the Streamlit-based UI ([`ui/app.py`](../ui/app.py)). The current UI provides basic RAG Q&A functionality, but has significant room for enhancement in terms of features, user experience, and integration with the core WhatsApp-GPT system.
+This document outlines recommended improvements and new features for the Streamlit-based UI ([`ui/app.py`](../ui/app.py)). The current UI provides RAG Q&A with multi-turn conversations, semantic search, and a Settings page.
 
-**Last Updated:** 2024-12-31
+**Last Updated:** 2026-02-12
 
 ---
 
@@ -25,21 +25,29 @@ This document outlines recommended improvements and new features for the Streaml
 flowchart LR
     subgraph Streamlit UI
         Chat[Chat Interface]
-        Sidebar[Sidebar Settings]
+        Search[Search Tab]
+        Sidebar[Sidebar Filters]
         Stats[RAG Stats]
+        Settings[Settings Page]
     end
     
     subgraph Flask API
         RAG[/rag/query]
+        RS[/rag/search]
         Chats[/rag/chats]
         Senders[/rag/senders]
         RStats[/rag/stats]
+        CFG[/config]
+        Health[/health]
     end
     
     Chat --> RAG
+    Search --> RS
     Sidebar --> Chats
     Sidebar --> Senders
     Stats --> RStats
+    Settings --> CFG
+    Settings --> Health
 ```
 
 ---
@@ -113,15 +121,16 @@ st.markdown("""
 
 ### 2.1 Multi-Page Application (High Priority)
 
-**Current State:** Single page with RAG Q&A only
+**Current State:** Multi-page structure started — main app + Settings page.
 
-**Feature:**
-- [ ] Convert to Streamlit multi-page app structure
+**Completed ✅:**
+- [x] Convert to Streamlit multi-page app structure
+- [x] ⚙️ Settings & Configuration page (`ui/pages/1_Settings.py`)
+
+**Remaining:**
 - [ ] Add dedicated pages:
   - 📊 Dashboard (home/overview)
-  - 💬 RAG Q&A (current functionality)
   - 📱 Message Browser
-  - ⚙️ Settings & Configuration
   - 📈 Analytics
 
 **File Structure:**
@@ -262,37 +271,19 @@ Answer: [Generated answer here]
 
 ### 3.1 Session Management
 
-**Current Issues:**
-- State lost on page refresh
-- No persistent preferences
-- No user authentication
+**Completed (partial) ✅:**
+- [x] Conversation state maintained via `st.session_state` + backend `conversation_id`
+- [x] Filter selections persisted per conversation via Redis hash
 
-**Recommendations:**
+**Remaining:**
 - [ ] Add session persistence using cookies/localStorage
-- [ ] Implement user preferences storage
 - [ ] Add optional authentication
-- [ ] Remember filter selections
 
-### 3.2 Caching & Performance
+### 3.2 Caching & Performance ✅ DONE
 
-**Current Issues:**
-- Chat/sender lists fetched on every interaction
-- No request caching
-- Slow initial load
-
-**Recommendations:**
-- [ ] Use `@st.cache_data` for API responses
-- [ ] Implement lazy loading for large lists
-- [ ] Add pagination for message browser
-- [ ] Optimize initial page load
-
-**Example:**
-```python
-@st.cache_data(ttl=300)  # Cache for 5 minutes
-def get_chat_list(api_url: str) -> list:
-    response = requests.get(f"{api_url}/rag/chats", timeout=10)
-    return response.json().get("chats", [])
-```
+**Completed ✅:**
+- [x] `@st.cache_data(ttl=300)` on `get_chat_list()` and `get_sender_list()`
+- [x] `@st.cache_data(ttl=60)` on `get_rag_stats()`
 
 ### 3.3 API Client Refactoring
 
@@ -390,12 +381,12 @@ class WhatsAppGPTClient:
 
 | Priority | Feature | Impact | Effort | Status |
 |----------|---------|--------|--------|--------|
-| 🔴 High | Multi-Page App Structure | High | Medium | ⏳ Pending |
+| ~~🔴 High~~ | ~~Multi-Page App Structure~~ | High | Medium | ✅ Started (Settings page) |
 | 🔴 High | Direct Chat Interface | High | Medium | ⏳ Pending |
 | 🔴 High | Message Browser | High | Medium | ⏳ Pending |
 | 🟡 Medium | Analytics Dashboard | Medium | Medium | ⏳ Pending |
 | 🟡 Medium | Context Sources Display | Medium | Low | ⏳ Pending |
-| 🟡 Medium | Configuration Management | Medium | Medium | ⏳ Pending |
+| ~~🟡 Medium~~ | ~~Configuration Management~~ | Medium | Medium | ✅ Done (Settings page) |
 | 🟡 Medium | Visual Design & Theming | Medium | Low | ⏳ Pending |
 | 🟢 Low | Real-Time Message Feed | Low | High | ⏳ Pending |
 | 🟢 Low | Authentication | Low | Medium | ⏳ Pending |
@@ -407,7 +398,7 @@ class WhatsAppGPTClient:
 
 | Task | Effort | Impact | Status |
 |------|--------|--------|--------|
-| Add `@st.cache_data` decorators | Low | Medium | ⏳ Pending |
+| Add `@st.cache_data` decorators | Low | Medium | ✅ Done |
 | Add custom WhatsApp-style CSS | Low | Medium | ⏳ Pending |
 | Show source documents in answers | Low | High | ⏳ Pending |
 | Add connection status indicator | Low | Medium | ⏳ Pending |
