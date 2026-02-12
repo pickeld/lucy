@@ -39,9 +39,15 @@ Usage:
 
 import argparse
 import json
+import os
+import socket
 import sys
+import threading
 import time
 from datetime import datetime
+from functools import partial
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+from pathlib import Path
 
 import requests
 
@@ -53,9 +59,46 @@ DEFAULT_SENDER = "Test User"
 DEFAULT_BODY = "היי, אני אגיע לפגישה ב-3 אחר הצהריים. אפשר להכין את חדר הישיבות?"
 DEFAULT_QUESTION = None  # auto-generated from the message
 
-# A small public-domain JPEG — Wikipedia logo thumbnail (always available)
-DEFAULT_IMAGE_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/6/66/SMPTE_Color_Bars.svg/320px-SMPTE_Color_Bars.svg.png"
-DEFAULT_IMAGE_CAPTION = "בדיקה - תמונה מהפגישה"
+# Default local image file (birthday party invitation)
+DEFAULT_IMAGE_FILE = os.path.join(os.path.dirname(__file__), "image.png")
+DEFAULT_IMAGE_CAPTION = "הזמנה ליום הולדת של עדי ואביב"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Local file server (serves image files for the app to download)
+# ─────────────────────────────────────────────────────────────────────
+
+class _QuietHandler(SimpleHTTPRequestHandler):
+    """HTTP handler that suppresses log output."""
+    def log_message(self, format, *args):
+        pass  # silence
+
+
+def _find_free_port() -> int:
+    """Find a free TCP port on localhost."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
+def start_file_server(directory: str, port: int = 0) -> tuple[HTTPServer, int]:
+    """Start a background HTTP file server for serving local images.
+
+    Args:
+        directory: Directory to serve files from
+        port: Port to bind (0 = auto-select free port)
+
+    Returns:
+        Tuple of (server instance, actual port)
+    """
+    if port == 0:
+        port = _find_free_port()
+
+    handler = partial(_QuietHandler, directory=directory)
+    server = HTTPServer(("127.0.0.1", port), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, port
 
 
 def build_webhook_payload(
@@ -139,7 +182,7 @@ def build_image_webhook_payload(
     sender_name: str,
     image_url: str,
     caption: str | None = None,
-    mimetype: str = "image/jpeg",
+    mimetype: str = "image/png",
     sender_number: str = "972501234567",
     is_group: bool = False,
     group_id: str | None = None,
@@ -148,16 +191,16 @@ def build_image_webhook_payload(
     """Build a realistic WAHA webhook payload for an image message.
 
     Simulates the payload WAHA sends when a contact sends a photo.
-    The ``media.url`` field points to a real image so the app's
-    MediaMessageBase._load_media() can download it.  The ``_data.type``
+    The ``media.url`` field points to a real, downloadable image so the
+    app's MediaMessageBase._load_media() can fetch it.  The ``_data.type``
     is set to ``"image"`` so create_whatsapp_message() routes to
     ImageMessage, which triggers GPT-4 Vision description.
 
     Args:
         sender_name: Display name of the sender
-        image_url: Publicly accessible URL to the image file
+        image_url: HTTP URL to the image (can be a local file server)
         caption: Optional caption text attached to the image
-        mimetype: MIME type of the image (default: image/jpeg)
+        mimetype: MIME type of the image (default: image/png)
         sender_number: Phone number (without +)
         is_group: Whether to simulate a group message
         group_id: Group ID (auto-generated if is_group=True)
@@ -461,16 +504,20 @@ def main():
         help="Simulate an IMAGE message instead of text",
     )
     parser.add_argument(
-        "--image-url", default=DEFAULT_IMAGE_URL,
-        help=f"URL of the image to use (default: SMPTE color bars PNG)",
+        "--image-file", default=DEFAULT_IMAGE_FILE,
+        help=f"Path to a local image file (default: scripts/image.png)",
+    )
+    parser.add_argument(
+        "--image-url", default=None,
+        help="HTTP URL to an image (overrides --image-file; must be downloadable by the app)",
     )
     parser.add_argument(
         "--caption", default=DEFAULT_IMAGE_CAPTION,
         help="Caption for the image message",
     )
     parser.add_argument(
-        "--mimetype", default="image/png",
-        help="MIME type of the image (default: image/png)",
+        "--mimetype", default=None,
+        help="MIME type of the image (auto-detected from file extension if omitted)",
     )
 
     args = parser.parse_args()
@@ -497,26 +544,64 @@ def main():
         print("  📷  IMAGE MESSAGE TEST")
         print("=" * 60)
 
+        # ── Resolve image URL ─────────────────────────────────────
+        file_server = None
+        if args.image_url:
+            # User provided an explicit URL — use it directly
+            image_url = args.image_url
+            mimetype = args.mimetype or "image/jpeg"
+        else:
+            # Serve the local file via a temporary HTTP server
+            image_path = Path(args.image_file).resolve()
+            if not image_path.exists():
+                print(f"  ❌ Image file not found: {image_path}")
+                sys.exit(1)
+
+            # Auto-detect MIME type from extension
+            ext_to_mime = {
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".gif": "image/gif",
+                ".webp": "image/webp",
+            }
+            mimetype = args.mimetype or ext_to_mime.get(
+                image_path.suffix.lower(), "image/png"
+            )
+
+            # Start local file server
+            file_server, port = start_file_server(str(image_path.parent))
+            image_url = f"http://127.0.0.1:{port}/{image_path.name}"
+            print(f"  📂 Serving local file: {image_path}")
+            print(f"  🌐 File server URL  : {image_url}")
+
         # ── Step 1: Send image webhook ────────────────────────────
         payload = build_image_webhook_payload(
             sender_name=args.sender,
-            image_url=args.image_url,
+            image_url=image_url,
             caption=args.caption,
-            mimetype=args.mimetype,
+            mimetype=mimetype,
             is_group=args.group,
             group_name=args.group_name if args.group else None,
         )
 
         if not step_send_image_webhook(args.base_url, payload):
             print("\n❌ Aborting — image webhook was not accepted.")
+            if file_server:
+                file_server.shutdown()
             sys.exit(1)
 
         # ── Step 2: Wait (image processing takes longer: download + GPT-4V) ──
-        wait_time = max(args.wait, 8)  # images need more time for Vision API
+        wait_time = max(args.wait, 10)  # images need more time for Vision API
         step_wait_for_processing(wait_time)
 
+        # Shut down file server (image already downloaded by now)
+        if file_server:
+            file_server.shutdown()
+            print("  📂 File server stopped")
+
         # ── Step 3b: Raw search — look for the image description ──
-        search_query = args.caption or "image"
+        search_query = args.caption or "image birthday"
         step_rag_search(args.base_url, search_query, filter_days=1)
 
         # ── Step 3: RAG query about the image ─────────────────────
