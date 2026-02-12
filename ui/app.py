@@ -396,6 +396,24 @@ with tab_chat:
                         
                         st.markdown(answer)
                         
+                        # Show source citations as expandable section
+                        sources = data.get("sources", [])
+                        if sources:
+                            with st.expander(f"📎 Sources ({len(sources)} messages)", expanded=False):
+                                for i, src in enumerate(sources):
+                                    score = src.get("score")
+                                    score_str = f" — {score:.2%} relevant" if score else ""
+                                    sender = src.get("sender", "Unknown")
+                                    chat = src.get("chat_name", "Unknown")
+                                    content = src.get("content", "")
+                                    
+                                    st.markdown(
+                                        f"**{i+1}. {sender}** in _{chat}_{score_str}\n\n"
+                                        f"> {content[:200]}{'...' if len(content) > 200 else ''}"
+                                    )
+                                    if i < len(sources) - 1:
+                                        st.divider()
+                        
                         # Show filter context if active
                         active_filters = data.get("filters", {})
                         if active_filters.get("chat_name"):

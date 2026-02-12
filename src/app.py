@@ -3,6 +3,7 @@ import os
 import time
 import traceback
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional, Union
 
 # Force unbuffered output for immediate logging
@@ -11,6 +12,8 @@ os.environ['PYTHONUNBUFFERED'] = '1'
 print("🚀 Starting WhatsApp-GPT application...", flush=True)
 
 from flask import Flask, jsonify, redirect, render_template_string, request
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from requests.models import Response
 
 print("✅ Flask imported", flush=True)
@@ -31,6 +34,19 @@ print("✅ WhatsApp module imported", flush=True)
 
 app = Flask(__name__)
 print("✅ Flask app created", flush=True)
+
+# Rate limiter — protects LLM-consuming endpoints from abuse
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=[],  # No default limit — only applied to specific endpoints
+    storage_uri=f"redis://{settings.redis_host}:{settings.redis_port}",
+)
+print("✅ Rate limiter configured", flush=True)
+
+# Thread pool for async webhook processing
+# max_workers=4 allows up to 4 messages to be processed concurrently
+_webhook_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="webhook")
 
 
 # Initialize singletons
@@ -187,6 +203,7 @@ def health():
 # =============================================================================
 
 @app.route("/rag/query", methods=["POST"])
+@limiter.limit("20/minute")  # LLM-consuming: 20 requests per minute per IP
 def rag_query():
     """Query the RAG system with a natural language question.
 
@@ -260,6 +277,23 @@ def rag_query():
         response = chat_engine.chat(question)
         answer = str(response)
 
+        # Extract source documents from the response for citations
+        sources = []
+        if hasattr(response, 'source_nodes') and response.source_nodes:
+            for node_with_score in response.source_nodes:
+                node = node_with_score.node
+                metadata = getattr(node, 'metadata', {})
+                # Skip system placeholder nodes
+                if metadata.get("source") == "system":
+                    continue
+                sources.append({
+                    "content": getattr(node, 'text', '')[:300],  # Truncate for response size
+                    "score": node_with_score.score,
+                    "sender": metadata.get("sender", "Unknown"),
+                    "chat_name": metadata.get("chat_name", "Unknown"),
+                    "timestamp": metadata.get("timestamp"),
+                })
+
         stats = rag.get_stats()
 
         return jsonify({
@@ -267,6 +301,7 @@ def rag_query():
             "question": question,
             "conversation_id": conversation_id,
             "filters": filters,
+            "sources": sources,
             "stats": stats,
         }), 200
 
@@ -277,6 +312,7 @@ def rag_query():
 
 
 @app.route("/rag/search", methods=["POST"])
+@limiter.limit("30/minute")  # Embedding API call: 30 requests per minute per IP
 def rag_search():
     """Search the RAG system for relevant messages.
 
@@ -606,22 +642,22 @@ def test():
     return jsonify({"status": "test message sent"}), 200
 
 
-@app.route("/webhook", methods=["POST"])
-def webhook():
-
-    request_data = request.json or {}
-    payload = request_data.get("payload", {})
+def _process_webhook_payload(payload: Dict[str, Any]) -> None:
+    """Process a webhook payload in a background thread.
     
+    This function handles the heavy work: creating the message object
+    (which may trigger Whisper transcription or GPT-4 Vision), then
+    storing the result in the RAG vector store.
     
+    Args:
+        payload: The webhook payload dictionary
+    """
     try:
-        if not pass_filter(payload):
-            return jsonify({"status": "ok"}), 200
-
         msg = create_whatsapp_message(payload)
 
         chat_id = msg.group.id if msg.is_group else msg.contact.number
         chat_name = msg.group.name if msg.is_group else msg.contact.name
-        logger.info(f"Received message: {chat_name} ({chat_id}) - {msg.message}")
+        logger.info(f"Processing message: {chat_name} ({chat_id}) - {msg.message}")
 
         # Store message in RAG vector store
         if msg.message:
@@ -634,13 +670,35 @@ def webhook():
                 message=msg.message,
                 timestamp=str(msg.timestamp) if msg.timestamp else "0"
             )
-            logger.debug(f"Processed message: {chat_name} || {msg}")
+            logger.debug(f"Stored message: {chat_name} || {msg}")
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Background webhook processing error: {e} ::: {payload}\n{trace}")
+
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    """Receive WhatsApp webhook events from WAHA.
+    
+    Returns 200 immediately and processes the message asynchronously
+    in a background thread. This prevents WAHA timeouts during heavy
+    processing (e.g., Whisper transcription, GPT-4 Vision analysis).
+    """
+    request_data = request.json or {}
+    payload = request_data.get("payload", {})
+    
+    try:
+        if not pass_filter(payload):
+            return jsonify({"status": "ok"}), 200
+
+        # Submit to background thread pool — return 200 immediately
+        _webhook_executor.submit(_process_webhook_payload, payload)
         
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         trace = traceback.format_exc()
         logger.error(
-            f"Error processing webhook: {e} ::: {payload}\n{trace}")
+            f"Error submitting webhook: {e} ::: {payload}\n{trace}")
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 

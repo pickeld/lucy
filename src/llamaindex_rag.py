@@ -419,6 +419,138 @@ class LlamaIndexRAG:
             logger.debug(f"Dedup check failed (proceeding with insert): {e}")
             return False
     
+    # =========================================================================
+    # Conversation Chunking (sliding window)
+    # =========================================================================
+    
+    CHUNK_BUFFER_KEY_PREFIX = "rag:chunk_buffer:"
+    CHUNK_BUFFER_TTL = 120  # 2 minutes — flush buffer if no new messages
+    CHUNK_MAX_MESSAGES = 5  # Flush when buffer reaches this many messages
+    
+    def _buffer_message_for_chunking(
+        self,
+        chat_id: str,
+        chat_name: str,
+        is_group: bool,
+        sender: str,
+        message: str,
+        timestamp: str
+    ) -> None:
+        """Buffer a message for conversation chunking.
+        
+        Messages are buffered per chat in a Redis list. When the buffer reaches
+        CHUNK_MAX_MESSAGES or the TTL expires, the buffer is flushed as a single
+        conversation chunk that gets its own embedding in Qdrant.
+        
+        This gives isolated messages (like "yes", "me too") conversational context
+        in the embedding, dramatically improving retrieval quality.
+        
+        Args:
+            chat_id: WhatsApp chat ID (used as buffer key)
+            chat_name: Chat/group display name
+            is_group: Whether group chat
+            sender: Message sender name
+            message: Message text
+            timestamp: Unix timestamp as string
+        """
+        try:
+            redis = get_redis_client()
+            buffer_key = f"{self.CHUNK_BUFFER_KEY_PREFIX}{chat_id}"
+            
+            # Store message as JSON in the Redis list
+            msg_data = json.dumps({
+                "sender": sender,
+                "message": message,
+                "timestamp": timestamp,
+                "chat_name": chat_name,
+                "is_group": is_group,
+            })
+            redis.rpush(buffer_key, msg_data)
+            redis.expire(buffer_key, self.CHUNK_BUFFER_TTL)
+            
+            # Check if buffer is full → flush
+            buffer_len = redis.llen(buffer_key)
+            if buffer_len >= self.CHUNK_MAX_MESSAGES:
+                self._flush_chunk_buffer(chat_id)
+                
+        except Exception as e:
+            logger.debug(f"Chunk buffering failed (non-critical): {e}")
+    
+    def _flush_chunk_buffer(self, chat_id: str) -> bool:
+        """Flush the message buffer for a chat as a conversation chunk.
+        
+        Reads all buffered messages, concatenates them into a single chunk text,
+        and stores it as an additional point in Qdrant with source_type='conversation_chunk'.
+        
+        Args:
+            chat_id: The chat ID whose buffer to flush
+            
+        Returns:
+            True if a chunk was created, False otherwise
+        """
+        try:
+            redis = get_redis_client()
+            buffer_key = f"{self.CHUNK_BUFFER_KEY_PREFIX}{chat_id}"
+            
+            # Atomically get all messages and delete the buffer
+            raw_messages = redis.lrange(buffer_key, 0, -1)
+            redis.delete(buffer_key)
+            
+            if not raw_messages or len(raw_messages) < 2:
+                return False  # Need at least 2 messages for a meaningful chunk
+            
+            # Parse buffered messages
+            messages = []
+            for raw in raw_messages:
+                try:
+                    messages.append(json.loads(raw))
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            
+            if len(messages) < 2:
+                return False
+            
+            # Build chunk text
+            chat_name = messages[0].get("chat_name", "Unknown")
+            is_group = messages[0].get("is_group", False)
+            first_ts = messages[0].get("timestamp", "0")
+            last_ts = messages[-1].get("timestamp", "0")
+            
+            chunk_lines = []
+            for msg in messages:
+                ts_formatted = format_timestamp(msg.get("timestamp", "0"))
+                chunk_lines.append(f"[{ts_formatted}] {msg['sender']}: {msg['message']}")
+            
+            chunk_text = "\n".join(chunk_lines)
+            
+            # Create a TextNode for the chunk
+            chunk_node = TextNode(
+                text=chunk_text,
+                metadata={
+                    "source_type": "conversation_chunk",
+                    "chat_id": chat_id,
+                    "chat_name": chat_name,
+                    "is_group": is_group,
+                    "timestamp": int(last_ts) if last_ts.isdigit() else 0,
+                    "first_timestamp": int(first_ts) if first_ts.isdigit() else 0,
+                    "message_count": len(messages),
+                    "senders": list({m["sender"] for m in messages}),
+                    "source_id": f"chunk:{chat_id}:{first_ts}:{last_ts}",
+                },
+                id_=str(uuid.uuid4()),
+            )
+            
+            self.index.insert_nodes([chunk_node])
+            logger.info(
+                f"Created conversation chunk: {chat_name} ({len(messages)} msgs, "
+                f"{first_ts}→{last_ts})"
+            )
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to flush chunk buffer for {chat_id}: {e}")
+            return False
+    
     def add_message(
         self,
         thread_id: str,
@@ -433,6 +565,11 @@ class LlamaIndexRAG:
         media_url: Optional[str] = None
     ) -> bool:
         """Add a WhatsApp message to the vector store.
+        
+        Each message is stored as an individual point AND buffered for
+        conversation chunking. When the buffer reaches CHUNK_MAX_MESSAGES,
+        the buffered messages are also stored as a single conversation chunk
+        with its own embedding, giving short messages conversational context.
         
         Uses WhatsAppMessageDocument model for consistent schema across all entries.
         Also incrementally updates the Redis-cached chat and sender lists.
@@ -478,8 +615,18 @@ class LlamaIndexRAG:
             # Convert to LlamaIndex TextNode with standardized schema
             node = doc.to_llama_index_node()
             
-            # Insert into index
+            # Insert individual message into index
             self.index.insert_nodes([node])
+            
+            # Buffer for conversation chunking (creates context-rich chunks)
+            self._buffer_message_for_chunking(
+                chat_id=chat_id,
+                chat_name=chat_name,
+                is_group=is_group,
+                sender=sender,
+                message=message,
+                timestamp=timestamp,
+            )
             
             # Incrementally update cached chat/sender sets in Redis
             self._update_cached_lists(chat_name=chat_name, sender=sender)

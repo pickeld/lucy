@@ -32,17 +32,15 @@ A Flask-based integration between WhatsApp (via the WAHA API) and OpenAI's GPT m
 ```
 whatsapp-gpt/
 ├── src/                          # Main application code
-│   ├── app.py                    # Flask app: webhooks, RAG & session API endpoints
-│   ├── config.py                 # Configuration from .env / environment variables
-│   ├── llamaindex_rag.py         # LlamaIndex RAG with Qdrant vector store
-│   ├── models/                   # Pydantic document models for RAG
-│   │   ├── base.py               # BaseRAGDocument abstract class
-│   │   ├── whatsapp.py           # WhatsApp message document
-│   │   ├── document.py           # File document (PDF, DOCX, etc.)
-│   │   └── call_recording.py     # Call recording document
-│   ├── session/                  # Conversation session management
-│   │   ├── models.py             # ConversationSession, EntityInfo, etc.
-│   │   └── manager.py            # SessionManager with Redis persistence
+│   ├── app.py                    # Flask app: webhooks, RAG, config & cache API endpoints
+│   ├── config.py                 # Settings class — reads from SQLite via settings_db
+│   ├── settings_db.py            # SQLite-backed settings database (seeds from .env on first run)
+│   ├── llamaindex_rag.py         # LlamaIndex RAG with Qdrant + CondensePlusContextChatEngine
+│   ├── models/                   # Pydantic v2 document models for RAG
+│   │   ├── base.py               # BaseRAGDocument, DocumentMetadata, SourceType
+│   │   ├── whatsapp.py           # WhatsAppMessageDocument
+│   │   ├── document.py           # FileDocument (PDF, DOCX, etc.)
+│   │   └── call_recording.py     # CallRecordingDocument
 │   ├── whatsapp/                 # WhatsApp message handling
 │   │   ├── handler.py            # Message type classes & factory function
 │   │   ├── contact.py            # Contact management with Redis caching
@@ -53,12 +51,15 @@ whatsapp-gpt/
 │       ├── logger.py             # Logging configuration
 │       └── redis_conn.py         # Redis connection management
 ├── ui/                           # Streamlit web UI
-│   └── app.py                    # RAG Q&A chat & search interface
+│   ├── app.py                    # RAG Q&A chat & search interface
+│   └── pages/
+│       └── 1_Settings.py         # Settings management page
+├── data/                         # SQLite database (gitignored, auto-created)
 ├── plans/                        # Architecture & improvement plans
-├── scripts/                      # Database init & utility scripts
-├── docker-compose.yml            # Redis, WAHA, Qdrant services
+├── scripts/                      # Utility scripts
+├── docker-compose.yml            # Redis, WAHA, Qdrant, App services
 ├── Dockerfile                    # Application container
-├── .env.example                  # Example environment configuration
+├── .env.example                  # First-run seed for settings database
 ├── requirements.txt              # Python dependencies
 └── README.md                     # This file
 ```
@@ -106,7 +107,7 @@ whatsapp-gpt/
    ```
 
 6. **Pair WhatsApp:**
-   - Visit `http://localhost:5002/pair` in your browser and scan the QR code with your WhatsApp app.
+   - Visit `http://localhost:8765/pair` in your browser and scan the QR code with your WhatsApp app.
 
 ## Usage
 ### Basic Usage
@@ -130,25 +131,15 @@ whatsapp-gpt/
 The project uses environment variables for configuration, managed via a `.env` file. Required configurations include:
 
 #### Core Settings
+
+The `.env` file is used **only on first startup** to seed the SQLite settings database. After that, all configuration is managed through the Settings UI page or the `PUT /config` API endpoint.
+
 ```env
-# WhatsApp API Configuration
-WAHA_API_URL=http://localhost:3000
-WAHA_API_KEY=your-waha-api-key
-
-# OpenAI Configuration
+# See .env.example for all available settings
 OPENAI_API_KEY=your-openai-api-key
-OPENAI_MODEL=gpt-3.5-turbo
-OPENAI_TEMPERATURE=0.7
-
-# Redis Configuration
+WAHA_API_KEY=your-waha-api-key
 REDIS_HOST=localhost
-REDIS_PORT=6379
-REDIS_DB=0
-
-# Application Settings
-LOG_LEVEL=DEBUG
-FLASK_ENV=development
-PORT=5002
+QDRANT_HOST=localhost
 ```
 
 See `.env.example` for a complete list of available configuration options. Make sure to:
@@ -177,7 +168,7 @@ See `.env.example` for a complete list of available configuration options. Make 
 
 4. **Run the application in debug mode:**
    ```sh
-   python src/app.py
+   PYTHONPATH=src python src/app.py
    ```
 
 

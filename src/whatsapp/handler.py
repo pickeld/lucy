@@ -356,17 +356,77 @@ class MediaMessageBase(WhatsappMSG):
 class ImageMessage(MediaMessageBase):
     """WhatsApp image message.
     
-    Handles image attachments with optional caption and image description.
+    Handles image attachments with automatic AI description via GPT-4 Vision.
+    After downloading the image, it is automatically analyzed and a description
+    is generated and stored as self.description. The description is appended
+    to self.message so it gets indexed in the RAG vector store.
     
     Attributes:
-        description: AI-generated description of the image (optional)
+        description: AI-generated description of the image
     """
     
     content_type = ContentType.IMAGE
     
     def __init__(self, payload: Dict[str, Any]):
         super().__init__(payload)
-        self.description: Optional[str] = None  # Can be set by vision API
+        self.description: Optional[str] = None
+        
+        # Auto-describe if we have image data
+        if self.has_media and self.media_base64 and self.media_type and self.media_type.startswith("image/"):
+            self._describe_image()
+    
+    def _describe_image(self) -> None:
+        """Generate image description using GPT-4 Vision API.
+        
+        Sends the base64-encoded image to GPT-4 Vision for analysis.
+        On success, sets self.description and appends it to self.message
+        so the description is indexed in RAG for semantic search.
+        """
+        try:
+            from openai import OpenAI
+            
+            client = OpenAI(api_key=settings.openai_api_key)
+            
+            # Build the image URL for the API (data URI with base64)
+            image_url = f"data:{self.media_type};base64,{self.media_base64}"
+            
+            response = client.chat.completions.create(
+                model=settings.get("openai_model", "gpt-4o"),
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Describe this image concisely in 1-2 sentences. "
+                                        "Focus on the main subject, action, and any text visible. "
+                                        "If it's a screenshot, describe what it shows."
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": image_url,
+                                    "detail": "low"  # Use low detail to save tokens
+                                }
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=150,
+            )
+            
+            self.description = response.choices[0].message.content
+            if self.description:
+                # Append description to message for RAG indexing
+                caption = self.message or ""
+                caption_part = f" Caption: {caption}" if caption else ""
+                self.message = f"[Image: {self.description}]{caption_part}"
+                logger.info(f"Described image: {self.description[:80]}...")
+                
+        except ImportError:
+            logger.warning("openai package not available for image description")
+        except Exception as e:
+            logger.error(f"Image description failed: {e}")
     
     def to_json(self) -> Dict[str, Any]:
         """Convert image message to JSON format.
@@ -390,17 +450,83 @@ class ImageMessage(MediaMessageBase):
 class VoiceMessage(MediaMessageBase):
     """WhatsApp voice message (push-to-talk).
     
-    Handles voice recordings with optional transcription.
+    Handles voice recordings with automatic transcription via OpenAI Whisper API.
+    After downloading the audio, the message is automatically transcribed and
+    the transcription is stored as both self.transcription and self.message
+    so it gets indexed in the RAG vector store.
     
     Attributes:
-        transcription: Text transcription of the voice message (optional)
+        transcription: Text transcription of the voice message
     """
     
     content_type = ContentType.VOICE
     
     def __init__(self, payload: Dict[str, Any]):
         super().__init__(payload)
-        self.transcription: Optional[str] = None  # Can be set by transcription API
+        self.transcription: Optional[str] = None
+        
+        # Auto-transcribe if we have audio data
+        if self.has_media and self.media_base64:
+            self._transcribe_audio()
+    
+    def _transcribe_audio(self) -> None:
+        """Transcribe voice audio using OpenAI Whisper API.
+        
+        Decodes the base64 audio, writes to a temp file, and sends to
+        the Whisper API for transcription. On success, sets both
+        self.transcription and self.message so the text is indexed in RAG.
+        """
+        import tempfile
+        
+        try:
+            from openai import OpenAI
+            
+            client = OpenAI(api_key=settings.openai_api_key)
+            
+            # Determine file extension from MIME type
+            ext_map = {
+                "audio/ogg": ".ogg",
+                "audio/mpeg": ".mp3",
+                "audio/mp4": ".m4a",
+                "audio/wav": ".wav",
+                "audio/x-wav": ".wav",
+                "audio/webm": ".webm",
+            }
+            extension = ext_map.get(self.media_type or "", ".ogg")
+            
+            # Decode base64 audio to temp file (media_base64 is guaranteed non-None by caller)
+            audio_bytes = base64.b64decode(self.media_base64 or "")
+            
+            with tempfile.NamedTemporaryFile(suffix=extension, delete=False) as tmp:
+                tmp.write(audio_bytes)
+                tmp_path = tmp.name
+            
+            try:
+                # Call Whisper API
+                with open(tmp_path, "rb") as audio_file:
+                    result = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio_file,
+                    )
+                
+                self.transcription = result.text
+                # Set message so it gets stored in RAG
+                if self.transcription:
+                    caption = f" (caption: {self.message})" if self.message else ""
+                    self.message = f"[Voice message transcription] {self.transcription}{caption}"
+                    logger.info(f"Transcribed voice message: {self.transcription[:80]}...")
+            finally:
+                # Clean up temp file
+                import os as _os
+                try:
+                    _os.unlink(tmp_path)
+                except OSError:
+                    pass
+                    
+        except ImportError:
+            logger.warning("openai package not available for voice transcription")
+        except Exception as e:
+            logger.error(f"Voice transcription failed: {e}")
     
     def to_json(self) -> Dict[str, Any]:
         """Convert voice message to JSON format.

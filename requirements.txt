@@ -27,3 +27,6 @@ pydantic>=2.0
 # Utilities
 retry
 tiktoken>=0.5.0
+
+# Rate limiting
+flask-limiter>=3.0
