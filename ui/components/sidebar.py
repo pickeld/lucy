@@ -4,7 +4,7 @@ Renders:
 - New Chat button
 - Search / filter bar for conversations
 - Time-grouped conversation list (Today, Yesterday, …)
-- Per-conversation rename / delete actions
+- Actions (rename/delete) shown only for the active conversation
 - Settings toggle & health indicator at the bottom
 """
 
@@ -17,7 +17,7 @@ from utils.api import (
     fetch_conversations,
     rename_conversation,
 )
-from utils.time_utils import group_conversations_by_time, relative_time
+from utils.time_utils import group_conversations_by_time
 
 
 def render_sidebar() -> None:
@@ -85,7 +85,7 @@ def _render_conversation_list() -> None:
         # Time group header
         st.markdown(
             f'<p style="color:#888; font-size:0.72rem; text-transform:uppercase; '
-            f'letter-spacing:0.05em; margin:12px 0 4px 4px; font-weight:600;">'
+            f'letter-spacing:0.05em; margin:14px 0 6px 8px; font-weight:600;">'
             f'{group_label}</p>',
             unsafe_allow_html=True,
         )
@@ -95,69 +95,58 @@ def _render_conversation_list() -> None:
 
 
 def _render_conversation_item(convo: dict) -> None:
-    """Render a single conversation row with title and action buttons."""
+    """Render a single conversation — clean full-width title, with actions only for active."""
     convo_id = convo["id"]
     convo_title = convo.get("title") or "Untitled"
     is_active = convo_id == st.session_state.get("conversation_id")
 
     # ── RENAME MODE ──────────────────────────────────────────────
     if st.session_state.get("renaming_conversation_id") == convo_id:
-        new_title = st.text_input(
+        new_title: str = st.text_input(
             "Rename",
             value=convo_title,
             key=f"rename_input_{convo_id}",
             label_visibility="collapsed",
-        )
+        ) or convo_title
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("✓", key=f"rename_save_{convo_id}"):
+            if st.button("Save", key=f"rename_save_{convo_id}", use_container_width=True):
                 if new_title.strip():
                     rename_conversation(convo_id, new_title.strip())
                 st.session_state.renaming_conversation_id = None
                 st.rerun()
         with c2:
-            if st.button("✗", key=f"rename_cancel_{convo_id}"):
+            if st.button("Cancel", key=f"rename_cancel_{convo_id}", use_container_width=True):
                 st.session_state.renaming_conversation_id = None
                 st.rerun()
         return
 
     # ── NORMAL DISPLAY ───────────────────────────────────────────
-    # Wrap in a container div to mark active state for CSS
-    css_class = "conv-active" if is_active else "conv-list"
+    display_title = convo_title[:38] + ("…" if len(convo_title) > 38 else "")
 
-    # Use columns: [title][rename][delete]
-    col_title, col_edit, col_del = st.columns([6, 1, 1])
+    # Full-width button for the conversation title
+    if st.button(
+        f"{'●  ' if is_active else ''}{display_title}",
+        key=f"load_{convo_id}",
+        use_container_width=True,
+        disabled=is_active,
+    ):
+        _load_conversation(convo_id)
 
-    display_title = convo_title[:35] + ("…" if len(convo_title) > 35 else "")
-
-    with col_title:
-        st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
-        if st.button(
-            display_title,
-            key=f"load_{convo_id}",
-            use_container_width=True,
-            disabled=is_active,
-        ):
-            _load_conversation(convo_id)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with col_edit:
-        st.markdown('<div class="conv-actions">', unsafe_allow_html=True)
-        if st.button("✏️", key=f"rename_{convo_id}", help="Rename"):
-            st.session_state.renaming_conversation_id = convo_id
-            st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with col_del:
-        st.markdown('<div class="conv-actions">', unsafe_allow_html=True)
-        if st.button("🗑", key=f"del_{convo_id}", help="Delete"):
-            delete_conversation(convo_id)
-            if convo_id == st.session_state.get("conversation_id"):
+    # Show actions ONLY for the active conversation (right below it)
+    if is_active:
+        col_rename, col_delete, col_spacer = st.columns([1, 1, 2])
+        with col_rename:
+            if st.button("✏️ Rename", key=f"rename_{convo_id}"):
+                st.session_state.renaming_conversation_id = convo_id
+                st.rerun()
+        with col_delete:
+            if st.button("🗑️ Delete", key=f"del_{convo_id}"):
+                delete_conversation(convo_id)
                 st.session_state.conversation_id = None
                 st.session_state.messages = []
                 st.session_state.active_filters = {}
-            st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
+                st.rerun()
 
 
 def _load_conversation(convo_id: str) -> None:
