@@ -24,8 +24,8 @@ ENV PYTHONPATH=/app/src
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# Make port 5000 available to the world outside this container
-EXPOSE 5000
+# Make port 8765 available to the world outside this container
+EXPOSE 8765
 
 # Run the application with hot reload for development
 CMD ["python", "-u", "src/app.py"]

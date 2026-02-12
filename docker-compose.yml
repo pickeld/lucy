@@ -33,35 +33,39 @@ services:
     env_file:
       - .env
     restart: unless-stopped
-  db:
-    image: pgvector/pgvector:pg17        # Postgres + pgvector baked in
-    container_name: db
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: langgraph              # DB for LangGraph checkpointer
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"                       # expose locally
-    volumes:
-      - pg_data:/var/lib/postgresql/data
-      - ./scripts:/docker-entrypoint-initdb.d
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    # container_name: pgadmin
-    restart: unless-stopped
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@local.dev
-      PGADMIN_DEFAULT_PASSWORD: admin123
-    ports:
-      - "5080:80"
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
+  # NOTE: PostgreSQL is currently not used by the application.
+  # It was originally provisioned for LangGraph checkpointer which has been removed.
+  # Kept here for future use (analytics, message metadata, etc.).
+  # Uncomment if needed, or remove to save resources.
+  #
+  # db:
+  #   image: pgvector/pgvector:pg17        # Postgres + pgvector baked in
+  #   container_name: db
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_DB: langgraph
+  #     POSTGRES_USER: postgres
+  #     POSTGRES_PASSWORD: postgres
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - pg_data:/var/lib/postgresql/data
+  #     - ./scripts:/docker-entrypoint-initdb.d
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U postgres"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  # pgadmin:
+  #   image: dpage/pgadmin4:latest
+  #   restart: unless-stopped
+  #   environment:
+  #     PGADMIN_DEFAULT_EMAIL: admin@local.dev
+  #     PGADMIN_DEFAULT_PASSWORD: admin123
+  #   ports:
+  #     - "5080:80"
+  #   volumes:
+  #     - pgadmin_data:/var/lib/pgadmin
 
   # Qdrant - Vector Database with built-in Web UI Dashboard
   # API: http://localhost:6333
@@ -79,20 +83,30 @@ services:
       - QDRANT__SERVICE__GRPC_PORT=6334
       - QDRANT__LOG_LEVEL=INFO
   
-  # app:
-  #   build: .
-  #   container_name: whatsapp-gpt
-  #   restart: unless-stopped
-  #   env_file:
-  #     - .env
-  #   ports:
-  #     - "8765:8765"
-  #   volumes:
-  #     - .:/app
-  #   depends_on:
-  #     - redis
-  #     - waha
-  #     - db
+  app:
+    build: .
+    container_name: whatsapp-gpt
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./src:/app/src        # Hot reload source code
+      - ./.env:/app/.env:ro   # Mount real .env (read-only)
+    depends_on:
+      redis:
+        condition: service_started
+      waha:
+        condition: service_started
+      qdrant:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8765/health', timeout=5).raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 volumes:
   waha_data:
