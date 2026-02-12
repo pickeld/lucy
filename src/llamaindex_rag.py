@@ -78,7 +78,7 @@ class LlamaIndexRAG:
     _qdrant_client = None
     _vector_store = None
     
-    COLLECTION_NAME = "whatsapp_messages"
+    COLLECTION_NAME = os.getenv("RAG_COLLECTION_NAME", "whatsapp_messages")
     VECTOR_SIZE = 1536  # OpenAI embedding dimension
     MINIMUM_SIMILARITY_SCORE = float(os.getenv("RAG_MIN_SCORE", "0.5"))
     MAX_CONTEXT_TOKENS = int(os.getenv("RAG_MAX_CONTEXT_TOKENS", "3000"))
@@ -117,13 +117,17 @@ class LlamaIndexRAG:
         logger.info(f"LlamaIndex RAG initialized with Qdrant at {self.qdrant_host}:{self.qdrant_port}")
     
     def _configure_embedding(self):
-        """Configure embedding model (fast, required at startup)."""
+        """Configure embedding model (fast, required at startup).
+        
+        Uses text-embedding-3-small which is 5x cheaper and higher quality
+        than the legacy text-embedding-ada-002. Same 1536 dimensions.
+        """
         logger.debug("Setting up OpenAI embedding model...")
         Settings.embed_model = OpenAIEmbedding(
             api_key=config.OPENAI_API_KEY,
-            model="text-embedding-ada-002"
+            model="text-embedding-3-small"
         )
-        logger.debug("OpenAI embedding model configured")
+        logger.debug("OpenAI embedding model configured (text-embedding-3-small)")
     
     def _ensure_llm_configured(self):
         """Lazily configure LLM on first use (Gemini import is slow)."""
@@ -637,6 +641,85 @@ class LlamaIndexRAG:
         
         return merged
     
+    def _metadata_search(
+        self,
+        k: int = 20,
+        filter_chat_name: Optional[str] = None,
+        filter_sender: Optional[str] = None,
+        filter_days: Optional[int] = None
+    ) -> List[NodeWithScore]:
+        """Search by metadata filters only, without vector similarity.
+        
+        Useful for queries like "show me all messages from David in Family Group
+        last week" where only metadata filters are needed. Skips the embedding
+        API call entirely.
+        
+        Args:
+            k: Max results to return
+            filter_chat_name: Filter by chat/group name
+            filter_sender: Filter by sender name
+            filter_days: Filter by number of days
+            
+        Returns:
+            List of NodeWithScore objects (score=1.0 for all, sorted by timestamp)
+        """
+        try:
+            must_conditions = []
+            
+            if filter_chat_name:
+                must_conditions.append(
+                    FieldCondition(key="chat_name", match=MatchValue(value=filter_chat_name))
+                )
+            
+            if filter_sender:
+                must_conditions.append(
+                    FieldCondition(key="sender", match=MatchValue(value=filter_sender))
+                )
+            
+            if filter_days is not None and filter_days > 0:
+                min_timestamp = int(datetime.now().timestamp()) - (filter_days * 24 * 60 * 60)
+                must_conditions.append(
+                    FieldCondition(key="timestamp", range=Range(gte=min_timestamp))
+                )
+            
+            if not must_conditions:
+                logger.debug("Metadata search called with no filters, skipping")
+                return []
+            
+            results, _ = self.qdrant_client.scroll(
+                collection_name=self.COLLECTION_NAME,
+                scroll_filter=Filter(must=must_conditions),
+                limit=k,
+                with_payload=True,
+                with_vectors=False
+            )
+            
+            nodes = []
+            for record in results:
+                payload = record.payload or {}
+                chat_name = payload.get("chat_name", "Unknown")
+                sender = payload.get("sender", "Unknown")
+                message = payload.get("message", "")
+                timestamp = payload.get("timestamp", 0)
+                
+                if message:
+                    formatted_time = format_timestamp(str(timestamp))
+                    text = f"[{formatted_time}] {sender} in {chat_name}: {message}"
+                    
+                    node = TextNode(
+                        text=text,
+                        metadata={k: v for k, v in payload.items() if not k.startswith("_")},
+                        id_=str(record.id)
+                    )
+                    nodes.append(NodeWithScore(node=node, score=1.0))
+            
+            logger.info(f"Metadata search returned {len(nodes)} results")
+            return nodes
+            
+        except Exception as e:
+            logger.error(f"Metadata search failed: {e}")
+            return []
+    
     def search(
         self,
         query: str,
@@ -644,13 +727,19 @@ class LlamaIndexRAG:
         filter_chat_name: Optional[str] = None,
         filter_sender: Optional[str] = None,
         filter_days: Optional[int] = None,
-        include_metadata_search: bool = True
+        include_metadata_search: bool = True,
+        metadata_only: bool = False
     ) -> List[NodeWithScore]:
         """Search for relevant messages using hybrid semantic + full-text search.
         
         Performs two searches and merges results:
         1. Vector similarity search (semantic)
         2. Full-text search on metadata (sender, chat_name, message)
+        
+        If metadata_only=True, skips the vector search entirely and returns
+        results based purely on metadata filters. This saves an embedding API
+        call for queries that are purely filter-based (e.g., "show me messages
+        from David in Family Group last week").
         
         This ensures queries about people find results even when the semantic
         embedding doesn't capture the relationship (e.g., "what is Kobi's last name?").
@@ -662,11 +751,21 @@ class LlamaIndexRAG:
             filter_sender: Optional filter by sender name
             filter_days: Optional filter by number of days
             include_metadata_search: Include full-text search on metadata fields
+            metadata_only: Skip vector search, use only metadata filters
             
         Returns:
             List of NodeWithScore objects with metadata
         """
         try:
+            # Metadata-only search: skip vector search entirely
+            if metadata_only:
+                return self._metadata_search(
+                    k=k,
+                    filter_chat_name=filter_chat_name,
+                    filter_sender=filter_sender,
+                    filter_days=filter_days
+                )
+            
             # Build Qdrant filter conditions
             must_conditions = []
             
@@ -887,23 +986,27 @@ class LlamaIndexRAG:
                     history_parts.append(f"{role.capitalize()}: {content}")
                 history_text = "\n\nConversation History:\n" + "\n".join(history_parts)
             
-            # Create query prompt
+            # Create query prompt with structured instructions
             prompt = f"""You are a helpful AI assistant for a WhatsApp message archive search system.
+You have access to retrieved messages from the archive below.
 
 Current Date/Time: {current_datetime}
 תאריך ושעה נוכחיים: {hebrew_date}
 
-Message Archive Context:
+=== Retrieved Messages ({len(context_parts)} results) ===
 {context}
-{history_text}
+=== End of Retrieved Messages ==={history_text}
 
 User Question: {question}
 
 Instructions:
-- If the question is about messages/conversations, use the context above to answer
-- If the question is general (like "what day is today?"), answer directly
-- Answer in the same language as the question
-- Be concise and helpful"""
+1. ANALYZE the retrieved messages above to find information relevant to the question.
+2. CITE specific messages when possible (mention who said what and when).
+3. If multiple messages are relevant, SYNTHESIZE them into a coherent answer.
+4. If the retrieved messages don't contain enough information to answer confidently, say so clearly — do NOT fabricate information.
+5. If the question is general (like "what day is today?"), answer directly without referencing the archive.
+6. Answer in the SAME LANGUAGE as the question.
+7. Be concise but thorough. Prefer specific facts over vague summaries."""
 
             # Use LlamaIndex LLM for response
             response = Settings.llm.complete(prompt)
