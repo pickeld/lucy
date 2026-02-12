@@ -499,4 +499,96 @@ section[data-testid="stSidebar"] .stDownloadButton > button {
 section[data-testid="stSidebar"] .stDownloadButton > button:hover {
     background-color: #2A2A2A !important;
 }
+
+/* =======================================================================
+   18. SUGGESTION BUTTONS (main area, empty state)
+   ======================================================================= */
+
+/* Target buttons in the main content area that are NOT in chat messages */
+.main .stButton > button {
+    background-color: #F7F7F8 !important;
+    border: 1px solid #E5E7EB !important;
+    border-radius: 12px !important;
+    color: #374151 !important;
+    font-size: 0.85rem !important;
+    padding: 14px 16px !important;
+    text-align: left !important;
+    line-height: 1.4 !important;
+    min-height: 60px !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease !important;
+}
+
+.main .stButton > button:hover {
+    background-color: #ECECEC !important;
+    border-color: #D1D5DB !important;
+}
+
+/* =======================================================================
+   19. SIDEBAR COLLAPSE BUTTON
+   ======================================================================= */
+
+button[data-testid="stSidebarCollapseButton"] {
+    color: #ECECEC !important;
+}
+
+button[data-testid="stSidebarCollapseButton"] svg {
+    fill: #ECECEC !important;
+    stroke: #ECECEC !important;
+}
+
+/* When sidebar is collapsed, the expand button should be dark */
+.main button[data-testid="stSidebarCollapseButton"] {
+    color: #374151 !important;
+}
+
+.main button[data-testid="stSidebarCollapseButton"] svg {
+    fill: #374151 !important;
+    stroke: #374151 !important;
+}
+
+/* =======================================================================
+   20. CONVERSATION LIST ITEM SPACING
+   ======================================================================= */
+
+/* Tighter columns in sidebar conversation rows */
+section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] {
+    gap: 2px !important;
+    align-items: center !important;
+}
+
+/* Reduce vertical gap between sidebar elements */
+section[data-testid="stSidebar"] .stElementContainer {
+    margin-bottom: 0px !important;
+}
+
+/* =======================================================================
+   21. CHAT MESSAGE IMPROVEMENTS
+   ======================================================================= */
+
+/* Slightly more contrast for user messages */
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
+    background-color: #F3F4F6 !important;
+}
+
+/* Better spacing between messages */
+[data-testid="stChatMessage"] {
+    margin-bottom: 2px !important;
+}
+
+/* Chat avatar sizing */
+[data-testid="stChatMessage"] [data-testid*="chatAvatarIcon"] {
+    width: 28px !important;
+    height: 28px !important;
+}
+
+/* =======================================================================
+   22. MAIN AREA CLEAR/FILTER BUTTONS — smaller, less prominent
+   ======================================================================= */
+
+/* Override for small action buttons in chat area header */
+.main [data-testid="stHorizontalBlock"] .stButton > button {
+    min-height: auto !important;
+    padding: 6px 12px !important;
+    font-size: 0.8rem !important;
+}
 """
