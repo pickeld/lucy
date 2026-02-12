@@ -80,6 +80,9 @@ class LlamaIndexRAG:
     
     COLLECTION_NAME = "whatsapp_messages"
     VECTOR_SIZE = 1536  # OpenAI embedding dimension
+    MINIMUM_SIMILARITY_SCORE = float(os.getenv("RAG_MIN_SCORE", "0.5"))
+    MAX_CONTEXT_TOKENS = int(os.getenv("RAG_MAX_CONTEXT_TOKENS", "3000"))
+    RRF_K = 60  # Reciprocal Rank Fusion constant (standard default)
     
     def __new__(cls):
         """Singleton pattern to ensure one RAG instance."""
@@ -214,6 +217,8 @@ class LlamaIndexRAG:
             
             # Ensure text indexes exist for full-text search on metadata fields
             self._ensure_text_indexes()
+            # Ensure payload indexes for efficient filtering
+            self._ensure_payload_indexes()
             
         except Exception as e:
             logger.error(f"Failed to ensure collection: {e}")
@@ -273,6 +278,57 @@ class LlamaIndexRAG:
         except Exception as e:
             logger.debug(f"Could not create message index (may exist): {e}")
     
+    def _ensure_payload_indexes(self):
+        """Create payload indexes for efficient filtering on non-text fields.
+        
+        Indexes timestamp (integer range queries), source_type (keyword filter),
+        is_group (boolean filter), and source_id (deduplication lookups).
+        """
+        index_configs = [
+            ("timestamp", PayloadSchemaType.INTEGER, "timestamp integer index"),
+            ("source_type", PayloadSchemaType.KEYWORD, "source_type keyword index"),
+            ("is_group", PayloadSchemaType.BOOL, "is_group bool index"),
+            ("source_id", PayloadSchemaType.KEYWORD, "source_id keyword index"),
+        ]
+        
+        for field_name, schema_type, description in index_configs:
+            try:
+                self.qdrant_client.create_payload_index(
+                    collection_name=self.COLLECTION_NAME,
+                    field_name=field_name,
+                    field_schema=schema_type
+                )
+                logger.info(f"Created {description}")
+            except Exception as e:
+                logger.debug(f"Could not create {description} (may exist): {e}")
+    
+    def _message_exists(self, source_id: str) -> bool:
+        """Check if a message with the given source_id already exists in Qdrant.
+        
+        Used for deduplication to prevent duplicate messages from webhook retries.
+        Requires a keyword index on the source_id field for efficient lookups.
+        
+        Args:
+            source_id: The source identifier (format: '{chat_id}:{timestamp}')
+            
+        Returns:
+            True if a document with this source_id already exists
+        """
+        try:
+            results, _ = self.qdrant_client.scroll(
+                collection_name=self.COLLECTION_NAME,
+                scroll_filter=Filter(must=[
+                    FieldCondition(key="source_id", match=MatchValue(value=source_id))
+                ]),
+                limit=1,
+                with_payload=False,
+                with_vectors=False
+            )
+            return len(results) > 0
+        except Exception as e:
+            logger.debug(f"Dedup check failed (proceeding with insert): {e}")
+            return False
+    
     def add_message(
         self,
         thread_id: str,
@@ -308,6 +364,12 @@ class LlamaIndexRAG:
         """
         try:
             from models import WhatsAppMessageDocument
+            
+            # Deduplication: skip if message already exists
+            source_id = f"{chat_id}:{timestamp}"
+            if self._message_exists(source_id):
+                logger.debug(f"Skipping duplicate message: {source_id}")
+                return True  # Not an error, just already stored
             
             # Create document using standardized model
             doc = WhatsAppMessageDocument.from_webhook_payload(
@@ -521,6 +583,60 @@ class LlamaIndexRAG:
             logger.debug(f"Full-text search failed (indexes may not exist): {e}")
             return []
     
+    @staticmethod
+    def _reciprocal_rank_fusion(
+        vector_results: List[NodeWithScore],
+        fulltext_results: List[NodeWithScore],
+        k: int = 10,
+        rrf_k: int = 60
+    ) -> List[NodeWithScore]:
+        """Merge vector and full-text search results using Reciprocal Rank Fusion.
+        
+        RRF combines results from multiple retrieval methods by scoring each
+        result based on its rank position in each list, then sorting by combined
+        score. This avoids the need to normalize incompatible score scales
+        (cosine similarity vs full-text match).
+        
+        Formula: RRF_score(d) = sum(1 / (rrf_k + rank_i(d))) for each list i
+        
+        Args:
+            vector_results: Results from vector similarity search
+            fulltext_results: Results from full-text metadata search
+            k: Maximum number of results to return
+            rrf_k: Smoothing constant (default 60, standard in literature)
+            
+        Returns:
+            Merged and re-ranked list of NodeWithScore
+        """
+        # Map node_id -> (rrf_score, best_node_with_score)
+        scores: Dict[str, float] = {}
+        node_map: Dict[str, NodeWithScore] = {}
+        
+        for rank, result in enumerate(vector_results):
+            node_id = result.node.id_ if result.node else None
+            if not node_id:
+                continue
+            scores[node_id] = scores.get(node_id, 0.0) + 1.0 / (rrf_k + rank + 1)
+            node_map[node_id] = result
+        
+        for rank, result in enumerate(fulltext_results):
+            node_id = result.node.id_ if result.node else None
+            if not node_id:
+                continue
+            scores[node_id] = scores.get(node_id, 0.0) + 1.0 / (rrf_k + rank + 1)
+            if node_id not in node_map:
+                node_map[node_id] = result
+        
+        # Sort by RRF score descending, return top-k with RRF score
+        sorted_ids = sorted(scores.keys(), key=lambda nid: scores[nid], reverse=True)[:k]
+        
+        merged = []
+        for node_id in sorted_ids:
+            original = node_map[node_id]
+            merged.append(NodeWithScore(node=original.node, score=scores[node_id]))
+        
+        return merged
+    
     def search(
         self,
         query: str,
@@ -634,6 +750,18 @@ class LlamaIndexRAG:
                 
                 valid_results.append(NodeWithScore(node=node, score=result.score))
             
+            # Apply minimum similarity score threshold to vector results
+            pre_filter_count = len(valid_results)
+            valid_results = [
+                r for r in valid_results
+                if r.score is not None and r.score >= self.MINIMUM_SIMILARITY_SCORE
+            ]
+            if pre_filter_count > len(valid_results):
+                logger.debug(
+                    f"Score threshold filtered {pre_filter_count - len(valid_results)} "
+                    f"results below {self.MINIMUM_SIMILARITY_SCORE}"
+                )
+            
             # Hybrid search: also do full-text search on metadata and merge results
             if include_metadata_search and not filter_sender:
                 fulltext_results = self._fulltext_search(
@@ -643,20 +771,18 @@ class LlamaIndexRAG:
                     filter_days=filter_days
                 )
                 
-                # Merge results: fulltext matches first (they're more precise for name queries),
-                # then vector results, deduplicated by node ID
-                seen_ids = {r.node.id_ for r in valid_results if r.node}
-                merged = list(valid_results)  # Start with vector results
-                
-                for ft_result in fulltext_results:
-                    if ft_result.node and ft_result.node.id_ not in seen_ids:
-                        # Insert fulltext results at the beginning for priority
-                        merged.insert(0, ft_result)
-                        seen_ids.add(ft_result.node.id_)
-                
-                # Limit to k results
-                valid_results = merged[:k]
-                logger.info(f"Hybrid search merged {len(fulltext_results)} fulltext + {len(merged) - len(fulltext_results)} vector results")
+                # Merge using Reciprocal Rank Fusion for fair ranking
+                if fulltext_results:
+                    valid_results = self._reciprocal_rank_fusion(
+                        vector_results=valid_results,
+                        fulltext_results=fulltext_results,
+                        k=k,
+                        rrf_k=self.RRF_K
+                    )
+                    logger.info(
+                        f"RRF merged {len(fulltext_results)} fulltext + vector results "
+                        f"→ {len(valid_results)} final"
+                    )
             
             logger.info(f"RAG search for '{query[:50]}...' returned {len(valid_results)} valid results")
             return valid_results
@@ -702,13 +828,37 @@ class LlamaIndexRAG:
                 filter_days=filter_days
             )
             
-            # Build context from results
+            # Build context from results with token-aware truncation
             context_parts = []
+            total_tokens = 0
+            
+            try:
+                import tiktoken
+                enc = tiktoken.encoding_for_model("gpt-4o")
+            except (ImportError, KeyError):
+                enc = None
+            
             for result in results:
                 # Access text safely - our search method ensures nodes have valid text
                 node_text = getattr(result.node, 'text', None) or getattr(result.node, 'get_content', lambda: '')()
-                if node_text:
-                    context_parts.append(node_text)
+                if not node_text:
+                    continue
+                
+                # Estimate token count
+                if enc:
+                    text_tokens = len(enc.encode(node_text))
+                else:
+                    text_tokens = len(node_text) // 4  # Rough fallback: ~4 chars/token
+                
+                if total_tokens + text_tokens > self.MAX_CONTEXT_TOKENS:
+                    logger.debug(
+                        f"Context token limit reached ({total_tokens}/{self.MAX_CONTEXT_TOKENS}), "
+                        f"using {len(context_parts)} of {len(results)} results"
+                    )
+                    break
+                
+                context_parts.append(node_text)
+                total_tokens += text_tokens
             
             context = "\n".join(context_parts) if context_parts else "[No messages found in the archive]"
             
@@ -806,8 +956,10 @@ Instructions:
             redis = get_redis_client()
             if chat_name:
                 redis.sadd(self.REDIS_CHAT_SET_KEY, chat_name)
+                redis.expire(self.REDIS_CHAT_SET_KEY, self.REDIS_LISTS_TTL)
             if sender:
                 redis.sadd(self.REDIS_SENDER_SET_KEY, sender)
+                redis.expire(self.REDIS_SENDER_SET_KEY, self.REDIS_LISTS_TTL)
         except Exception as e:
             logger.debug(f"Failed to update cached lists in Redis: {e}")
     

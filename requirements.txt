@@ -25,3 +25,4 @@ pydantic>=2.0
 
 # Utilities
 retry
+tiktoken>=0.5.0
