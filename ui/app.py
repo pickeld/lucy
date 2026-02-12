@@ -1,9 +1,12 @@
-"""WhatsApp RAG Assistant — ChatGPT-inspired Streamlit UI.
+"""RAG Assistant — ChatGPT-inspired Streamlit UI.
 
 Single-page application that orchestrates all components:
 - Dark sidebar with conversation management
 - ChatGPT-style chat area with empty state
 - Settings panel (toggleable in sidebar)
+
+Supports multiple data sources via the plugin architecture
+(WhatsApp, Telegram, Email, Paperless-NG, etc.).
 
 Usage:
     cd ui && streamlit run app.py
@@ -35,8 +38,8 @@ if log_file:
 # Page configuration — MUST be the first Streamlit command
 # ---------------------------------------------------------------------------
 st.set_page_config(
-    page_title="WhatsApp RAG Assistant",
-    page_icon="💬",
+    page_title="RAG Assistant",
+    page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded",
 )

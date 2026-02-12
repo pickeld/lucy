@@ -21,6 +21,7 @@ services:
     volumes:
       - redis_data:/data
     restart: unless-stopped
+  # WhatsApp plugin dependency — only needed when WhatsApp plugin is enabled
   waha:
     container_name: waha
     image: devlikeapro/waha-plus:arm
@@ -33,6 +34,8 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    profiles:
+      - whatsapp  # Use: docker compose --profile whatsapp up
  
   qdrant:
     image: qdrant/qdrant:latest
@@ -49,7 +52,7 @@ services:
   
   app:
     build: .
-    container_name: whatsapp-gpt
+    container_name: rag-assistant
     restart: unless-stopped
     env_file:
       - .env

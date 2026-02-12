@@ -1,9 +1,12 @@
-"""LlamaIndex RAG (Retrieval Augmented Generation) for WhatsApp messages.
+"""LlamaIndex RAG (Retrieval Augmented Generation) for multi-source knowledge base.
 
 Uses Qdrant as vector store and OpenAI text-embedding-3-large for semantic search.
 Configured with 1024 dimensions for optimal Hebrew + English multilingual support.
 Uses LlamaIndex CondensePlusContextChatEngine for multi-turn conversations
 with automatic query reformulation and Redis-backed chat memory.
+
+Supports data from multiple channel plugins (WhatsApp, Telegram, Email,
+Paperless-NG, etc.) via the plugin architecture.
 
 Qdrant Dashboard: http://localhost:6333/dashboard
 """
@@ -70,7 +73,7 @@ def format_timestamp(timestamp: str, timezone: str = "Asia/Jerusalem") -> str:
         return str(timestamp)
 
 
-class WhatsAppRetriever(BaseRetriever):
+class ArchiveRetriever(BaseRetriever):
     """Custom retriever that wraps existing hybrid search with metadata filters.
     
     Delegates to LlamaIndexRAG.search() which handles:
@@ -79,8 +82,8 @@ class WhatsAppRetriever(BaseRetriever):
     - Reciprocal Rank Fusion for merging results
     - Minimum similarity score thresholding
     
-    This preserves all existing search capabilities while integrating
-    with LlamaIndex's CondensePlusContextChatEngine.
+    Source-agnostic: works with data from any channel plugin
+    (WhatsApp, Telegram, Email, Paperless-NG, etc.).
     """
     
     def __init__(
@@ -92,7 +95,7 @@ class WhatsAppRetriever(BaseRetriever):
         filter_days: Optional[int] = None,
         **kwargs: Any,
     ):
-        """Initialize the WhatsApp retriever.
+        """Initialize the archive retriever.
         
         Args:
             rag: The LlamaIndexRAG instance to delegate search to
@@ -109,7 +112,7 @@ class WhatsAppRetriever(BaseRetriever):
         self._filter_days = filter_days
     
     def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
-        """Retrieve relevant WhatsApp messages using hybrid search.
+        """Retrieve relevant messages/documents using hybrid search.
         
         Always returns at least one node so the chat engine's synthesizer
         can generate a proper response (it returns "Empty Response" on empty input).
@@ -131,23 +134,29 @@ class WhatsAppRetriever(BaseRetriever):
         # Ensure at least one node so the synthesizer doesn't return "Empty Response"
         if not results:
             placeholder = TextNode(
-                text="[No relevant messages found in the WhatsApp archive for this query]",
+                text="[No relevant messages found in the archive for this query]",
                 metadata={"source": "system", "note": "no_results"},
             )
             results = [NodeWithScore(node=placeholder, score=0.0)]
         
         return results
 
+# Backward compat alias
+WhatsAppRetriever = ArchiveRetriever
+
 
 class LlamaIndexRAG:
-    """LlamaIndex-based RAG for WhatsApp message search and retrieval.
+    """LlamaIndex-based RAG for multi-source knowledge base search and retrieval.
     
     Uses Qdrant server as vector store and OpenAI text-embedding-3-large
     with 1024 dimensions for optimal Hebrew + English multilingual support.
     Uses CondensePlusContextChatEngine for multi-turn conversations
     with automatic query reformulation and Redis-backed chat memory.
-    Connects to Qdrant server at QDRANT_HOST:QDRANT_PORT (default: localhost:6333).
     
+    Source-agnostic: stores and retrieves data from any channel plugin
+    (WhatsApp, Telegram, Email, Paperless-NG, etc.) via BaseRAGDocument.
+    
+    Connects to Qdrant server at QDRANT_HOST:QDRANT_PORT (default: localhost:6333).
     Dashboard available at: http://localhost:6333/dashboard
     """
     
@@ -1221,8 +1230,8 @@ class LlamaIndexRAG:
         }.get(now.strftime("%A"), now.strftime("%A"))
         hebrew_date = f"{hebrew_day}, {now.day}/{now.month}/{now.year} בשעה {now.strftime('%H:%M')}"
         
-        return f"""You are a helpful AI assistant for a WhatsApp message archive search system.
-You have access to retrieved messages from the archive that will be provided as context.
+        return f"""You are a helpful AI assistant for a personal knowledge base and message archive search system.
+You have access to retrieved messages and documents from multiple sources (messaging platforms, documents, emails, etc.) that will be provided as context.
 
 Current Date/Time: {current_datetime}
 תאריך ושעה נוכחיים: {hebrew_date}
@@ -1274,7 +1283,7 @@ Instructions:
         )
         
         # Custom retriever wrapping existing hybrid search
-        retriever = WhatsAppRetriever(
+        retriever = ArchiveRetriever(
             rag=self,
             k=k,
             filter_chat_name=filter_chat_name,

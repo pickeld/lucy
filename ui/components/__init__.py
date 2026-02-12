@@ -1,1 +1,1 @@
-"""UI components for WhatsApp RAG Assistant — ChatGPT-inspired design."""
+"""UI components for RAG Assistant — ChatGPT-inspired design."""
