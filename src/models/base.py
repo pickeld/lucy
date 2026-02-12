@@ -21,11 +21,36 @@ if TYPE_CHECKING:
 
 
 class SourceType(str, Enum):
-    """Enumeration of supported data source types for RAG."""
+    """Enumeration of supported data source types for RAG.
     
-    WHATSAPP_MESSAGE = "whatsapp_message"
+    Categorizes data by its origin platform/channel to enable
+    source-specific filtering and analytics.
+    """
+    
+    # Messaging platforms
+    WHATSAPP = "whatsapp"
+    TELEGRAM = "telegram"
+    SLACK = "slack"
+    DISCORD = "discord"
+    SMS = "sms"
+    
+    # Email
+    EMAIL = "email"
+    
+    # Document types
     DOCUMENT = "document"
+    
+    # Voice/Audio
     CALL_RECORDING = "call_recording"
+    VOICE_NOTE = "voice_note"
+    
+    # Web/Social
+    WEB_SCRAPE = "web_scrape"
+    SOCIAL_MEDIA = "social_media"
+    
+    # Other
+    MANUAL_ENTRY = "manual_entry"
+    API_IMPORT = "api_import"
 
 
 class DocumentMetadata(BaseModel):

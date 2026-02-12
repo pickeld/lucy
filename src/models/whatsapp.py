@@ -47,7 +47,7 @@ class WhatsAppMessageDocument(BaseRAGDocument):
     @classmethod
     def get_source_type(cls) -> SourceType:
         """Get the source type for WhatsApp messages."""
-        return SourceType.WHATSAPP_MESSAGE
+        return SourceType.WHATSAPP
     
     @classmethod
     def from_webhook_payload(
@@ -93,7 +93,7 @@ class WhatsAppMessageDocument(BaseRAGDocument):
         # Create metadata
         metadata = DocumentMetadata(
             source_id=f"{chat_id}:{timestamp}",
-            source_type=SourceType.WHATSAPP_MESSAGE,
+            source_type=SourceType.WHATSAPP,
             created_at=dt,
             custom_fields={
                 "thread_id": thread_id,
