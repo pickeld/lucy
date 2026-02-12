@@ -1,270 +1,322 @@
-# ChatGPT-like UI Redesign Plan
+# ChatGPT-like UI Redesign Plan (Streamlit)
 
-## Current State
+## Goal
+Redesign the existing Streamlit UI to closely match ChatGPT's look and feel while staying within the Streamlit framework.
 
-The current UI is a **Streamlit** multi-page app (`ui/app.py` + `ui/pages/`) with:
-- Default Streamlit styling — generic, not modern
-- Cluttered sidebar mixing navigation, settings, filters, and stats
-- Chat/Search tabs instead of a focused chat interface
-- No dark theme, no empty state landing, no streaming
-- No time-grouped conversation history (Today, Yesterday, etc.)
-- WhatsApp-inspired green theming that feels disconnected
+## Current State Issues
+1. Default Streamlit styling — generic, not modern
+2. Sidebar is cluttered: navigation + settings + filters + stats + conversations all mixed
+3. Chat/Search tabs split the main interface
+4. No dark sidebar theme
+5. No empty state / landing page with suggestions
+6. No time-grouped conversation history
+7. Streamlit page navigation visible in sidebar
+8. WhatsApp green theming feels disconnected from ChatGPT goal
 
-## Recommended Approach: Replace Streamlit with Standalone SPA
+## What Streamlit CAN Do (With Heavy CSS)
+- Dark sidebar with light main area via CSS overrides on `[data-testid=stSidebar]`
+- Hide Streamlit header, footer, hamburger menu, page navigation via CSS
+- `st.chat_message` + `st.chat_input` for chat bubbles
+- `st.write_stream` for streaming responses
+- Time-grouped conversation list in sidebar
+- Hover effects via CSS `:hover` on sidebar elements
+- Empty state with centered content and clickable suggestion buttons
+- Markdown rendering built-in
+- Custom theme via `.streamlit/config.toml`
 
-### Why Not Keep Streamlit?
-
-Streamlit's architecture (full-page reruns on every interaction) fundamentally prevents smooth ChatGPT-like UX:
-- Cannot independently theme sidebar dark vs main area light
-- Cannot hide Streamlit's navigation/header/footer cleanly
-- Cannot do streaming with typing indicators
-- Cannot do hover-to-reveal actions on conversation items
-- Multi-page navigation pollutes the sidebar
-- Limited responsive design control
-
-### Why Standalone HTML/CSS/JS?
-
-- **Full pixel-perfect control** over the UI
-- **Zero backend changes** — Flask API already has all endpoints
-- Can be served directly by Flask (add a static route)
-- Lightweight — no complex build tools required
-- Modern CSS for exact ChatGPT replication
-- Supports streaming, animations, hover effects
-- Optional lightweight libraries: `marked.js` for markdown, `highlight.js` for code blocks
+## What Will Be Compromised (Streamlit Limitations)
+- Hover-to-reveal rename/delete icons: will use small always-visible icon buttons instead
+- Smooth animations/transitions: limited to CSS-only effects
+- Auto-growing textarea: `st.chat_input` is fixed height
+- True modal/drawer for settings: will use expander or conditional rendering
+- Full responsive mobile layout: partial control only
 
 ---
 
 ## Architecture
 
 ```mermaid
-graph TB
-    subgraph Frontend [New SPA Frontend]
-        HTML[index.html]
-        CSS[styles.css]
-        JS[app.js]
-        MD[marked.js + highlight.js]
+graph LR
+    subgraph Streamlit UI
+        APP[ui/app.py - Single Page]
+        THEME[.streamlit/config.toml]
+        CSS[Custom CSS Injection]
     end
 
     subgraph Backend [Existing Flask API - No Changes]
-        CONV[/conversations endpoints]
-        RAG[/rag/query endpoint]
-        SEARCH[/rag/search endpoint]
-        STATS[/rag/stats endpoint]
-        FILTERS[/rag/chats + /rag/senders]
-        CONFIG[/config endpoints]
-        HEALTH[/health endpoint]
+        CONV[/conversations]
+        RAG[/rag/query]
+        HEALTH[/health]
+        CONFIG[/config]
     end
 
-    Frontend -->|fetch API| Backend
+    APP -->|requests| Backend
 ```
 
-### File Structure
+### Restructured File Layout
 
 ```
 ui/
-├── static/
-│   ├── index.html          # Main SPA entry point
-│   ├── css/
-│   │   └── styles.css      # ChatGPT-inspired styles
-│   ├── js/
-│   │   ├── app.js          # Main application logic
-│   │   ├── api.js          # API client wrapper
-│   │   ├── chat.js         # Chat rendering and interaction
-│   │   ├── sidebar.js      # Sidebar/conversation management
-│   │   ├── settings.js     # Settings modal/panel
-│   │   └── markdown.js     # Markdown rendering setup
-│   └── lib/
-│       ├── marked.min.js   # Markdown parser
-│       └── highlight.min.js # Code syntax highlighting
-├── app.py                  # Keep as fallback or remove
-└── pages/                  # Keep as fallback or remove
-```
-
-### Serving Strategy
-
-Add a Flask route in `src/app.py` to serve the SPA:
-
-```python
-@app.route("/ui")
-@app.route("/ui/<path:path>")
-def serve_ui(path="index.html"):
-    return send_from_directory("../ui/static", path)
+├── app.py                  # Main and ONLY page — consolidated single-page chat UI
+├── .streamlit/
+│   └── config.toml         # Custom Streamlit theme
+├── components/
+│   ├── sidebar.py          # Sidebar: new chat, conversation list, settings toggle
+│   ├── chat.py             # Chat area: messages, input, empty state
+│   ├── settings_panel.py   # Settings: filters, config, health status
+│   └── styles.py           # All custom CSS as Python string constants
+├── utils/
+│   ├── api.py              # API client wrapper functions
+│   └── time_utils.py       # Time grouping and formatting helpers
+└── pages/                  # REMOVED or emptied — single page app
 ```
 
 ---
 
-## UI Design Specification
-
-### Layout — Three-Panel Design
+## UI Layout Specification
 
 ```
-┌─────────────────┬────────────────────────────────────┐
-│                  │                                    │
-│    SIDEBAR       │          MAIN CHAT AREA            │
-│    260px fixed   │          flex: 1                   │
-│                  │                                    │
-│  ┌────────────┐  │  ┌──────────────────────────────┐  │
-│  │ + New Chat │  │  │     Centered container       │  │
-│  └────────────┘  │  │     max-width: 768px         │  │
-│                  │  │                              │  │
-│  Search...       │  │  ┌──────────────────────┐    │  │
-│                  │  │  │  Message bubbles      │    │  │
-│  ── Today ──     │  │  │  user / assistant     │    │  │
-│  Conv title 1    │  │  │  with avatars         │    │  │
-│  Conv title 2    │  │  └──────────────────────┘    │  │
-│                  │  │                              │  │
-│  ── Yesterday ── │  │                              │  │
-│  Conv title 3    │  │  ┌──────────────────────┐    │  │
-│                  │  │  │  Input bar            │    │  │
-│  ── Previous ──  │  │  │  fixed at bottom      │    │  │
-│  Conv title 4    │  │  └──────────────────────┘    │  │
-│                  │  │                              │  │
-│  ┌────────────┐  │  └──────────────────────────────┘  │
-│  │ ⚙ Settings │  │                                    │
-│  │ 👤 Profile  │  │                                    │
-│  └────────────┘  │                                    │
-└─────────────────┴────────────────────────────────────┘
+┌──────────────────────┬──────────────────────────────────────┐
+│  DARK SIDEBAR        │  LIGHT MAIN AREA                     │
+│  bg: #171717         │  bg: #FFFFFF                          │
+│  width: ~300px       │                                      │
+│                      │  ┌──────────────────────────────┐    │
+│  [+ New Chat]        │  │   Centered Chat Container     │    │
+│                      │  │   max-width: 768px            │    │
+│  ── Today ────       │  │                               │    │
+│  ▸ Conv title 1      │  │   👤 User message             │    │
+│  ▸ Conv title 2      │  │                               │    │
+│                      │  │   🤖 Assistant message         │    │
+│  ── Yesterday ───    │  │      📎 Sources [expand]       │    │
+│  ▸ Conv title 3      │  │                               │    │
+│                      │  │   👤 User message             │    │
+│  ── Previous 7d ──   │  │                               │    │
+│  ▸ Conv title 4      │  │   🤖 Assistant message         │    │
+│                      │  │      ··· typing indicator      │    │
+│                      │  │                               │    │
+│                      │  └──────────────────────────────┘    │
+│                      │                                      │
+│  ─────────────────   │  ┌──────────────────────────────┐    │
+│  ⚙ Settings          │  │ [Filter chips: Chat | Sender] │    │
+│  🟢 API Connected    │  │ Ask about your WhatsApp msgs… │    │
+│                      │  └──────────────────────────────┘    │
+└──────────────────────┴──────────────────────────────────────┘
 ```
 
-### Color Scheme — Dark Sidebar, Light Main
+### Empty State (No Active Chat)
 
-| Element | Color | CSS Variable |
-|---------|-------|-------------|
-| Sidebar background | #171717 | --sidebar-bg |
-| Sidebar text | #ECECEC | --sidebar-text |
-| Sidebar hover | #2A2A2A | --sidebar-hover |
-| Sidebar active | #343541 | --sidebar-active |
-| Main background | #FFFFFF | --main-bg |
-| Main text | #374151 | --main-text |
-| User message bg | #F7F7F8 | --user-msg-bg |
-| Assistant message bg | #FFFFFF | --assistant-msg-bg |
-| Input bar bg | #FFFFFF | --input-bg |
-| Input border | #D1D5DB | --input-border |
-| Accent/brand | #10A37F | --accent |
-| Code block bg | #1E1E1E | --code-bg |
-
-### Key UI Components
-
-#### 1. Sidebar
-- **New Chat** button with `+` icon at top
-- **Search bar** to filter conversations
-- **Conversation list** grouped by time period:
-  - Today
-  - Yesterday
-  - Previous 7 Days
-  - Previous 30 Days
-  - Older
-- Each conversation item shows:
-  - Title (truncated to ~35 chars)
-  - Hover reveals: rename icon, delete icon
-- **Bottom section**: Settings gear, health status indicator
-
-#### 2. Empty State (No Active Chat)
-- Centered logo/icon
-- App title: "WhatsApp RAG Assistant"
-- 3-4 suggestion cards the user can click:
-  - "What did [name] say about..."
-  - "Summarize the last week of messages"
-  - "Search for messages about..."
-  - "Who mentioned [topic] recently?"
-
-#### 3. Chat Messages
-- **User messages**: Right-aligned text, subtle background, user avatar
-- **Assistant messages**: Left-aligned, white background, bot avatar
-- **Markdown rendering**: Headers, bold, italic, lists, links
-- **Code blocks**: Syntax highlighted with copy button
-- **Sources**: Collapsible "View sources" section after assistant messages
-- **Loading**: Animated typing indicator dots while waiting
-
-#### 4. Input Bar
-- Fixed at bottom of chat area
-- Rounded textarea that auto-grows up to ~200px
-- Send button (arrow icon) on the right
-- Disabled state while waiting for response
-- Filter indicator chips above input bar when filters are active
-
-#### 5. Settings Panel
-- Slides in as a modal/drawer from sidebar
-- Sections for: API Config, Filters, RAG Settings
-- Quick filter dropdowns: Chat/Group, Sender, Time Range
-- Health status with dependency indicators
-- Save/Reset buttons
-
-#### 6. Filter System
-- Filter chips displayed above the input bar
-- Click chip `×` to remove a filter
-- Filters panel accessible via a funnel icon in the input bar area
+```
+┌──────────────────────────────────────┐
+│                                      │
+│          💬                           │
+│   WhatsApp RAG Assistant             │
+│                                      │
+│   ┌──────────┐  ┌──────────┐        │
+│   │ What did  │  │ Summarize│        │
+│   │ X say     │  │ last week│        │
+│   │ about...  │  │ messages │        │
+│   └──────────┘  └──────────┘        │
+│   ┌──────────┐  ┌──────────┐        │
+│   │ Search    │  │ Who said │        │
+│   │ messages  │  │ something│        │
+│   │ about...  │  │ about... │        │
+│   └──────────┘  └──────────┘        │
+│                                      │
+│  [Ask about your WhatsApp msgs...]   │
+└──────────────────────────────────────┘
+```
 
 ---
 
-## Existing API Endpoints (No Backend Changes Needed)
+## Detailed CSS Theme
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/conversations` | GET | List conversations |
-| `/conversations/:id` | GET | Get conversation with messages |
-| `/conversations` | POST | Create conversation |
-| `/conversations/:id` | PUT | Rename conversation |
-| `/conversations/:id` | DELETE | Delete conversation |
-| `/rag/query` | POST | Chat query with RAG |
-| `/rag/search` | POST | Semantic search |
-| `/rag/stats` | GET | Vector store stats |
-| `/rag/chats` | GET | List of chat names for filters |
-| `/rag/senders` | GET | List of sender names for filters |
-| `/rag/messages` | GET | Browse raw messages |
-| `/health` | GET | System health check |
-| `/config` | GET | Get all settings |
-| `/config` | PUT | Update settings |
-| `/config/reset` | POST | Reset to defaults |
+### Dark Sidebar
+
+```css
+/* Dark sidebar background */
+[data-testid="stSidebar"] {
+    background-color: #171717;
+    color: #ECECEC;
+}
+/* Sidebar text and labels */
+[data-testid="stSidebar"] .stMarkdown, 
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] .stCaption {
+    color: #ECECEC;
+}
+/* Sidebar buttons — ghost style */
+[data-testid="stSidebar"] .stButton > button {
+    background-color: transparent;
+    color: #ECECEC;
+    border: 1px solid #444;
+    border-radius: 8px;
+}
+[data-testid="stSidebar"] .stButton > button:hover {
+    background-color: #2A2A2A;
+}
+/* New Chat button — accent */
+[data-testid="stSidebar"] .stButton > button[kind="primary"] {
+    background-color: transparent;
+    border: 1px solid #555;
+    color: #ECECEC;
+}
+```
+
+### Hide Streamlit Chrome
+
+```css
+/* Hide header, footer, hamburger menu */
+header[data-testid="stHeader"] { display: none !important; }
+footer { display: none !important; }
+#MainMenu { display: none !important; }
+/* Hide page navigation in sidebar */
+[data-testid="stSidebarNav"] { display: none !important; }
+/* Remove default padding */
+.block-container { padding-top: 1rem; }
+```
+
+### Chat Message Styling
+
+```css
+/* Centered chat container */
+.block-container {
+    max-width: 768px;
+    margin: 0 auto;
+}
+/* User messages — subtle gray background */
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
+    background-color: #F7F7F8;
+    border-radius: 12px;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+}
+/* Assistant messages — white/clean */
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
+    background-color: #FFFFFF;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+}
+```
+
+### Conversation List Items
+
+```css
+/* Active conversation highlight */
+.chat-item-active button {
+    background-color: #2A2A2A !important;
+    border-left: 3px solid #10A37F !important;
+}
+/* Conversation time group headers */
+.time-group-header {
+    color: #888;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 8px 12px 4px;
+}
+```
+
+---
+
+## Streamlit Theme Config
+
+### `.streamlit/config.toml`
+
+```toml
+[theme]
+base = "light"
+primaryColor = "#10A37F"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F7F7F8"
+textColor = "#374151"
+font = "sans serif"
+
+[server]
+headless = true
+```
 
 ---
 
 ## Implementation Tasks
 
-### Phase 1: Core Chat Interface
-1. Create `ui/static/index.html` — HTML skeleton with sidebar + main layout
-2. Create `ui/static/css/styles.css` — Full ChatGPT-inspired dark sidebar / light main theme
-3. Create `ui/static/js/api.js` — API client with all endpoint wrappers
-4. Create `ui/static/js/app.js` — Main app controller, routing, state management
-5. Create `ui/static/js/chat.js` — Chat message rendering, markdown, loading states
-6. Create `ui/static/js/sidebar.js` — Conversation list, time grouping, search, CRUD
-7. Add Flask route to serve the SPA from `src/app.py`
+### Phase 1: Restructure and Core Theme
+1. Create `.streamlit/config.toml` with ChatGPT-like light theme
+2. Create `ui/components/styles.py` with all CSS constants for dark sidebar, hidden chrome, chat styling
+3. Create `ui/utils/api.py` — consolidated API client (extract from current app.py)
+4. Create `ui/utils/time_utils.py` — time grouping logic (Today, Yesterday, Previous 7 Days, etc.)
+5. Restructure `ui/app.py` as single-page app: remove tabs, consolidate chat as primary view
 
-### Phase 2: Polish and Features
-8. Create `ui/static/js/settings.js` — Settings modal with health check and config editing
-9. Add empty state with suggestion cards
-10. Add filter system with chips and filter panel
-11. Add markdown rendering with `marked.js` + `highlight.js`
-12. Add typing indicator animation during response loading
-13. Add keyboard shortcuts (Enter to send, Escape to cancel, Ctrl+N for new chat)
+### Phase 2: Sidebar Redesign
+6. Create `ui/components/sidebar.py` — dark-themed sidebar component with:
+   - New Chat button (ghost style with border)
+   - Time-grouped conversation list
+   - Compact rename/delete action buttons per conversation
+   - Settings toggle at bottom
+   - Health status indicator at bottom
+7. Remove multi-page navigation (delete or empty `ui/pages/`)
 
-### Phase 3: Advanced UX
-14. Add conversation search/filter in sidebar
-15. Add mobile-responsive layout (collapsible sidebar)
-16. Add semantic search as a secondary mode (accessible from input bar)
-17. Add export chat functionality
-18. Add CORS configuration to Flask if needed for development
+### Phase 3: Chat Area Redesign
+8. Create `ui/components/chat.py` — chat area component with:
+   - Empty state with centered logo and suggestion cards
+   - Chat message rendering with proper styling
+   - Source citations as collapsible expanders
+   - Active filter chips displayed above input
+9. Add streaming response support using `st.write_stream`
+
+### Phase 4: Settings and Filters
+10. Create `ui/components/settings_panel.py` — settings as sidebar expander:
+    - Filter dropdowns (Chat/Group, Sender, Time Range)
+    - API configuration
+    - Health status dashboard
+    - Stats display
+11. Add filter chip display and removal in chat area
+
+### Phase 5: Polish
+12. Add keyboard interaction improvements
+13. Add conversation search/filter in sidebar
+14. Fine-tune CSS for spacing, typography, and responsive behavior
+15. Test RTL text support for Hebrew content
+16. Add export chat functionality
 
 ---
 
-## What Gets Replaced vs Kept
+## Component Responsibility Map
 
-| Component | Action |
-|-----------|--------|
-| `ui/app.py` | **Replaced** — Streamlit no longer used |
-| `ui/pages/1_Settings.py` | **Replaced** — Settings modal in new UI |
-| `ui/pages/2_Messages.py` | **Replaced** — Integrated into search mode |
-| `ui/components/` | **Removed** — Empty directory |
-| `src/app.py` | **Keep + Add** static serving route |
-| All other backend files | **Unchanged** |
+| Component | Responsibility |
+|-----------|---------------|
+| `ui/app.py` | Page config, CSS injection, layout orchestration, session state init |
+| `ui/components/sidebar.py` | New chat, conversation list with time groups, settings toggle, health |
+| `ui/components/chat.py` | Empty state, message display, input handling, filter chips, streaming |
+| `ui/components/settings_panel.py` | Filters, config editing, health dashboard, stats |
+| `ui/components/styles.py` | All CSS constants: dark sidebar, chat bubbles, hidden chrome, etc. |
+| `ui/utils/api.py` | All `requests` calls to Flask backend |
+| `ui/utils/time_utils.py` | `relative_time()`, `group_by_time_period()`, timestamp formatting |
 
 ---
 
-## Risks and Mitigations
+## Session State Design
 
-| Risk | Mitigation |
-|------|-----------|
-| CORS issues when developing frontend separately | Add Flask-CORS or serve from same origin |
-| Losing Streamlit features we use | The Flask API already provides all data |
-| RTL text support for Hebrew content | CSS `direction: auto` on message elements |
-| No streaming support in current API | Phase 1 uses loading indicator; streaming can be added later |
+```python
+# Core state
+st.session_state.messages          # List of chat messages
+st.session_state.conversation_id   # Current active conversation UUID
+st.session_state.active_filters    # Dict of active RAG filters
+
+# UI state
+st.session_state.show_settings     # Toggle settings panel visibility
+st.session_state.renaming_id       # Which conversation is being renamed
+st.session_state.sidebar_search    # Sidebar search filter text
+
+# Config
+st.session_state.api_url           # Backend API URL
+st.session_state.k_results         # Number of context documents
+```
+
+---
+
+## Migration Notes
+
+- The existing `ui/app.py` logic (API calls, session state, chat rendering) is preserved and refactored into components
+- `ui/pages/1_Settings.py` functionality moves into `settings_panel.py`
+- `ui/pages/2_Messages.py` functionality can be accessed via semantic search in the chat input
+- No backend changes required whatsoever
