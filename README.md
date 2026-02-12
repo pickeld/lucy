@@ -29,27 +29,39 @@ A Flask-based integration between WhatsApp (via the WAHA API) and OpenAI's GPT m
 
 ## Project Structure
 
-The project is organized as follows:
-
-- **`src/app.py`**: Main Flask application for WhatsApp integration and webhook handling.
-- **`src/config.py`**: Loads environment variables and configuration settings.
-- **`src/contact.py`**: Manages WhatsApp contact-related functionality.
-- **`src/groups.py`**: Handles WhatsApp group operations and management.
-- **`src/memory_agent.py`**: Implements semantic memory and context management.
-- **`src/templates.py`**: Contains message templates and response formatting.
-- **`src/whatsapp.py`**: Core WhatsApp integration functionality.
-- **`src/providers/`**: Contains provider-specific integrations:
-  - `dalle.py`: DALL-E image generation integration
-  - `prompts.py`: Manages system prompts and templates
-- **`src/utiles/`**: Utility modules:
-  - `classes.py`: Core class definitions
-  - `globals.py`: Global variables and constants
-  - `logger.py`: Logging configuration
-  - `redis_conn.py`: Redis connection management
-- **`docker-compose.yml`**: Sets up the WAHA WhatsApp API service.
-- **`.env.example`**: Example environment configuration file.
-- **`requirements.txt`**: Lists Python dependencies required for the project.
-- **`README.md`**: Documentation for the project.
+```
+whatsapp-gpt/
+├── src/                          # Main application code
+│   ├── app.py                    # Flask app: webhooks, RAG & session API endpoints
+│   ├── config.py                 # Configuration from .env / environment variables
+│   ├── llamaindex_rag.py         # LlamaIndex RAG with Qdrant vector store
+│   ├── models/                   # Pydantic document models for RAG
+│   │   ├── base.py               # BaseRAGDocument abstract class
+│   │   ├── whatsapp.py           # WhatsApp message document
+│   │   ├── document.py           # File document (PDF, DOCX, etc.)
+│   │   └── call_recording.py     # Call recording document
+│   ├── session/                  # Conversation session management
+│   │   ├── models.py             # ConversationSession, EntityInfo, etc.
+│   │   └── manager.py            # SessionManager with Redis persistence
+│   ├── whatsapp/                 # WhatsApp message handling
+│   │   ├── handler.py            # Message type classes & factory function
+│   │   ├── contact.py            # Contact management with Redis caching
+│   │   └── group.py              # Group management with Redis caching
+│   └── utils/                    # Utility modules
+│       ├── exceptions.py         # Custom exception hierarchy
+│       ├── globals.py            # HTTP helpers with retry logic
+│       ├── logger.py             # Logging configuration
+│       └── redis_conn.py         # Redis connection management
+├── ui/                           # Streamlit web UI
+│   └── app.py                    # RAG Q&A chat & search interface
+├── plans/                        # Architecture & improvement plans
+├── scripts/                      # Database init & utility scripts
+├── docker-compose.yml            # Redis, WAHA, Qdrant services
+├── Dockerfile                    # Application container
+├── .env.example                  # Example environment configuration
+├── requirements.txt              # Python dependencies
+└── README.md                     # This file
+```
 
 ## Getting Started
 
@@ -144,33 +156,6 @@ See `.env.example` for a complete list of available configuration options. Make 
 2. Update the values according to your setup
 3. Never commit your `.env` file to version control
 ## Development
-
-### Project Organization
-
-The project follows a modular architecture for maintainability and scalability:
-
-```
-whatsapp-gpt/
-├── src/                    # Main application code
-│   ├── app.py             # Flask application entry point
-│   ├── config.py          # Configuration management
-│   ├── contact.py         # Contact operations
-│   ├── groups.py          # Group management
-│   ├── memory_agent.py    # Context management
-│   ├── templates.py       # Message templates
-│   ├── whatsapp.py        # WhatsApp core functionality
-│   ├── providers/         # External service integrations
-│   │   ├── dalle.py       # DALL-E integration
-│   │   └── prompts.py     # System prompts
-│   └── utiles/            # Utility modules
-│       ├── classes.py     # Core classes
-│       ├── globals.py     # Global variables
-│       ├── logger.py      # Logging setup
-│       └── redis_conn.py  # Redis connection
-├── helpers/               # Helper scripts
-├── scripts/               # Deployment scripts
-└── docker-compose.yml     # Container orchestration
-```
 
 ### Development Setup
 
