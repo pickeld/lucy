@@ -145,6 +145,7 @@ DEFAULT_SETTINGS: List[Tuple[str, str, str, str, str]] = [
 
 # Category display order and labels
 CATEGORY_META: Dict[str, Dict[str, str]] = {
+    "plugins": {"label": "🔌 Plugins", "order": "-1"},
     "secrets": {"label": "🔑 API Keys & Secrets", "order": "0"},
     "llm": {"label": "🤖 LLM Configuration", "order": "1"},
     "rag": {"label": "🔍 RAG Configuration", "order": "2"},
@@ -489,6 +490,67 @@ def get_all_settings_masked() -> Dict[str, Dict[str, Any]]:
                 info["value"] = mask_secret(info["value"])
     
     return all_settings
+
+
+# ---------------------------------------------------------------------------
+# Plugin settings registration
+# ---------------------------------------------------------------------------
+
+def register_plugin_settings(
+    settings: List[Tuple[str, str, str, str, str]],
+    category_meta: Optional[Dict[str, Dict[str, str]]] = None,
+    env_key_map: Optional[Dict[str, str]] = None,
+) -> int:
+    """Register plugin settings (INSERT OR IGNORE to preserve existing values).
+    
+    Called by the PluginRegistry during plugin discovery. Uses INSERT OR IGNORE
+    so that existing user-modified values are never overwritten.
+    
+    Also registers category metadata for UI display and env var mappings
+    for first-run seeding.
+    
+    Args:
+        settings: List of (key, default_value, category, type, description) tuples
+        category_meta: Optional dict of category -> {"label": "...", "order": "N"}
+        env_key_map: Optional dict of sqlite_key -> ENV_VAR_NAME
+        
+    Returns:
+        Number of new settings registered (0 if all already existed)
+    """
+    if category_meta:
+        CATEGORY_META.update(category_meta)
+    
+    if env_key_map:
+        ENV_KEY_MAP.update(env_key_map)
+        # Also update reverse map
+        global _REVERSE_ENV_MAP
+        _REVERSE_ENV_MAP = {v: k for k, v in ENV_KEY_MAP.items()}
+    
+    conn = _get_connection()
+    try:
+        count = 0
+        for key, default_value, category, type_, description in settings:
+            cursor = conn.execute(
+                """INSERT OR IGNORE INTO settings (key, value, category, type, description)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (key, default_value, category, type_, description)
+            )
+            count += cursor.rowcount
+        
+        # Overlay env values for any newly inserted settings
+        if env_key_map and count > 0:
+            for sqlite_key, env_key in env_key_map.items():
+                env_value = os.environ.get(env_key)
+                if env_value is not None and env_value.strip():
+                    conn.execute(
+                        "UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ? AND value = ''",
+                        (env_value.strip(), sqlite_key)
+                    )
+        
+        conn.commit()
+        return count
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
