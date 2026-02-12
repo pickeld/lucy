@@ -419,6 +419,100 @@ def rag_senders():
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
+@app.route("/rag/messages", methods=["GET"])
+def rag_messages():
+    """Browse messages stored in the RAG vector store with pagination and filters.
+    
+    Query params:
+        chat_name: Filter by chat/group name (optional)
+        sender: Filter by sender name (optional)
+        days: Filter by recency in days (optional)
+        limit: Max results per page (default 50, max 200)
+        offset: Pagination offset as Qdrant point ID (optional)
+    
+    Response:
+        {
+            "messages": [
+                {
+                    "sender": "John",
+                    "chat_name": "Family Group",
+                    "message": "hello everyone",
+                    "timestamp": 1707648000,
+                    "is_group": true,
+                    "source_type": "whatsapp"
+                }
+            ],
+            "count": 50,
+            "has_more": true,
+            "next_offset": "point-id-string"
+        }
+    """
+    try:
+        from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
+        from datetime import datetime
+        
+        chat_name = request.args.get("chat_name")
+        sender = request.args.get("sender")
+        days = request.args.get("days", type=int)
+        limit = min(request.args.get("limit", 50, type=int), 200)
+        offset = request.args.get("offset")  # Qdrant point ID for pagination
+        
+        # Build filter conditions
+        must_conditions = []
+        if chat_name:
+            must_conditions.append(
+                FieldCondition(key="chat_name", match=MatchValue(value=chat_name))
+            )
+        if sender:
+            must_conditions.append(
+                FieldCondition(key="sender", match=MatchValue(value=sender))
+            )
+        if days and days > 0:
+            min_ts = int(datetime.now().timestamp()) - (days * 86400)
+            must_conditions.append(
+                FieldCondition(key="timestamp", range=Range(gte=min_ts))
+            )
+        
+        scroll_filter = Filter(must=must_conditions) if must_conditions else None
+        
+        records, next_offset = rag.qdrant_client.scroll(
+            collection_name=rag.COLLECTION_NAME,
+            scroll_filter=scroll_filter,
+            limit=limit,
+            offset=offset,
+            with_payload=True,
+            with_vectors=False,
+        )
+        
+        messages = []
+        for record in records:
+            payload = record.payload or {}
+            # Skip internal LlamaIndex fields
+            msg = {
+                "sender": payload.get("sender", "Unknown"),
+                "chat_name": payload.get("chat_name", "Unknown"),
+                "message": payload.get("message", ""),
+                "timestamp": payload.get("timestamp", 0),
+                "is_group": payload.get("is_group", False),
+                "source_type": payload.get("source_type", "whatsapp"),
+                "has_media": payload.get("has_media", False),
+            }
+            if msg["message"]:  # Skip empty messages
+                messages.append(msg)
+        
+        return jsonify({
+            "messages": messages,
+            "count": len(messages),
+            "has_more": next_offset is not None,
+            "next_offset": str(next_offset) if next_offset else None,
+        }), 200
+        
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"RAG messages error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
 @app.route("/rag/reset", methods=["POST"])
 def rag_reset():
     """Drop and recreate the Qdrant collection with fresh vector configuration.

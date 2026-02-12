@@ -149,6 +149,26 @@ def get_rag_stats(api_url: str) -> dict:
     return {}
 
 
+def check_api_health(api_url: str) -> dict:
+    """Check API health status (cached 30 seconds)."""
+    try:
+        response = requests.get(f"{api_url}/health", timeout=5)
+        if response.status_code in (200, 503):
+            return response.json()
+    except Exception:
+        pass
+    return {"status": "unreachable", "dependencies": {}}
+
+
+def export_chat_history(messages: list) -> str:
+    """Export chat history as a formatted text string."""
+    lines = []
+    for msg in messages:
+        role = "You" if msg["role"] == "user" else "Assistant"
+        lines.append(f"[{role}]\n{msg['content']}\n")
+    return "\n".join(lines)
+
+
 def delete_conversation(api_url: str, conversation_id: str) -> bool:
     """Delete a conversation's data (filters + chat history)."""
     try:
@@ -201,6 +221,16 @@ with st.sidebar:
     
     api_url = st.text_input("API URL", value=st.session_state.api_url)
     st.session_state.api_url = api_url
+    
+    # Connection status indicator
+    health = check_api_health(api_url)
+    api_status = health.get("status", "unreachable")
+    if api_status == "up":
+        st.markdown('<span class="status-connected">🟢 API Connected</span>', unsafe_allow_html=True)
+    elif api_status == "degraded":
+        st.markdown('<span class="status-disconnected">🟡 API Degraded</span>', unsafe_allow_html=True)
+    else:
+        st.markdown('<span class="status-disconnected">🔴 API Unreachable</span>', unsafe_allow_html=True)
     k_results = st.slider("Context documents (k)", min_value=1, max_value=50, value=10)
     
     st.markdown("---")
@@ -265,11 +295,23 @@ with st.sidebar:
             if filters.get("sender"):
                 st.caption(f"👤 {filters['sender']}")
         
-        if st.button("🔄 New Conversation", key="new_conversation"):
-            st.session_state.conversation_id = None
-            st.session_state.messages = []
-            st.session_state.active_filters = {}
-            st.rerun()
+        col_new, col_export = st.columns(2)
+        with col_new:
+            if st.button("🔄 New", key="new_conversation"):
+                st.session_state.conversation_id = None
+                st.session_state.messages = []
+                st.session_state.active_filters = {}
+                st.rerun()
+        with col_export:
+            if st.session_state.messages:
+                export_text = export_chat_history(st.session_state.messages)
+                st.download_button(
+                    "📥 Export",
+                    data=export_text,
+                    file_name="chat_history.txt",
+                    mime="text/plain",
+                    key="export_chat",
+                )
     else:
         st.caption("No active conversation")
     
