@@ -571,8 +571,7 @@ def get_config():
         return jsonify(all_settings), 200
     except Exception as e:
         trace = traceback.format_exc()
-        logger.error(f"Config get error: {e}
-{trace}")
+        logger.error(f"Config get error: {e}\n{trace}")
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
@@ -598,8 +597,7 @@ def update_config():
         }), 200
     except Exception as e:
         trace = traceback.format_exc()
-        logger.error(f"Config update error: {e}
-{trace}")
+        logger.error(f"Config update error: {e}\n{trace}")
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
@@ -612,8 +610,7 @@ def get_config_categories():
         return jsonify({"categories": categories}), 200
     except Exception as e:
         trace = traceback.format_exc()
-        logger.error(f"Config categories error: {e}
-{trace}")
+        logger.error(f"Config categories error: {e}\n{trace}")
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
@@ -636,8 +633,7 @@ def reset_config():
         }), 200
     except Exception as e:
         trace = traceback.format_exc()
-        logger.error(f"Config reset error: {e}
-{trace}")
+        logger.error(f"Config reset error: {e}\n{trace}")
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 

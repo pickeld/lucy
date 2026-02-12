@@ -93,7 +93,8 @@ services:
       - "8765:8765"
     volumes:
       - ./src:/app/src        # Hot reload source code
-      - ./.env:/app/.env:ro   # Mount real .env (read-only)
+      - ./.env:/app/.env:ro   # Mount real .env (read-only, first-run seed)
+      - ./data:/app/data      # SQLite settings database persistence
     depends_on:
       redis:
         condition: service_started

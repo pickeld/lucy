@@ -218,6 +218,9 @@ if "active_context" not in st.session_state:
         "turn_number": 0
     }
 
+if "api_url" not in st.session_state:
+    st.session_state.api_url = API_BASE_URL
+
 
 # =============================================================================
 # SIDEBAR
@@ -232,7 +235,8 @@ with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/commons/6/6b/WhatsApp.svg", width=50)
     st.header("⚙️ Settings")
     
-    api_url = st.text_input("API URL", value=API_BASE_URL)
+    api_url = st.text_input("API URL", value=st.session_state.api_url)
+    st.session_state.api_url = api_url
     k_results = st.slider("Context documents (k)", min_value=1, max_value=50, value=10)
     
     st.markdown("---")

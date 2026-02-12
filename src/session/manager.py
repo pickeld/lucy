@@ -4,7 +4,6 @@ This module provides the SessionManager class that handles creating,
 storing, retrieving, and expiring conversation sessions using Redis.
 """
 
-import os
 from datetime import datetime
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
@@ -24,11 +23,13 @@ from .models import ConversationSession, EntityInfo, EntityType
 # Redis key prefix for sessions
 SESSION_KEY_PREFIX = "session:"
 
-# Default TTL from environment or 30 minutes
-DEFAULT_SESSION_TTL_MINUTES = int(os.getenv("SESSION_TTL_MINUTES", "30"))
+from config import settings
+
+# Default TTL from settings database
+DEFAULT_SESSION_TTL_MINUTES = int(settings.session_ttl_minutes)
 
 # Maximum conversation history turns to keep
-MAX_HISTORY_TURNS = int(os.getenv("SESSION_MAX_HISTORY", "20"))
+MAX_HISTORY_TURNS = int(settings.session_max_history)
 
 
 class SessionManager:
