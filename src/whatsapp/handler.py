@@ -398,21 +398,24 @@ class ImageMessage(MediaMessageBase):
                         "content": [
                             {
                                 "type": "text",
-                                "text": "Describe this image concisely in 1-2 sentences. "
+                                "text": "Describe this image concisely in 2-3 sentences. "
                                         "Focus on the main subject, action, and any text visible. "
+                                        "IMPORTANT: Preserve all non-English text exactly as written "
+                                        "(e.g. Hebrew, Arabic, etc.) — do NOT translate or paraphrase it. "
+                                        "Include all dates, times, addresses, names, and numbers verbatim. "
                                         "If it's a screenshot, describe what it shows."
                             },
                             {
                                 "type": "image_url",
                                 "image_url": {
                                     "url": image_url,
-                                    "detail": "low"  # Use low detail to save tokens
+                                    "detail": "auto"  # Let the model choose resolution for better OCR
                                 }
                             }
                         ]
                     }
                 ],
-                max_tokens=150,
+                max_tokens=250,
             )
             
             self.description = response.choices[0].message.content
