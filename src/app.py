@@ -3,13 +3,11 @@ import os
 import time
 from typing import Any, Dict, Union
 
-import requests
 from flask import Flask, jsonify, redirect, render_template_string, request
 from requests.models import Response
 
 from config import config
-from llamaindex_rag import LlamaIndexRAG, get_rag
-from conversation_memory import ThreadsManager, get_threads_manager
+from llamaindex_rag import get_rag
 from utils.globals import send_request
 from utils.logger import logger
 import traceback
@@ -21,7 +19,6 @@ app = Flask(__name__)
 
 # Initialize singletons
 rag = get_rag()
-threads_manager = get_threads_manager()
 
 
 def pass_filter(payload):
@@ -253,50 +250,6 @@ def refresh_group_cache(group_id: str):
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
-@app.route("/threads", methods=["GET"])
-def list_threads():
-    """List all active conversation threads.
-    
-    Response:
-        {
-            "threads": [
-                {"chat_id": "...", "chat_name": "...", "is_group": true, "message_count": 5}
-            ]
-        }
-    """
-    try:
-        threads = threads_manager.get_all_threads()
-        return jsonify({"threads": threads}), 200
-    except Exception as e:
-        trace = traceback.format_exc()
-        logger.error(f"Failed to list threads: {e}\n{trace}")
-        return jsonify({"error": str(e), "traceback": trace}), 500
-
-
-@app.route("/threads/<chat_id>/clear", methods=["POST", "DELETE"])
-def clear_thread(chat_id: str):
-    """Clear conversation history for a specific chat.
-    
-    Args:
-        chat_id: The chat ID to clear
-        
-    Response:
-        {
-            "status": "ok"
-        }
-    """
-    try:
-        success = threads_manager.clear_thread(chat_id)
-        if success:
-            return jsonify({"status": "ok"}), 200
-        else:
-            return jsonify({"status": "error", "message": "Thread not found"}), 404
-    except Exception as e:
-        trace = traceback.format_exc()
-        logger.error(f"Failed to clear thread: {e}\n{trace}")
-        return jsonify({"error": str(e), "traceback": trace}), 500
-
-
 @app.route("/test", methods=["GET"])
 def test():
     # send a test message to yourself
@@ -320,7 +273,7 @@ def webhook():
     
     
     try:
-        if pass_filter(payload) is False:
+        if not pass_filter(payload):
             return jsonify({"status": "ok"}), 200
 
         msg = create_whatsapp_message(payload)
@@ -329,17 +282,16 @@ def webhook():
         chat_name = msg.group.name if msg.is_group else msg.contact.name
         logger.info(f"Received message: {chat_name} ({chat_id}) - {msg.message}")
 
-        # Store message in conversation thread and RAG
+        # Store message in RAG vector store
         if msg.message:
-            thread = threads_manager.get_thread(
+            rag.add_message(
+                thread_id=chat_id or "UNKNOWN",
                 chat_id=chat_id or "UNKNOWN",
                 chat_name=chat_name or "UNKNOWN",
-                is_group=msg.is_group
-            )
-            thread.remember(
-                timestamp=str(msg.timestamp) if msg.timestamp else "0",
+                is_group=msg.is_group,
                 sender=str(msg.contact.name),
-                message=msg.message
+                message=msg.message,
+                timestamp=str(msg.timestamp) if msg.timestamp else "0"
             )
             logger.debug(f"Processed message: {chat_name} || {msg}")
         

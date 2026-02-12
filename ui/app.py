@@ -68,17 +68,6 @@ def get_rag_stats(api_url: str) -> dict:
     return {}
 
 
-def get_threads(api_url: str) -> list:
-    """Fetch active conversation threads."""
-    try:
-        response = requests.get(f"{api_url}/threads", timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            return data.get("threads", [])
-    except Exception:
-        pass
-    return []
-
 
 # Sidebar configuration
 with st.sidebar:
@@ -143,7 +132,7 @@ st.title("💬 WhatsApp RAG Assistant")
 st.caption("Powered by LlamaIndex + Qdrant")
 
 # Create tabs
-tab_chat, tab_search, tab_threads = st.tabs(["💬 Chat", "🔍 Search", "📋 Threads"])
+tab_chat, tab_search = st.tabs(["💬 Chat", "🔍 Search"])
 
 # === CHAT TAB ===
 with tab_chat:
@@ -319,39 +308,6 @@ with tab_search:
                     st.error(f"Search error: {str(e)}")
         else:
             st.warning("Please enter a search query")
-
-
-# === THREADS TAB ===
-with tab_threads:
-    st.subheader("📋 Active Conversation Threads")
-    st.caption("View and manage conversation memory")
-    
-    if st.button("🔄 Refresh Threads"):
-        st.rerun()
-    
-    threads = get_threads(api_url)
-    
-    if threads:
-        for thread in threads:
-            chat_type = "👥" if thread.get("is_group") else "👤"
-            with st.expander(f"{chat_type} {thread.get('chat_name', 'Unknown')} ({thread.get('message_count', 0)} messages)"):
-                st.json(thread)
-                
-                if st.button(f"🗑️ Clear Thread", key=f"clear_{thread.get('chat_id')}"):
-                    try:
-                        response = requests.post(
-                            f"{api_url}/threads/{thread.get('chat_id')}/clear",
-                            timeout=10
-                        )
-                        if response.status_code == 200:
-                            st.success("Thread cleared!")
-                            st.rerun()
-                        else:
-                            st.error("Failed to clear thread")
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
-    else:
-        st.info("No active conversation threads found")
 
 
 # Footer
