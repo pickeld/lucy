@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from config import config
+from config import settings
 from whatsapp.contact import Contact, ContactManager
 from whatsapp.group import Group, GroupManager
 from utils.logger import logger
@@ -293,11 +293,11 @@ class MediaMessageBase(WhatsappMSG):
         try:
             response = httpx.get(
                 self.media_url, 
-                headers={"X-Api-Key": config.waha_api_key}
+                headers={"X-Api-Key": settings.waha_api_key}
             )
             self.media_base64 = base64.standard_b64encode(response.content).decode("utf-8")
             
-            if config.log_level == "DEBUG" and self.media_type:
+            if settings.log_level == "DEBUG" and self.media_type:
                 # save media to file
                 extension = self.media_type.split("/")[-1]
                 filename = f"tmp/images/media_{payload.get('id')}.{extension}"

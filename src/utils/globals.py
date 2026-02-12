@@ -9,7 +9,7 @@ import requests
 from requests.models import Response
 from retry import retry
 
-from config import config
+from config import settings
 from utils.exceptions import WAHAAPIError
 from utils.logger import logger
 
@@ -47,10 +47,10 @@ def send_request(
     payload = payload or {}
     params = params or {}
 
-    url = f"{config.waha_base_url}{endpoint}"
+    url = f"{settings.waha_base_url}{endpoint}"
     headers = {
         "Content-Type": "application/json",
-        "X-Api-Key": config.waha_api_key,
+        "X-Api-Key": settings.waha_api_key,
     }
 
     response: Optional[Response] = None

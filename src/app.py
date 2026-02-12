@@ -15,7 +15,7 @@ from requests.models import Response
 
 print("✅ Flask imported", flush=True)
 
-from config import config
+from config import settings
 print("✅ Config loaded", flush=True)
 
 from llamaindex_rag import get_rag
@@ -86,6 +86,24 @@ def health():
         status["dependencies"]["qdrant"] = "connected"
     except Exception as e:
         status["dependencies"]["qdrant"] = f"error: {str(e)}"
+        overall_healthy = False
+    
+    # Check WAHA
+    try:
+        import requests as req
+        waha_url = settings.waha_base_url
+        resp = req.get(
+            f"{waha_url}/api/sessions",
+            headers={"X-Api-Key": settings.waha_api_key},
+            timeout=5
+        )
+        if resp.status_code < 500:
+            status["dependencies"]["waha"] = "connected"
+        else:
+            status["dependencies"]["waha"] = f"error: HTTP {resp.status_code}"
+            overall_healthy = False
+    except Exception as e:
+        status["dependencies"]["waha"] = f"error: {str(e)}"
         overall_healthy = False
     
     if not overall_healthy:
@@ -539,6 +557,90 @@ def session_stats():
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
+
+# =============================================================================
+# CONFIGURATION MANAGEMENT ENDPOINTS
+# =============================================================================
+
+@app.route("/config", methods=["GET"])
+def get_config():
+    """Get all settings grouped by category, with secrets masked."""
+    try:
+        import settings_db
+        all_settings = settings_db.get_all_settings_masked()
+        return jsonify(all_settings), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Config get error: {e}
+{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/config", methods=["PUT"])
+def update_config():
+    """Update one or more settings.
+    
+    Request body: {"settings": {"key": "value", ...}}
+    """
+    try:
+        import settings_db
+        data = request.json or {}
+        updates = data.get("settings", {})
+        
+        if not updates:
+            return jsonify({"error": "No settings provided"}), 400
+        
+        updated_keys = settings_db.set_settings(updates)
+        
+        return jsonify({
+            "status": "ok",
+            "updated": updated_keys
+        }), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Config update error: {e}
+{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/config/categories", methods=["GET"])
+def get_config_categories():
+    """Get available setting categories."""
+    try:
+        import settings_db
+        categories = settings_db.get_categories()
+        return jsonify({"categories": categories}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Config categories error: {e}
+{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/config/reset", methods=["POST"])
+def reset_config():
+    """Reset settings to defaults, optionally for a specific category.
+    
+    Request body (optional): {"category": "llm"}
+    """
+    try:
+        import settings_db
+        data = request.json or {}
+        category = data.get("category")
+        
+        count = settings_db.reset_to_defaults(category=category)
+        
+        return jsonify({
+            "status": "ok",
+            "reset_count": count
+        }), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Config reset error: {e}
+{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
 # =============================================================================
 # CACHE MANAGEMENT ENDPOINTS
 # =============================================================================
@@ -599,7 +701,7 @@ def test():
                  payload={
                      "chatId": "972547755011@c.us",
                      "text": test_message,
-                     "session": config.waha_session_name
+                     "session": settings.waha_session_name
                  }
                  )
     return jsonify({"status": "test message sent"}), 200
@@ -647,7 +749,7 @@ def webhook():
 def index():
     try:
         response: Union[Dict[str, Any], Response] = send_request(
-            "GET", f"/api/sessions/{config.waha_session_name}")
+            "GET", f"/api/sessions/{settings.waha_session_name}")
         logger.debug(f"Session status: {response}")
 
         # Handle response - could be dict or Response object
@@ -666,7 +768,7 @@ def index():
 @app.route("/qr_code", methods=["GET"])
 def qr_code():
     qr_response = send_request(
-        "GET", f"/api/{config.waha_session_name}/auth/qr")
+        "GET", f"/api/{settings.waha_session_name}/auth/qr")
     # qr_response is a Response object for binary content
     qr_image_data = qr_response.content if isinstance(qr_response, Response) else None
     if qr_image_data:
@@ -679,7 +781,7 @@ def qr_code():
 
 @app.route("/pair", methods=["GET"])
 def pair():
-    session_name = config.waha_session_name
+    session_name = settings.waha_session_name
     send_request(method="POST", endpoint="/api/sessions/start",
                  payload={"name": session_name})
 
@@ -687,7 +789,7 @@ def pair():
         "config": {
             "webhooks": [
                 {
-                    "url": config.webhook_url,
+                    "url": settings.webhook_url,
                     "events": ["message.any"]
                 }
             ]
@@ -700,4 +802,4 @@ def pair():
 if __name__ == "__main__":
     os.environ["LOCAL"] = "TRUE"
     app.run(host="0.0.0.0", port=8765,
-            debug=True if config.log_level == "DEBUG" else False)
+            debug=True if settings.log_level == "DEBUG" else False)

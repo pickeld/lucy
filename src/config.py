@@ -1,95 +1,71 @@
 """Configuration management for WhatsApp-GPT application.
 
-Loads configuration from environment variables and .env file using python-dotenv.
-Supports both local development and Docker deployments.
+All configuration is stored in SQLite (managed by settings_db module).
+On first run, settings_db seeds the database from .env values.
+After that, SQLite is the single source of truth.
+
+Usage:
+    from config import settings
+    
+    model = settings.openai_model          # returns str
+    temperature = settings.openai_temperature  # returns str, cast as needed
+    api_key = settings.openai_api_key
 """
 
-import os
-from pathlib import Path
-from typing import Any, Optional
-
-from dotenv import load_dotenv
+from typing import Any
 
 
-def find_and_load_env() -> bool:
-    """Find and load the .env file by searching up the directory tree.
+class Settings:
+    """Attribute-style access to SQLite-backed settings.
     
-    Searches from the current file's directory upward to find .env file.
-    This handles both running from src/ directory and project root.
+    Reads every attribute lookup from the SQLite settings database.
     
-    Returns:
-        True if .env file was found and loaded, False otherwise
-    """
-    # Start from the directory containing this file
-    current_dir = Path(__file__).parent.resolve()
-    
-    # Search up the directory tree
-    for parent in [current_dir] + list(current_dir.parents):
-        env_path = parent / ".env"
-        if env_path.is_file():
-            load_dotenv(env_path, override=False)  # env vars take precedence
-            return True
-        # Stop at project root indicators
-        if (parent / "docker-compose.yml").exists() or (parent / ".git").exists():
-            if env_path.is_file():
-                load_dotenv(env_path, override=False)
-                return True
-            break
-    
-    return False
-
-
-class Config:
-    """Configuration manager that reads from environment variables.
-    
-    Uses python-dotenv to load .env file into os.environ, then provides
-    attribute-style access to configuration values. Environment variables
-    always take precedence over .env file values.
-    
-    Attribute access is case-insensitive for convenience.
+    Usage:
+        settings.openai_model       -> "gpt-4o"
+        settings.redis_host         -> "redis"
+        settings.openai_api_key     -> "sk-..."
     """
     
-    def __init__(self):
-        """Initialize configuration by loading .env file."""
-        find_and_load_env()
-
     def __getattr__(self, name: str) -> str:
-        """Get configuration value by attribute name.
+        """Look up a setting by attribute name from SQLite.
         
         Args:
-            name: Configuration key (case-insensitive)
+            name: Setting key (e.g., 'openai_model')
             
         Returns:
-            Configuration value as string
+            Setting value as string
             
         Raises:
-            AttributeError: If configuration key is not found
+            AttributeError: If the setting key does not exist in SQLite
         """
-        # Skip private attributes
+        # Skip private/dunder attributes to avoid infinite recursion
         if name.startswith("_"):
-            raise AttributeError(f"'Config' object has no attribute '{name}'")
+            raise AttributeError(f"'Settings' object has no attribute '{name}'")
         
-        # Try exact match first, then uppercase
-        value = os.environ.get(name) or os.environ.get(name.upper())
+        from settings_db import get_setting_value
+        value = get_setting_value(name)
         if value is not None:
             return value
         
-        # Try lowercase
-        value = os.environ.get(name.lower())
+        # Also try lowercase version of the name
+        value = get_setting_value(name.lower())
         if value is not None:
             return value
         
-        raise AttributeError(f"'Config' object has no attribute '{name}'")
+        raise AttributeError(
+            f"Setting '{name}' not found in database. "
+            f"Check that it exists in settings_db.DEFAULT_SETTINGS."
+        )
     
     def get(self, name: str, default: Any = None) -> Any:
-        """Get configuration value with optional default.
+        """Get a setting with a fallback default.
         
         Args:
-            name: Configuration key (case-insensitive)
-            default: Default value if key not found
+            name: Setting key
+            default: Value to return if setting not found
             
         Returns:
-            Configuration value or default
+            Setting value or default
         """
         try:
             return getattr(self, name)
@@ -97,5 +73,5 @@ class Config:
             return default
 
 
-# Create singleton config instance
-config = Config()
+# Singleton instance — import this everywhere
+settings = Settings()

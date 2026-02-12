@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from config import config
+from config import settings
 from utils.globals import send_request
 from utils.logger import logger
 from utils.redis_conn import redis_get, redis_set
@@ -96,7 +96,7 @@ class ContactManager:
         Returns:
             Dictionary with contact information
         """
-        params = {"contactId": contact_id, "session": config.waha_session_name}
+        params = {"contactId": contact_id, "session": settings.waha_session_name}
         try:
             response = send_request(
                 method="GET", endpoint="/api/contacts", params=params)

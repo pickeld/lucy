@@ -7,7 +7,7 @@ in log output via format specifiers (no frame inspection needed).
 import logging
 import os
 
-from config import config
+from config import settings
 
 
 class Logger:
@@ -19,7 +19,7 @@ class Logger:
 
     def __init__(self, name: str = "WAHALogger"):
         self.logger = logging.getLogger(name)
-        self.logger.setLevel(config.log_level)
+        self.logger.setLevel(settings.log_level)
         self.logger.propagate = False
 
         # Avoid duplicate handlers on re-import

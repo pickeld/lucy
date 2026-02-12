@@ -7,7 +7,7 @@ fetching group information from WAHA and caching in Redis.
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from config import config
+from config import settings
 from utils.globals import send_request
 from utils.logger import logger
 from utils.redis_conn import redis_get, redis_set, redis_delete, redis_delete_pattern
@@ -91,7 +91,7 @@ class GroupManager:
         logger.debug(f"Fetching group info for {group_id}")
         try:
             resp = send_request(
-                method="GET", endpoint=f"/api/{config.waha_session_name}/groups/{group_id}")
+                method="GET", endpoint=f"/api/{settings.waha_session_name}/groups/{group_id}")
             return resp
         except Exception as e:
             logger.error(f"WAHA group fetch failed for {group_id}: {e}")

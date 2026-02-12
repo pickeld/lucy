@@ -40,7 +40,7 @@ from qdrant_client.models import (
     VectorParams,
 )
 
-from config import config
+from config import settings
 from utils.logger import logger
 from utils.redis_conn import get_redis_client
 
@@ -78,10 +78,10 @@ class LlamaIndexRAG:
     _qdrant_client = None
     _vector_store = None
     
-    COLLECTION_NAME = os.getenv("RAG_COLLECTION_NAME", "whatsapp_messages")
+    COLLECTION_NAME = settings.rag_collection_name
     VECTOR_SIZE = 1536  # OpenAI embedding dimension
-    MINIMUM_SIMILARITY_SCORE = float(os.getenv("RAG_MIN_SCORE", "0.5"))
-    MAX_CONTEXT_TOKENS = int(os.getenv("RAG_MAX_CONTEXT_TOKENS", "3000"))
+    MINIMUM_SIMILARITY_SCORE = float(settings.rag_min_score)
+    MAX_CONTEXT_TOKENS = int(settings.rag_max_context_tokens)
     RRF_K = 60  # Reciprocal Rank Fusion constant (standard default)
     
     def __new__(cls):
@@ -99,8 +99,8 @@ class LlamaIndexRAG:
         logger.info("Starting LlamaIndex RAG initialization...")
         
         # Get Qdrant server config from environment
-        self.qdrant_host = os.getenv("QDRANT_HOST", "localhost")
-        self.qdrant_port = int(os.getenv("QDRANT_PORT", "6333"))
+        self.qdrant_host = settings.qdrant_host
+        self.qdrant_port = int(settings.qdrant_port)
         logger.info(f"Qdrant config: {self.qdrant_host}:{self.qdrant_port}")
         
         # Configure embedding model only (LLM is configured lazily on first use)
@@ -124,7 +124,7 @@ class LlamaIndexRAG:
         """
         logger.debug("Setting up OpenAI embedding model...")
         Settings.embed_model = OpenAIEmbedding(
-            api_key=config.OPENAI_API_KEY,
+            api_key=settings.openai_api_key,
             model="text-embedding-3-small"
         )
         logger.debug("OpenAI embedding model configured (text-embedding-3-small)")
@@ -134,29 +134,29 @@ class LlamaIndexRAG:
         if self._llm_configured:
             return
         
-        llm_provider = os.getenv('LLM_PROVIDER', 'openai').lower()
+        llm_provider = settings.llm_provider.lower()
         logger.info(f"Configuring LLM provider: {llm_provider} (lazy init)...")
         
         if llm_provider == 'gemini':
             try:
                 from llama_index.llms.gemini import Gemini
                 Settings.llm = Gemini(
-                    api_key=config.GOOGLE_API_KEY,
-                    model=getattr(config, 'GEMINI_MODEL', 'gemini-pro'),
+                    api_key=settings.google_api_key,
+                    model=settings.gemini_model,
                     temperature=0.3
                 )
                 logger.info("Gemini LLM configured")
             except ImportError:
                 logger.warning("Gemini LLM not available, falling back to OpenAI")
                 Settings.llm = LlamaIndexOpenAI(
-                    api_key=config.OPENAI_API_KEY,
-                    model=config.OPENAI_MODEL,
+                    api_key=settings.openai_api_key,
+                    model=settings.openai_model,
                     temperature=0.3
                 )
         else:
             Settings.llm = LlamaIndexOpenAI(
-                api_key=config.OPENAI_API_KEY,
-                model=config.OPENAI_MODEL,
+                api_key=settings.openai_api_key,
+                model=settings.openai_model,
                 temperature=0.3
             )
             logger.info("OpenAI LLM configured")
