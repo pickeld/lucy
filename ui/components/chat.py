@@ -56,10 +56,10 @@ def _render_empty_state() -> None:
     st.markdown(
         """
         <div class="empty-state">
-            <div class="empty-state-icon">💬</div>
-            <div class="empty-state-title">WhatsApp RAG Assistant</div>
+            <div class="empty-state-icon">🧠</div>
+            <div class="empty-state-title">RAG Assistant</div>
             <div class="empty-state-subtitle">
-                Ask anything about your WhatsApp messages
+                Ask anything about your messages and documents
             </div>
         </div>
         """,
@@ -161,7 +161,7 @@ def _handle_chat_input() -> None:
     # Check for a pending question from suggestion cards
     pending = st.session_state.pop("pending_question", None)
 
-    question = st.chat_input("Ask about your WhatsApp messages…")
+    question = st.chat_input("Ask about your messages and documents…")
 
     # Use pending question if available, otherwise use typed input
     active_question = pending or question

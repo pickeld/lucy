@@ -1,4 +1,4 @@
-"""API client wrapper for the WhatsApp RAG backend.
+"""API client wrapper for the RAG Assistant backend.
 
 Consolidates all ``requests`` calls to the Flask API into one module.
 Every function handles errors gracefully and returns sensible defaults.
