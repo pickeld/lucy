@@ -29,8 +29,13 @@ from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    MatchText,
     MatchValue,
+    PayloadSchemaType,
     Range,
+    TextIndexParams,
+    TextIndexType,
+    TokenizerType,
     VectorParams,
 )
 
@@ -86,27 +91,43 @@ class LlamaIndexRAG:
         if self._initialized:
             return
         
+        logger.info("Starting LlamaIndex RAG initialization...")
+        
         # Get Qdrant server config from environment
         self.qdrant_host = os.getenv("QDRANT_HOST", "localhost")
         self.qdrant_port = int(os.getenv("QDRANT_PORT", "6333"))
+        logger.info(f"Qdrant config: {self.qdrant_host}:{self.qdrant_port}")
         
-        # Configure LlamaIndex settings
-        self._configure_settings()
+        # Configure embedding model only (LLM is configured lazily on first use)
+        logger.info("Configuring embedding model...")
+        self._configure_embedding()
+        logger.info("Embedding model configured")
         
         self._initialized = True
+        self._llm_configured = False
+        
+        # Ensure collection exists (connects to Qdrant)
+        logger.info("Ensuring Qdrant collection exists...")
         self._ensure_collection()
         logger.info(f"LlamaIndex RAG initialized with Qdrant at {self.qdrant_host}:{self.qdrant_port}")
     
-    def _configure_settings(self):
-        """Configure LlamaIndex global settings."""
-        # Set up OpenAI embedding model
+    def _configure_embedding(self):
+        """Configure embedding model (fast, required at startup)."""
+        logger.debug("Setting up OpenAI embedding model...")
         Settings.embed_model = OpenAIEmbedding(
             api_key=config.OPENAI_API_KEY,
             model="text-embedding-ada-002"
         )
+        logger.debug("OpenAI embedding model configured")
+    
+    def _ensure_llm_configured(self):
+        """Lazily configure LLM on first use (Gemini import is slow)."""
+        if self._llm_configured:
+            return
         
-        # Set up LLM
         llm_provider = os.getenv('LLM_PROVIDER', 'openai').lower()
+        logger.info(f"Configuring LLM provider: {llm_provider} (lazy init)...")
+        
         if llm_provider == 'gemini':
             try:
                 from llama_index.llms.gemini import Gemini
@@ -115,6 +136,7 @@ class LlamaIndexRAG:
                     model=getattr(config, 'GEMINI_MODEL', 'gemini-pro'),
                     temperature=0.3
                 )
+                logger.info("Gemini LLM configured")
             except ImportError:
                 logger.warning("Gemini LLM not available, falling back to OpenAI")
                 Settings.llm = LlamaIndexOpenAI(
@@ -128,15 +150,22 @@ class LlamaIndexRAG:
                 model=config.OPENAI_MODEL,
                 temperature=0.3
             )
+            logger.info("OpenAI LLM configured")
+        
+        self._llm_configured = True
     
     @property
     def qdrant_client(self) -> QdrantClient:
         """Get or create the Qdrant client."""
         if LlamaIndexRAG._qdrant_client is None:
+            logger.info(f"Connecting to Qdrant at {self.qdrant_host}:{self.qdrant_port}...")
             LlamaIndexRAG._qdrant_client = QdrantClient(
                 host=self.qdrant_host,
-                port=self.qdrant_port
+                port=self.qdrant_port,
+                timeout=10,  # Connection timeout in seconds
+                prefer_grpc=False,  # Use HTTP for more reliable connections
             )
+            logger.info("Qdrant client created")
         return LlamaIndexRAG._qdrant_client
     
     @property
@@ -163,12 +192,15 @@ class LlamaIndexRAG:
         return LlamaIndexRAG._index
     
     def _ensure_collection(self):
-        """Ensure the collection exists in Qdrant."""
+        """Ensure the collection exists in Qdrant with text indexes for metadata search."""
         try:
+            logger.debug("Fetching existing collections from Qdrant...")
             collections = self.qdrant_client.get_collections().collections
             collection_names = [c.name for c in collections]
+            logger.debug(f"Found collections: {collection_names}")
             
             if self.COLLECTION_NAME not in collection_names:
+                logger.info(f"Creating Qdrant collection: {self.COLLECTION_NAME}")
                 self.qdrant_client.create_collection(
                     collection_name=self.COLLECTION_NAME,
                     vectors_config=VectorParams(
@@ -177,8 +209,67 @@ class LlamaIndexRAG:
                     )
                 )
                 logger.info(f"Created Qdrant collection: {self.COLLECTION_NAME}")
+            
+            # Ensure text indexes exist for full-text search on metadata fields
+            self._ensure_text_indexes()
+            
         except Exception as e:
             logger.error(f"Failed to ensure collection: {e}")
+            raise  # Re-raise to surface connection issues during init
+    
+    def _ensure_text_indexes(self):
+        """Create text indexes on sender and chat_name fields for full-text search."""
+        try:
+            # Create text index on 'sender' field for searching by sender name
+            self.qdrant_client.create_payload_index(
+                collection_name=self.COLLECTION_NAME,
+                field_name="sender",
+                field_schema=TextIndexParams(
+                    type=TextIndexType.TEXT,
+                    tokenizer=TokenizerType.MULTILINGUAL,
+                    min_token_len=2,
+                    max_token_len=20,
+                    lowercase=True
+                )
+            )
+            logger.info("Created text index on 'sender' field")
+        except Exception as e:
+            # Index might already exist
+            logger.debug(f"Could not create sender index (may exist): {e}")
+        
+        try:
+            # Create text index on 'chat_name' field for searching by chat/group name
+            self.qdrant_client.create_payload_index(
+                collection_name=self.COLLECTION_NAME,
+                field_name="chat_name",
+                field_schema=TextIndexParams(
+                    type=TextIndexType.TEXT,
+                    tokenizer=TokenizerType.MULTILINGUAL,
+                    min_token_len=2,
+                    max_token_len=30,
+                    lowercase=True
+                )
+            )
+            logger.info("Created text index on 'chat_name' field")
+        except Exception as e:
+            logger.debug(f"Could not create chat_name index (may exist): {e}")
+        
+        try:
+            # Create text index on 'message' field for full-text message search
+            self.qdrant_client.create_payload_index(
+                collection_name=self.COLLECTION_NAME,
+                field_name="message",
+                field_schema=TextIndexParams(
+                    type=TextIndexType.TEXT,
+                    tokenizer=TokenizerType.MULTILINGUAL,
+                    min_token_len=2,
+                    max_token_len=40,
+                    lowercase=True
+                )
+            )
+            logger.info("Created text index on 'message' field")
+        except Exception as e:
+            logger.debug(f"Could not create message index (may exist): {e}")
     
     def add_message(
         self,
@@ -342,15 +433,105 @@ class LlamaIndexRAG:
             logger.error(f"Failed to add documents to vector store: {e}")
             return 0
     
+    def _fulltext_search(
+        self,
+        query: str,
+        k: int = 10,
+        filter_chat_name: Optional[str] = None,
+        filter_days: Optional[int] = None
+    ) -> List[NodeWithScore]:
+        """Perform full-text search on metadata fields (sender, chat_name, message).
+        
+        Args:
+            query: Text to search for
+            k: Max results to return
+            filter_chat_name: Optional chat filter
+            filter_days: Optional time filter
+            
+        Returns:
+            List of matching NodeWithScore objects
+        """
+        try:
+            # Build filter conditions
+            must_conditions = []
+            
+            if filter_chat_name:
+                must_conditions.append(
+                    FieldCondition(key="chat_name", match=MatchValue(value=filter_chat_name))
+                )
+            
+            if filter_days is not None and filter_days > 0:
+                min_timestamp = int(datetime.now().timestamp()) - (filter_days * 24 * 60 * 60)
+                must_conditions.append(
+                    FieldCondition(key="timestamp", range=Range(gte=min_timestamp))
+                )
+            
+            # Full-text search conditions - at least one must match
+            # Use Filter with 'should' to match any of: sender, chat_name, or message
+            qdrant_filter = Filter(
+                must=must_conditions if must_conditions else None,
+                should=[
+                    FieldCondition(key="sender", match=MatchText(text=query)),
+                    FieldCondition(key="chat_name", match=MatchText(text=query)),
+                    FieldCondition(key="message", match=MatchText(text=query))
+                ]  # type: ignore[arg-type]
+            )
+            
+            # Scroll through matching documents (no vector search)
+            results, _ = self.qdrant_client.scroll(
+                collection_name=self.COLLECTION_NAME,
+                scroll_filter=qdrant_filter,
+                limit=k,
+                with_payload=True,
+                with_vectors=False
+            )
+            
+            # Convert to NodeWithScore format
+            nodes = []
+            for record in results:
+                payload = record.payload or {}
+                
+                # Reconstruct text
+                chat_name = payload.get("chat_name", "Unknown")
+                sender = payload.get("sender", "Unknown")
+                message = payload.get("message", "")
+                timestamp = payload.get("timestamp", 0)
+                
+                if message:
+                    formatted_time = format_timestamp(str(timestamp))
+                    text = f"[{formatted_time}] {sender} in {chat_name}: {message}"
+                    
+                    node = TextNode(
+                        text=text,
+                        metadata={k: v for k, v in payload.items() if not k.startswith("_")},
+                        id_=str(record.id)
+                    )
+                    # Full-text matches get a high score to prioritize them
+                    nodes.append(NodeWithScore(node=node, score=1.0))
+            
+            return nodes
+            
+        except Exception as e:
+            logger.debug(f"Full-text search failed (indexes may not exist): {e}")
+            return []
+    
     def search(
         self,
         query: str,
         k: int = 10,
         filter_chat_name: Optional[str] = None,
         filter_sender: Optional[str] = None,
-        filter_days: Optional[int] = None
+        filter_days: Optional[int] = None,
+        include_metadata_search: bool = True
     ) -> List[NodeWithScore]:
-        """Search for relevant messages using semantic similarity.
+        """Search for relevant messages using hybrid semantic + full-text search.
+        
+        Performs two searches and merges results:
+        1. Vector similarity search (semantic)
+        2. Full-text search on metadata (sender, chat_name, message)
+        
+        This ensures queries about people find results even when the semantic
+        embedding doesn't capture the relationship (e.g., "what is Kobi's last name?").
         
         Args:
             query: The search query
@@ -358,16 +539,17 @@ class LlamaIndexRAG:
             filter_chat_name: Optional filter by chat/group name
             filter_sender: Optional filter by sender name
             filter_days: Optional filter by number of days
+            include_metadata_search: Include full-text search on metadata fields
             
         Returns:
             List of NodeWithScore objects with metadata
         """
         try:
             # Build Qdrant filter conditions
-            conditions = []
+            must_conditions = []
             
             if filter_chat_name:
-                conditions.append(
+                must_conditions.append(
                     FieldCondition(
                         key="chat_name",
                         match=MatchValue(value=filter_chat_name)
@@ -375,7 +557,7 @@ class LlamaIndexRAG:
                 )
             
             if filter_sender:
-                conditions.append(
+                must_conditions.append(
                     FieldCondition(
                         key="sender",
                         match=MatchValue(value=filter_sender)
@@ -384,15 +566,14 @@ class LlamaIndexRAG:
             
             if filter_days is not None and filter_days > 0:
                 min_timestamp = int(datetime.now().timestamp()) - (filter_days * 24 * 60 * 60)
-                conditions.append(
+                must_conditions.append(
                     FieldCondition(
                         key="timestamp",
                         range=Range(gte=min_timestamp)
                     )
                 )
             
-            # Create Qdrant filter
-            qdrant_filters = Filter(must=conditions) if conditions else None
+            qdrant_filters = Filter(must=must_conditions) if must_conditions else None
             
             # Use direct Qdrant search to avoid LlamaIndex TextNode validation issues
             # with documents that have None text values
@@ -447,6 +628,30 @@ class LlamaIndexRAG:
                 
                 valid_results.append(NodeWithScore(node=node, score=result.score))
             
+            # Hybrid search: also do full-text search on metadata and merge results
+            if include_metadata_search and not filter_sender:
+                fulltext_results = self._fulltext_search(
+                    query=query,
+                    k=k,
+                    filter_chat_name=filter_chat_name,
+                    filter_days=filter_days
+                )
+                
+                # Merge results: fulltext matches first (they're more precise for name queries),
+                # then vector results, deduplicated by node ID
+                seen_ids = {r.node.id_ for r in valid_results if r.node}
+                merged = list(valid_results)  # Start with vector results
+                
+                for ft_result in fulltext_results:
+                    if ft_result.node and ft_result.node.id_ not in seen_ids:
+                        # Insert fulltext results at the beginning for priority
+                        merged.insert(0, ft_result)
+                        seen_ids.add(ft_result.node.id_)
+                
+                # Limit to k results
+                valid_results = merged[:k]
+                logger.info(f"Hybrid search merged {len(fulltext_results)} fulltext + {len(merged) - len(fulltext_results)} vector results")
+            
             logger.info(f"RAG search for '{query[:50]}...' returned {len(valid_results)} valid results")
             return valid_results
             
@@ -479,6 +684,9 @@ class LlamaIndexRAG:
             AI-generated answer based on retrieved context
         """
         try:
+            # Ensure LLM is configured (lazy init for faster startup)
+            self._ensure_llm_configured()
+            
             # Get relevant documents
             results = self.search(
                 query=question,
@@ -651,5 +859,7 @@ def get_rag() -> LlamaIndexRAG:
     """
     global _rag_instance
     if _rag_instance is None:
+        print("Initializing LlamaIndex RAG instance...", flush=True)
         _rag_instance = LlamaIndexRAG()
+        print("✅ LlamaIndex RAG instance initialized", flush=True)
     return _rag_instance
