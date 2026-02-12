@@ -1,6 +1,7 @@
 """LlamaIndex RAG (Retrieval Augmented Generation) for WhatsApp messages.
 
-Uses Qdrant as vector store and OpenAI embeddings for semantic search.
+Uses Qdrant as vector store and OpenAI text-embedding-3-large for semantic search.
+Configured with 1024 dimensions for optimal Hebrew + English multilingual support.
 Uses LlamaIndex CondensePlusContextChatEngine for multi-turn conversations
 with automatic query reformulation and Redis-backed chat memory.
 
@@ -141,7 +142,8 @@ class WhatsAppRetriever(BaseRetriever):
 class LlamaIndexRAG:
     """LlamaIndex-based RAG for WhatsApp message search and retrieval.
     
-    Uses Qdrant server as vector store and OpenAI embeddings.
+    Uses Qdrant server as vector store and OpenAI text-embedding-3-large
+    with 1024 dimensions for optimal Hebrew + English multilingual support.
     Uses CondensePlusContextChatEngine for multi-turn conversations
     with automatic query reformulation and Redis-backed chat memory.
     Connects to Qdrant server at QDRANT_HOST:QDRANT_PORT (default: localhost:6333).
@@ -156,7 +158,7 @@ class LlamaIndexRAG:
     _chat_store = None
     
     COLLECTION_NAME = settings.rag_collection_name
-    VECTOR_SIZE = 1536  # OpenAI embedding dimension
+    VECTOR_SIZE = 1024  # text-embedding-3-large with dimensions=1024 for multilingual quality
     MINIMUM_SIMILARITY_SCORE = float(settings.rag_min_score)
     MAX_CONTEXT_TOKENS = int(settings.rag_max_context_tokens)
     RRF_K = 60  # Reciprocal Rank Fusion constant (standard default)
@@ -196,15 +198,22 @@ class LlamaIndexRAG:
     def _configure_embedding(self):
         """Configure embedding model (fast, required at startup).
         
-        Uses text-embedding-3-small which is 5x cheaper and higher quality
-        than the legacy text-embedding-ada-002. Same 1536 dimensions.
+        Uses text-embedding-3-large with dimensions=1024 for best multilingual
+        (Hebrew + English) support. The 'large' model significantly outperforms
+        'small' on non-English languages. Using 1024 dimensions (reduced from
+        native 3072) provides an excellent quality/cost tradeoff — OpenAI's
+        Matryoshka representation learning ensures minimal quality loss.
+        
+        Reads model name from settings.embedding_model for configurability.
         """
-        logger.debug("Setting up OpenAI embedding model...")
+        model_name = settings.get("embedding_model", "text-embedding-3-large")
+        logger.debug(f"Setting up OpenAI embedding model: {model_name}...")
         Settings.embed_model = OpenAIEmbedding(
             api_key=settings.openai_api_key,
-            model="text-embedding-3-small"
+            model=model_name,
+            dimensions=self.VECTOR_SIZE,
         )
-        logger.debug("OpenAI embedding model configured (text-embedding-3-small)")
+        logger.debug(f"OpenAI embedding model configured ({model_name}, dims={self.VECTOR_SIZE})")
     
     def _ensure_llm_configured(self):
         """Lazily configure LLM on first use (Gemini import is slow)."""
@@ -1113,6 +1122,54 @@ Instructions:
         except Exception as e:
             logger.error(f"Failed to get RAG stats: {e}")
             return {"error": str(e)}
+    
+    def reset_collection(self) -> bool:
+        """Drop and recreate the Qdrant collection with fresh configuration.
+        
+        This is required when changing embedding models or dimensions, since
+        existing vectors are incompatible with the new model. Also invalidates
+        Redis-cached chat/sender lists.
+        
+        WARNING: This permanently deletes ALL stored embeddings. Messages will
+        need to be re-ingested from WhatsApp.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            logger.warning(f"Dropping Qdrant collection: {self.COLLECTION_NAME}")
+            
+            # Delete the collection entirely
+            self.qdrant_client.delete_collection(self.COLLECTION_NAME)
+            logger.info(f"Deleted collection: {self.COLLECTION_NAME}")
+            
+            # Clear cached singleton references so they get recreated
+            LlamaIndexRAG._vector_store = None
+            LlamaIndexRAG._index = None
+            
+            # Recreate collection with current VECTOR_SIZE
+            self.qdrant_client.create_collection(
+                collection_name=self.COLLECTION_NAME,
+                vectors_config=VectorParams(
+                    size=self.VECTOR_SIZE,
+                    distance=Distance.COSINE
+                )
+            )
+            logger.info(f"Recreated collection: {self.COLLECTION_NAME} (dims={self.VECTOR_SIZE})")
+            
+            # Recreate indexes
+            self._ensure_text_indexes()
+            self._ensure_payload_indexes()
+            
+            # Invalidate Redis caches
+            self.invalidate_list_caches()
+            
+            logger.info("Collection reset complete — all embeddings dropped")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to reset collection: {e}")
+            return False
     
     # =========================================================================
     # Cached chat/sender list methods (Redis-backed)

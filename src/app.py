@@ -383,6 +383,51 @@ def rag_senders():
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
+@app.route("/rag/reset", methods=["POST"])
+def rag_reset():
+    """Drop and recreate the Qdrant collection with fresh vector configuration.
+    
+    Required when changing embedding models or dimensions (e.g., switching
+    from text-embedding-3-small to text-embedding-3-large). All existing
+    embeddings are permanently deleted and must be re-ingested.
+    
+    Request body (optional):
+        {
+            "confirm": true  # Safety flag to prevent accidental resets
+        }
+    
+    Response:
+        {
+            "status": "ok",
+            "message": "Collection reset successfully",
+            "collection_name": "whatsapp_messages",
+            "new_vector_size": 1024
+        }
+    """
+    try:
+        data = request.json or {}
+        if not data.get("confirm", False):
+            return jsonify({
+                "error": "Safety check: pass {\"confirm\": true} to confirm collection reset. "
+                         "This will permanently delete ALL stored embeddings."
+            }), 400
+        
+        success = rag.reset_collection()
+        if success:
+            return jsonify({
+                "status": "ok",
+                "message": "Collection reset successfully. All embeddings dropped.",
+                "collection_name": rag.COLLECTION_NAME,
+                "new_vector_size": rag.VECTOR_SIZE,
+            }), 200
+        else:
+            return jsonify({"error": "Failed to reset collection — check logs"}), 500
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"RAG reset error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
 # =============================================================================
 # CONVERSATION MANAGEMENT ENDPOINTS
 # =============================================================================

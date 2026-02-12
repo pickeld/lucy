@@ -120,7 +120,7 @@ DEFAULT_SETTINGS: List[Tuple[str, str, str, str, str]] = [
     ("rag_min_score", "0.2", "rag", "float", "Minimum similarity score threshold (0.0-1.0)"),
     ("rag_max_context_tokens", "3000", "rag", "int", "Max tokens for RAG context window"),
     ("rag_default_k", "10", "rag", "int", "Default number of context documents"),
-    ("embedding_model", "text-embedding-3-small", "rag", "text", "OpenAI embedding model"),
+    ("embedding_model", "text-embedding-3-large", "rag", "text", "OpenAI embedding model (text-embedding-3-large recommended for Hebrew+English)"),
     # WhatsApp
     ("chat_prefix", "??", "whatsapp", "text", "Prefix to trigger AI chat response"),
     ("dalle_prefix", "!!", "whatsapp", "text", "Prefix to trigger DALL-E image generation"),
