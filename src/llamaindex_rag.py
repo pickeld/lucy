@@ -371,12 +371,14 @@ class LlamaIndexRAG:
     def _ensure_payload_indexes(self):
         """Create payload indexes for efficient filtering on non-text fields.
         
-        Indexes timestamp (integer range queries), source_type (keyword filter),
+        Indexes timestamp (integer range queries), source/content_type (keyword filters),
         is_group (boolean filter), and source_id (deduplication lookups).
         """
         index_configs = [
             ("timestamp", PayloadSchemaType.INTEGER, "timestamp integer index"),
-            ("source_type", PayloadSchemaType.KEYWORD, "source_type keyword index"),
+            ("source", PayloadSchemaType.KEYWORD, "source keyword index"),
+            ("content_type", PayloadSchemaType.KEYWORD, "content_type keyword index"),
+            ("source_type", PayloadSchemaType.KEYWORD, "source_type keyword index (legacy)"),
             ("is_group", PayloadSchemaType.BOOL, "is_group bool index"),
             ("source_id", PayloadSchemaType.KEYWORD, "source_id keyword index"),
         ]
@@ -697,7 +699,7 @@ class LlamaIndexRAG:
             node = document.to_llama_index_node()
             self.index.insert_nodes([node])
             
-            logger.debug(f"Added {document.metadata.source_type.value} document to RAG: {document.get_embedding_text()[:50]}...")
+            logger.debug(f"Added {document.metadata.source.value}/{document.metadata.content_type.value} document to RAG: {document.get_embedding_text()[:50]}...")
             return True
             
         except Exception as e:

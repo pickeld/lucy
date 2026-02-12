@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import Field, field_validator
 
-from .base import BaseRAGDocument, DocumentMetadata, SourceType
+from .base import BaseRAGDocument, ContentType, DocumentMetadata, Source, SourceType
 
 if TYPE_CHECKING:
     from llama_index.core.schema import TextNode
@@ -76,8 +76,22 @@ class CallRecordingDocument(BaseRAGDocument):
         return v
     
     @classmethod
+    def get_source(cls) -> Source:
+        """Get the default source for call recordings.
+        
+        Defaults to MANUAL; override via from_transcription(source=...)
+        for recordings from specific plugins (e.g. Source.WHATSAPP).
+        """
+        return Source.MANUAL
+    
+    @classmethod
+    def get_content_type(cls) -> ContentType:
+        """Get the content type for call recordings."""
+        return ContentType.CALL_RECORDING
+    
+    @classmethod
     def get_source_type(cls) -> SourceType:
-        """Get the source type for call recordings."""
+        """DEPRECATED: Use get_source() instead."""
         return SourceType.CALL_RECORDING
     
     @classmethod
@@ -95,7 +109,8 @@ class CallRecordingDocument(BaseRAGDocument):
         transcription_provider: Optional[str] = None,
         language_detected: Optional[str] = None,
         recorded_at: Optional[datetime] = None,
-        tags: Optional[List[str]] = None
+        tags: Optional[List[str]] = None,
+        source: Source = Source.MANUAL
     ) -> "CallRecordingDocument":
         """Create a CallRecordingDocument from transcription data.
         
@@ -116,6 +131,7 @@ class CallRecordingDocument(BaseRAGDocument):
             language_detected: Detected language
             recorded_at: When the call was recorded
             tags: Optional tags
+            source: Where the recording came from (default: MANUAL)
             
         Returns:
             CallRecordingDocument instance
@@ -129,7 +145,9 @@ class CallRecordingDocument(BaseRAGDocument):
         # Create metadata
         metadata = DocumentMetadata(
             source_id=f"call:{recording_id}",
-            source_type=SourceType.CALL_RECORDING,
+            source=source,
+            content_type=ContentType.CALL_RECORDING,
+            source_type=SourceType.CALL_RECORDING,  # Legacy compat
             created_at=recorded_at,
             tags=tags or [],
             language=language_detected,

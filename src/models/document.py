@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import Field, field_validator
 
-from .base import BaseRAGDocument, DocumentMetadata, SourceType
+from .base import BaseRAGDocument, ContentType, DocumentMetadata, Source, SourceType
 
 if TYPE_CHECKING:
     from llama_index.core.schema import TextNode
@@ -48,6 +48,14 @@ class FileType(str, Enum):
             return cls(ext)
         except ValueError:
             return cls.UNKNOWN
+
+
+# Map FileType to ContentType
+_FILE_TYPE_TO_CONTENT_TYPE = {
+    FileType.CSV: ContentType.SPREADSHEET,
+    FileType.XLSX: ContentType.SPREADSHEET,
+    FileType.XLS: ContentType.SPREADSHEET,
+}
 
 
 class FileDocument(BaseRAGDocument):
@@ -89,8 +97,22 @@ class FileDocument(BaseRAGDocument):
         return v
     
     @classmethod
+    def get_source(cls) -> Source:
+        """Get the default source for file documents.
+        
+        Defaults to MANUAL; override via from_file(source=...) for
+        documents from specific plugins (e.g. Source.PAPERLESS).
+        """
+        return Source.MANUAL
+    
+    @classmethod
+    def get_content_type(cls) -> ContentType:
+        """Get the default content type for file documents."""
+        return ContentType.DOCUMENT
+    
+    @classmethod
     def get_source_type(cls) -> SourceType:
-        """Get the source type for file documents."""
+        """DEPRECATED: Use get_source() instead."""
         return SourceType.DOCUMENT
     
     @classmethod
@@ -104,7 +126,8 @@ class FileDocument(BaseRAGDocument):
         chunk_index: int = 0,
         total_chunks: int = 1,
         created_at: Optional[datetime] = None,
-        tags: Optional[List[str]] = None
+        tags: Optional[List[str]] = None,
+        source: Source = Source.MANUAL
     ) -> "FileDocument":
         """Create a FileDocument from a file path and extracted content.
         
@@ -121,6 +144,7 @@ class FileDocument(BaseRAGDocument):
             total_chunks: Total chunks in document
             created_at: Original creation date (defaults to file mtime)
             tags: Optional tags for categorization
+            source: Where the file came from (default: MANUAL)
             
         Returns:
             FileDocument instance
@@ -160,10 +184,15 @@ class FileDocument(BaseRAGDocument):
         }
         mime_type = mime_types.get(file_type, "application/octet-stream")
         
+        # Determine content type from file type
+        content_type = _FILE_TYPE_TO_CONTENT_TYPE.get(file_type, ContentType.DOCUMENT)
+        
         # Create metadata
         metadata = DocumentMetadata(
             source_id=f"file:{file_path}:{chunk_index}",
-            source_type=SourceType.DOCUMENT,
+            source=source,
+            content_type=content_type,
+            source_type=SourceType.DOCUMENT,  # Legacy compat
             created_at=created_at,
             tags=tags or [],
             custom_fields={

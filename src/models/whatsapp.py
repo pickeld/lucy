@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import Field
 
-from .base import BaseRAGDocument, DocumentMetadata, SourceType
+from .base import BaseRAGDocument, ContentType, DocumentMetadata, Source, SourceType
 
 if TYPE_CHECKING:
     from llama_index.core.schema import TextNode
@@ -45,8 +45,13 @@ class WhatsAppMessageDocument(BaseRAGDocument):
     media_url: Optional[str] = Field(default=None, description="URL to media file")
     
     @classmethod
+    def get_source(cls) -> Source:
+        """Get the source for WhatsApp messages."""
+        return Source.WHATSAPP
+    
+    @classmethod
     def get_source_type(cls) -> SourceType:
-        """Get the source type for WhatsApp messages."""
+        """DEPRECATED: Use get_source() instead."""
         return SourceType.WHATSAPP
     
     @classmethod
@@ -61,7 +66,8 @@ class WhatsAppMessageDocument(BaseRAGDocument):
         timestamp: str,
         has_media: bool = False,
         media_type: Optional[str] = None,
-        media_url: Optional[str] = None
+        media_url: Optional[str] = None,
+        message_content_type: Optional[ContentType] = None
     ) -> "WhatsAppMessageDocument":
         """Create a WhatsAppMessageDocument from webhook payload data.
         
@@ -79,6 +85,7 @@ class WhatsAppMessageDocument(BaseRAGDocument):
             has_media: Whether has media attachment
             media_type: MIME type if media
             media_url: Media URL if media
+            message_content_type: Content type override (auto-detected if None)
             
         Returns:
             WhatsAppMessageDocument instance
@@ -90,10 +97,28 @@ class WhatsAppMessageDocument(BaseRAGDocument):
         except (ValueError, TypeError):
             dt = datetime.now(ZoneInfo("UTC"))
         
+        # Auto-detect content type from media info
+        if message_content_type is None:
+            if has_media and media_type:
+                if media_type.startswith("image/"):
+                    message_content_type = ContentType.IMAGE
+                elif media_type.startswith("audio/"):
+                    message_content_type = ContentType.VOICE
+                elif media_type.startswith("video/"):
+                    message_content_type = ContentType.VIDEO
+                elif media_type.startswith("application/"):
+                    message_content_type = ContentType.DOCUMENT
+                else:
+                    message_content_type = ContentType.UNKNOWN
+            else:
+                message_content_type = ContentType.TEXT
+        
         # Create metadata
         metadata = DocumentMetadata(
             source_id=f"{chat_id}:{timestamp}",
-            source_type=SourceType.WHATSAPP,
+            source=Source.WHATSAPP,
+            content_type=message_content_type,
+            source_type=SourceType.WHATSAPP,  # Legacy compat
             created_at=dt,
             custom_fields={
                 "thread_id": thread_id,
