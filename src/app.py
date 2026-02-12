@@ -856,5 +856,6 @@ def pair():
 
 if __name__ == "__main__":
     os.environ["LOCAL"] = "TRUE"
+    is_debug = settings.log_level == "DEBUG"
     app.run(host="0.0.0.0", port=8765,
-            debug=True if settings.log_level == "DEBUG" else False)
+            debug=is_debug, use_reloader=True)
