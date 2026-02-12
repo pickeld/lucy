@@ -199,7 +199,14 @@ def _render_bottom_section() -> None:
         unsafe_allow_html=True,
     )
 
-    # Settings toggle button
-    if st.button("⚙️  Settings & Filters", key="toggle_settings", use_container_width=True):
+    # Settings toggle button (sidebar filters/stats/health)
+    if st.button("🔍  Filters & Health", key="toggle_settings", use_container_width=True):
         st.session_state.show_settings = not st.session_state.get("show_settings", False)
+        st.rerun()
+
+    # Full settings page button
+    is_on_settings = st.session_state.get("show_settings_page", False)
+    settings_label = "💬  Back to Chat" if is_on_settings else "⚙️  Settings"
+    if st.button(settings_label, key="toggle_settings_page", use_container_width=True):
+        st.session_state.show_settings_page = not is_on_settings
         st.rerun()

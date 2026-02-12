@@ -376,16 +376,19 @@ class BaseRAGDocument(BaseModel, ABC):
         except ValueError:
             return SourceType.MANUAL_ENTRY
     
-    def format_timestamp(self, timezone: str = "Asia/Jerusalem") -> str:
+    def format_timestamp(self, timezone: str = "") -> str:
         """Format timestamp for human-readable display.
         
         Args:
-            timezone: Timezone for display (default: Asia/Jerusalem)
+            timezone: Timezone for display (reads from settings if empty)
             
         Returns:
             Formatted datetime string (e.g., "31/12/2024 10:30")
         """
         try:
+            if not timezone:
+                from config import settings as _settings
+                timezone = _settings.get("timezone", "Asia/Jerusalem")
             tz = ZoneInfo(timezone)
             dt = self.timestamp.astimezone(tz)
             return dt.strftime("%d/%m/%Y %H:%M")

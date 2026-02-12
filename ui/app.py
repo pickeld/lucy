@@ -1,9 +1,10 @@
 """RAG Assistant — ChatGPT-inspired Streamlit UI.
 
-Single-page application that orchestrates all components:
+Multi-page application that orchestrates all components:
 - Dark sidebar with conversation management
 - ChatGPT-style chat area with empty state
-- Settings panel (toggleable in sidebar)
+- Settings panel (toggleable in sidebar for filters/stats/health)
+- Full settings page (all SQLite-backed configuration + plugin settings)
 
 Supports multiple data sources via the plugin architecture
 (WhatsApp, Telegram, Email, Paperless-NG, etc.).
@@ -54,13 +55,18 @@ inject_styles()
 # ---------------------------------------------------------------------------
 # Session state initialisation
 # ---------------------------------------------------------------------------
+
+# Default API URL — can be overridden from the settings page (ui_api_url)
+_DEFAULT_API_URL = os.environ.get("UI_API_URL", "http://localhost:8765")
+
 _DEFAULTS = {
     "messages": [],
     "conversation_id": None,
     "active_filters": {},
-    "api_url": "http://localhost:8765",
+    "api_url": _DEFAULT_API_URL,
     "k_results": 10,
     "show_settings": False,
+    "show_settings_page": False,
     "renaming_conversation_id": None,
     "sidebar_search": "",
     "menu_open_id": None,
@@ -75,13 +81,16 @@ for key, default in _DEFAULTS.items():
 # ---------------------------------------------------------------------------
 from components.sidebar import render_sidebar
 from components.chat import render_chat_area
-from components.settings_panel import render_settings_panel
+from components.settings_panel import render_settings_panel, render_settings_page
 
 # Sidebar — conversations, new chat, settings toggle
 render_sidebar()
 
-# Settings panel — filters, config, health (inside sidebar, toggled)
+# Settings panel — filters, stats, health (inside sidebar, toggled)
 render_settings_panel()
 
-# Main area — chat messages, empty state, input
-render_chat_area()
+# Main area — either settings page or chat
+if st.session_state.get("show_settings_page", False):
+    render_settings_page()
+else:
+    render_chat_area()

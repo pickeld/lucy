@@ -596,6 +596,25 @@ def get_config_categories():
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
+@app.route("/config/meta", methods=["GET"])
+def get_config_meta():
+    """Get configuration metadata for UI rendering.
+    
+    Returns category labels/ordering and select-type option lists
+    so the UI can render proper form controls without hardcoding.
+    """
+    try:
+        import settings_db
+        return jsonify({
+            "category_meta": settings_db.CATEGORY_META,
+            "select_options": settings_db.SELECT_OPTIONS,
+        }), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Config meta error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
 @app.route("/config/reset", methods=["POST"])
 def reset_config():
     """Reset settings to defaults, optionally for a specific category."""

@@ -66,12 +66,18 @@ ENV_KEY_MAP: Dict[str, str] = {
     "openai_temperature": "OPENAI_TEMPERATURE",
     "gemini_model": "GEMINI_MODEL",
     "gemini_temperature": "GEMINI_TEMPERATURE",
+    "system_prompt": "SYSTEM_PROMPT",
     # RAG
     "rag_collection_name": "RAG_COLLECTION_NAME",
     "rag_min_score": "RAG_MIN_SCORE",
     "rag_max_context_tokens": "RAG_MAX_CONTEXT_TOKENS",
     "rag_default_k": "RAG_DEFAULT_K",
     "embedding_model": "EMBEDDING_MODEL",
+    "rag_vector_size": "RAG_VECTOR_SIZE",
+    "rag_rrf_k": "RAG_RRF_K",
+    "rag_fulltext_score_sender": "RAG_FULLTEXT_SCORE_SENDER",
+    "rag_fulltext_score_chat_name": "RAG_FULLTEXT_SCORE_CHAT_NAME",
+    "rag_fulltext_score_message": "RAG_FULLTEXT_SCORE_MESSAGE",
     # WhatsApp
     "chat_prefix": "CHAT_PREFIX",
     "dalle_prefix": "DALLE_PREFIX",
@@ -89,6 +95,8 @@ ENV_KEY_MAP: Dict[str, str] = {
     "redis_ttl": "REDIS_TTL",
     "session_ttl_minutes": "SESSION_TTL_MINUTES",
     "session_max_history": "SESSION_MAX_HISTORY",
+    "timezone": "TIMEZONE",
+    "ui_api_url": "UI_API_URL",
     # Tracing
     "langchain_tracing_v2": "LANGCHAIN_TRACING_V2",
     "langchain_project": "LANGCHAIN_PROJECT",
@@ -100,6 +108,26 @@ _REVERSE_ENV_MAP: Dict[str, str] = {v: k for k, v in ENV_KEY_MAP.items()}
 # ---------------------------------------------------------------------------
 # Default settings (seeded on first run)
 # ---------------------------------------------------------------------------
+
+# Default system prompt template — {current_datetime} and {hebrew_date} are
+# injected at runtime by LlamaIndexRAG._build_system_prompt().
+_DEFAULT_SYSTEM_PROMPT = (
+    "You are a helpful AI assistant for a personal knowledge base and message archive search system.\n"
+    "You have access to retrieved messages and documents from multiple sources "
+    "(messaging platforms, documents, emails, etc.) that will be provided as context.\n\n"
+    "Current Date/Time: {current_datetime}\n"
+    "תאריך ושעה נוכחיים: {hebrew_date}\n\n"
+    "Instructions:\n"
+    "1. ANALYZE the retrieved messages to find information relevant to the question.\n"
+    "2. CITE specific messages when possible — mention who said what and when.\n"
+    "3. If multiple messages are relevant, SYNTHESIZE them into a coherent answer.\n"
+    "4. If the retrieved messages don't contain enough information to answer confidently, "
+    "say so clearly — do NOT fabricate information.\n"
+    "5. If the question is general (like \"what day is today?\"), answer directly "
+    "without referencing the archive.\n"
+    "6. Answer in the SAME LANGUAGE as the question.\n"
+    "7. Be concise but thorough. Prefer specific facts over vague summaries."
+)
 
 # Each tuple: (key, default_value, category, type, description)
 DEFAULT_SETTINGS: List[Tuple[str, str, str, str, str]] = [
@@ -115,12 +143,18 @@ DEFAULT_SETTINGS: List[Tuple[str, str, str, str, str]] = [
     ("openai_temperature", "0.7", "llm", "float", "OpenAI temperature (0.0-2.0)"),
     ("gemini_model", "gemini-pro", "llm", "text", "Gemini model name"),
     ("gemini_temperature", "0.7", "llm", "float", "Gemini temperature (0.0-2.0)"),
+    ("system_prompt", _DEFAULT_SYSTEM_PROMPT, "llm", "text", "System prompt template for the AI assistant (supports {current_datetime} and {hebrew_date} placeholders)"),
     # RAG
     ("rag_collection_name", "knowledge_base", "rag", "text", "Qdrant collection name"),
     ("rag_min_score", "0.2", "rag", "float", "Minimum similarity score threshold (0.0-1.0)"),
     ("rag_max_context_tokens", "3000", "rag", "int", "Max tokens for RAG context window"),
     ("rag_default_k", "10", "rag", "int", "Default number of context documents"),
     ("embedding_model", "text-embedding-3-large", "rag", "text", "OpenAI embedding model (text-embedding-3-large recommended for Hebrew+English)"),
+    ("rag_vector_size", "1024", "rag", "int", "Embedding vector dimensions (1024 recommended for text-embedding-3-large)"),
+    ("rag_rrf_k", "60", "rag", "int", "Reciprocal Rank Fusion smoothing constant"),
+    ("rag_fulltext_score_sender", "0.95", "rag", "float", "Full-text search score for sender field matches (0.0-1.0)"),
+    ("rag_fulltext_score_chat_name", "0.85", "rag", "float", "Full-text search score for chat name field matches (0.0-1.0)"),
+    ("rag_fulltext_score_message", "0.75", "rag", "float", "Full-text search score for message content matches (0.0-1.0)"),
     # WhatsApp
     ("chat_prefix", "??", "whatsapp", "text", "Prefix to trigger AI chat response"),
     ("dalle_prefix", "!!", "whatsapp", "text", "Prefix to trigger DALL-E image generation"),
@@ -138,6 +172,8 @@ DEFAULT_SETTINGS: List[Tuple[str, str, str, str, str]] = [
     ("redis_ttl", "604800", "app", "int", "Redis key TTL in seconds"),
     ("session_ttl_minutes", "30", "app", "int", "Conversation session timeout in minutes"),
     ("session_max_history", "20", "app", "int", "Max conversation history turns to keep"),
+    ("timezone", "Asia/Jerusalem", "app", "text", "Timezone for date/time display (e.g. Asia/Jerusalem, US/Eastern)"),
+    ("ui_api_url", "http://localhost:8765", "app", "text", "Backend API URL for the Streamlit UI"),
     # Tracing
     ("langchain_tracing_v2", "false", "tracing", "bool", "Enable LangSmith tracing"),
     ("langchain_project", "whatsapp-gpt", "tracing", "text", "LangSmith project name"),
@@ -187,6 +223,10 @@ def init_db() -> None:
     
     Creates the settings table if it doesn't exist, then seeds defaults
     and overlays environment variable values on first run (when table is empty).
+    
+    For existing databases, calls _seed_missing_defaults() to add any new
+    settings that were added in code updates (uses INSERT OR IGNORE so
+    existing user-modified values are never overwritten).
     """
     conn = _get_connection()
     try:
@@ -207,12 +247,33 @@ def init_db() -> None:
         if row["cnt"] == 0:
             _seed_defaults(conn)
             _seed_from_env(conn)
+        else:
+            # Existing database — add any new settings from code updates
+            _seed_missing_defaults(conn)
     finally:
         conn.close()
 
 
 def _seed_defaults(conn: sqlite3.Connection) -> None:
     """Seed the database with default settings.
+    
+    Args:
+        conn: Active database connection
+    """
+    conn.executemany(
+        """INSERT OR IGNORE INTO settings (key, value, category, type, description)
+           VALUES (?, ?, ?, ?, ?)""",
+        DEFAULT_SETTINGS
+    )
+    conn.commit()
+
+
+def _seed_missing_defaults(conn: sqlite3.Connection) -> None:
+    """Add any new settings that don't yet exist in an existing database.
+    
+    Uses INSERT OR IGNORE so existing user-modified values are never
+    overwritten. This handles the case where new settings are added to
+    DEFAULT_SETTINGS in a code update but the database already has data.
     
     Args:
         conn: Active database connection

@@ -229,6 +229,22 @@ def fetch_config() -> Dict[str, Any]:
     return {}
 
 
+def fetch_config_meta() -> Dict[str, Any]:
+    """Fetch configuration metadata (category labels, select options).
+    
+    Returns:
+        Dict with 'category_meta' and 'select_options' keys,
+        or empty dict on failure.
+    """
+    try:
+        resp = requests.get(f"{_api_url()}/config/meta", timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception:
+        pass
+    return {}
+
+
 def save_config(updates: Dict[str, str]) -> Dict[str, Any]:
     """Save settings via PUT /config."""
     try:
@@ -250,3 +266,19 @@ def reset_config(category: Optional[str] = None) -> Dict[str, Any]:
         return resp.json()
     except Exception as e:
         return {"error": str(e)}
+
+
+def fetch_plugins() -> Dict[str, Any]:
+    """Fetch discovered plugins with their enabled/disabled state.
+    
+    Returns:
+        Dict with 'plugins' key mapping plugin names to info dicts,
+        or empty dict on failure.
+    """
+    try:
+        resp = requests.get(f"{_api_url()}/plugins", timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception:
+        pass
+    return {}

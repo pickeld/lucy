@@ -174,7 +174,8 @@ class WhatsappMSG(ABC):
         
         try:
             ts = int(self.timestamp)
-            dt = datetime.fromtimestamp(ts, tz=ZoneInfo("Asia/Jerusalem"))
+            timezone = settings.get("timezone", "Asia/Jerusalem")
+            dt = datetime.fromtimestamp(ts, tz=ZoneInfo(timezone))
             return {
                 "unix": ts,
                 "iso": dt.isoformat(),

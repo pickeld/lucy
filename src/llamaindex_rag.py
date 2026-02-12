@@ -54,17 +54,19 @@ from utils.logger import logger
 from utils.redis_conn import get_redis_client
 
 
-def format_timestamp(timestamp: str, timezone: str = "Asia/Jerusalem") -> str:
+def format_timestamp(timestamp: str, timezone: str = "") -> str:
     """Convert Unix timestamp to human-readable format.
     
     Args:
         timestamp: Unix timestamp as string or int
-        timezone: Timezone for display (default: Asia/Jerusalem)
+        timezone: Timezone for display (reads from settings if empty)
         
     Returns:
         Formatted datetime string (e.g., "31/12/2024 10:30")
     """
     try:
+        if not timezone:
+            timezone = settings.get("timezone", "Asia/Jerusalem")
         ts = int(timestamp)
         tz = ZoneInfo(timezone)
         dt = datetime.fromtimestamp(ts, tz=tz)
@@ -167,10 +169,10 @@ class LlamaIndexRAG:
     _chat_store = None
     
     COLLECTION_NAME = settings.rag_collection_name
-    VECTOR_SIZE = 1024  # text-embedding-3-large with dimensions=1024 for multilingual quality
+    VECTOR_SIZE = int(settings.get("rag_vector_size", "1024"))
     MINIMUM_SIMILARITY_SCORE = float(settings.rag_min_score)
     MAX_CONTEXT_TOKENS = int(settings.rag_max_context_tokens)
-    RRF_K = 60  # Reciprocal Rank Fusion constant (standard default)
+    RRF_K = int(settings.get("rag_rrf_k", "60"))
     
     def __new__(cls):
         """Singleton pattern to ensure one RAG instance."""
@@ -751,9 +753,9 @@ class LlamaIndexRAG:
     
     # Field-aware full-text search scores: sender matches are most valuable
     # because users often ask "what did X say about Y?"
-    FULLTEXT_SCORE_SENDER = 0.95
-    FULLTEXT_SCORE_CHAT_NAME = 0.85
-    FULLTEXT_SCORE_MESSAGE = 0.75
+    FULLTEXT_SCORE_SENDER = float(settings.get("rag_fulltext_score_sender", "0.95"))
+    FULLTEXT_SCORE_CHAT_NAME = float(settings.get("rag_fulltext_score_chat_name", "0.85"))
+    FULLTEXT_SCORE_MESSAGE = float(settings.get("rag_fulltext_score_message", "0.75"))
     
     def _fulltext_search_by_field(
         self,
@@ -1216,7 +1218,8 @@ class LlamaIndexRAG:
         Returns:
             System prompt string with dynamic date injection
         """
-        tz = ZoneInfo("Asia/Jerusalem")
+        timezone = settings.get("timezone", "Asia/Jerusalem")
+        tz = ZoneInfo(timezone)
         now = datetime.now(tz)
         current_datetime = now.strftime("%A, %B %d, %Y at %H:%M")
         hebrew_day = {
@@ -1230,20 +1233,32 @@ class LlamaIndexRAG:
         }.get(now.strftime("%A"), now.strftime("%A"))
         hebrew_date = f"{hebrew_day}, {now.day}/{now.month}/{now.year} בשעה {now.strftime('%H:%M')}"
         
-        return f"""You are a helpful AI assistant for a personal knowledge base and message archive search system.
-You have access to retrieved messages and documents from multiple sources (messaging platforms, documents, emails, etc.) that will be provided as context.
-
-Current Date/Time: {current_datetime}
-תאריך ושעה נוכחיים: {hebrew_date}
-
-Instructions:
-1. ANALYZE the retrieved messages to find information relevant to the question.
-2. CITE specific messages when possible — mention who said what and when.
-3. If multiple messages are relevant, SYNTHESIZE them into a coherent answer.
-4. If the retrieved messages don't contain enough information to answer confidently, say so clearly — do NOT fabricate information.
-5. If the question is general (like "what day is today?"), answer directly without referencing the archive.
-6. Answer in the SAME LANGUAGE as the question.
-7. Be concise but thorough. Prefer specific facts over vague summaries."""
+        # Read system prompt template from settings, with runtime placeholder injection
+        prompt_template = settings.get("system_prompt", "")
+        if not prompt_template:
+            prompt_template = (
+                "You are a helpful AI assistant for a personal knowledge base "
+                "and message archive search system.\n"
+                "You have access to retrieved messages and documents from multiple sources "
+                "(messaging platforms, documents, emails, etc.) that will be provided as context.\n\n"
+                "Current Date/Time: {current_datetime}\n"
+                "תאריך ושעה נוכחיים: {hebrew_date}\n\n"
+                "Instructions:\n"
+                "1. ANALYZE the retrieved messages to find information relevant to the question.\n"
+                "2. CITE specific messages when possible — mention who said what and when.\n"
+                "3. If multiple messages are relevant, SYNTHESIZE them into a coherent answer.\n"
+                "4. If the retrieved messages don't contain enough information to answer confidently, "
+                "say so clearly — do NOT fabricate information.\n"
+                "5. If the question is general (like \"what day is today?\"), answer directly "
+                "without referencing the archive.\n"
+                "6. Answer in the SAME LANGUAGE as the question.\n"
+                "7. Be concise but thorough. Prefer specific facts over vague summaries."
+            )
+        
+        return prompt_template.format(
+            current_datetime=current_datetime,
+            hebrew_date=hebrew_date,
+        )
     
     def create_chat_engine(
         self,
