@@ -1,61 +1,84 @@
 services:
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: redis-commander
+    restart: unless-stopped
+    environment:
+      # Format: name:host:port(:password)
+      REDIS_HOSTS: "local:redis:6379"
+      # Optional basic auth for the UI:
+      HTTP_USER: "admin"
+      HTTP_PASSWORD: "change-me"
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis  
+  redis:
+    image: redis:latest
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+  # WhatsApp plugin dependency — only needed when WhatsApp plugin is enabled
   waha:
     container_name: waha
     image: devlikeapro/waha-plus:arm
     ports:
       - "3000:3000"
-    env_file:
-      - .env
     volumes:
       - waha_data:/app/data
-    restart: unless-stopped
-
-
-  db:
-    image: pgvector/pgvector:pg17          # Postgres + pgvector baked in
-    container_name: letta-db
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: letta                # default DB that Letta will use
-      POSTGRES_USER: letta
-      POSTGRES_PASSWORD: letta_pass
-    ports:
-      - "5432:5432"                     # expose locally; drop if not needed
-    volumes:
-      - pg_data:/var/lib/postgresql/data  # persistent data
-      # run any *.sql scripts on first init (creates the extension)
-      - ./db-init:/docker-entrypoint-initdb.d
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U letta"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-  letta:
-    image: letta/letta:latest
-    container_name: letta
+      - waha_data:/app/.sessions
+      - waha_data:/app/.media
     env_file:
       - .env
-    environment:
-      LETTA_PG_URI: postgresql://letta:letta_pass@db:5432/letta
-    ports:
-      - "8283:8283"
-    depends_on:
-      db:
-        condition: service_healthy 
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    # container_name: pgadmin
     restart: unless-stopped
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@local.dev     # change as needed
-      PGADMIN_DEFAULT_PASSWORD: admin123         # change this too
+    profiles:
+      - whatsapp  # Use: docker compose --profile whatsapp up
+ 
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: unless-stopped
     ports:
-      - "5050:80"                                 # access via http://localhost:5050
+      - "6333:6333"   # REST API + Dashboard
+      - "6334:6334"   # gRPC API
     volumes:
-      - pgadmin_data:/var/lib/pgadmin
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__LOG_LEVEL=INFO
+  
+  app:
+    build: .
+    container_name: rag-assistant
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./src:/app/src        # Hot reload source code
+      - ./.env:/app/.env:ro   # Mount real .env (read-only, first-run seed)
+      - ./data:/app/data      # SQLite settings database persistence
+    depends_on:
+      redis:
+        condition: service_started
+      waha:
+        condition: service_started
+      qdrant:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8765/health', timeout=5).raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
 volumes:
   waha_data:
   pg_data:
   pgadmin_data:
-  # redis_data:
-  # qdrant_data:
+  redis_data:
+  qdrant_data:

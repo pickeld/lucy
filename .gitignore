@@ -39,3 +39,16 @@ venv/
 
 # Ignore Memory Bank directory
 memory-bank/
+data/
+
+
+#samples
+samples.py
+
+#images
+images/
+logs/
+
+# LangGraph dev cache files
+.langgraph_api/
+tmp/
