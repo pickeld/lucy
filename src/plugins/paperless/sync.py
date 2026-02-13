@@ -15,10 +15,59 @@ logger = logging.getLogger(__name__)
 DEFAULT_PROCESSED_TAG = "rag-indexed"
 
 # Maximum characters per chunk for embedding.
-# text-embedding-3-large has an 8191 token limit; ~4 chars/token gives ~30k chars.
-# We use a conservative 25k to leave headroom for metadata.
-MAX_CHUNK_CHARS = 25_000
-CHUNK_OVERLAP_CHARS = 500
+# text-embedding-3-large has an 8191 token limit.
+# Hebrew/RTL text averages ~2 chars/token (vs ~4 for English),
+# so we use 12k chars to safely stay under the limit.
+MAX_CHUNK_CHARS = 12_000
+CHUNK_OVERLAP_CHARS = 300
+
+
+def _split_text(
+    text: str,
+    max_chars: int = MAX_CHUNK_CHARS,
+    overlap: int = CHUNK_OVERLAP_CHARS,
+) -> List[str]:
+    """Split text into chunks that fit within the embedding model's token limit.
+    
+    Tries to split on paragraph boundaries (double newline) for cleaner chunks.
+    Falls back to hard character splits with overlap if paragraphs are too large.
+    
+    Args:
+        text: Full document text
+        max_chars: Maximum characters per chunk
+        overlap: Character overlap between consecutive chunks
+        
+    Returns:
+        List of text chunks (at least one element)
+    """
+    if len(text) <= max_chars:
+        return [text]
+    
+    chunks: List[str] = []
+    start = 0
+    while start < len(text):
+        end = start + max_chars
+        if end >= len(text):
+            chunks.append(text[start:])
+            break
+        
+        # Try to break at a paragraph boundary
+        boundary = text.rfind("\n\n", start, end)
+        if boundary == -1 or boundary <= start:
+            # Fall back to sentence boundary
+            boundary = text.rfind(". ", start, end)
+        if boundary == -1 or boundary <= start:
+            # Hard split
+            boundary = end
+        else:
+            boundary += 1  # Include the delimiter character
+        
+        chunks.append(text[start:boundary])
+        start = max(boundary - overlap, boundary)  # overlap only when hard-splitting
+        if boundary == end:
+            start = boundary - overlap  # Apply overlap on hard splits
+    
+    return chunks
 
 
 class DocumentSyncer:
@@ -131,6 +180,34 @@ class DocumentSyncer:
             # Build exclusion list — skip docs already tagged as processed
             exclude_tag_ids = [processed_tag_id] if processed_tag_id else []
             
+            # Resolve tag names to IDs for the include filter
+            include_tag_ids: Optional[List[int]] = None
+            if tags_filter:
+                include_tag_ids = []
+                for tag_name in tags_filter:
+                    tag = self.client.get_tag_by_name(tag_name)
+                    if tag:
+                        include_tag_ids.append(tag["id"])
+                        logger.info(f"Filter tag '{tag_name}' → id={tag['id']}")
+                    else:
+                        logger.warning(
+                            f"Filter tag '{tag_name}' not found in Paperless — "
+                            "ignoring"
+                        )
+                if not include_tag_ids:
+                    logger.warning(
+                        "None of the configured sync tags were found. "
+                        "No documents will be synced."
+                    )
+                    return {
+                        "status": "complete",
+                        "synced": 0,
+                        "tagged": 0,
+                        "skipped": 0,
+                        "errors": 0,
+                        "warning": "No matching tags found in Paperless",
+                    }
+            
             # Fetch documents from Paperless API
             page = 1
             while synced < max_docs:
@@ -138,7 +215,7 @@ class DocumentSyncer:
                 resp = self.client.get_documents(
                     page=page,
                     page_size=50,
-                    tags=tags_filter,
+                    tags=include_tag_ids,
                     exclude_tags=exclude_tag_ids,
                 )
                 
@@ -168,30 +245,53 @@ class DocumentSyncer:
                             skipped += 1
                             continue
                         
-                        # Create TextNode
-                        node = TextNode(
-                            text=content,
-                            metadata={
-                                "source": "paperless",
-                                "source_id": source_id,
-                                "content_type": "document",
-                                "chat_name": doc.get("title", f"Document {doc_id}"),
-                                "sender": doc.get("correspondent_name", "Unknown"),
-                                "timestamp": int(time.time()),
-                                "tags": ",".join(
-                                    str(t) for t in doc.get("tags", [])
-                                ),
-                                "document_type": doc.get("document_type_name", ""),
-                                "created": doc.get("created", ""),
-                                "modified": doc.get("modified", ""),
-                            },
-                            id_=source_id,
-                        )
+                        # Split large documents into chunks to stay within
+                        # the embedding model's token limit
+                        chunks = _split_text(content, MAX_CHUNK_CHARS, CHUNK_OVERLAP_CHARS)
+                        title = doc.get("title", f"Document {doc_id}")
                         
-                        # Index in RAG
-                        self.rag.add_node(node)
-                        synced += 1
-                        logger.info(f"Indexed: {doc.get('title', doc_id)}")
+                        base_metadata = {
+                            "source": "paperless",
+                            "source_id": source_id,
+                            "content_type": "document",
+                            "chat_name": title,
+                            "sender": doc.get("correspondent_name", "Unknown"),
+                            "timestamp": int(time.time()),
+                            "tags": ",".join(
+                                str(t) for t in doc.get("tags", [])
+                            ),
+                            "document_type": doc.get("document_type_name", ""),
+                            "created": doc.get("created", ""),
+                            "modified": doc.get("modified", ""),
+                        }
+                        
+                        chunk_ok = True
+                        for idx, chunk in enumerate(chunks):
+                            chunk_meta = dict(base_metadata)
+                            if len(chunks) > 1:
+                                chunk_meta["chunk_index"] = str(idx)
+                                chunk_meta["chunk_total"] = str(len(chunks))
+                            
+                            node = TextNode(
+                                text=chunk,
+                                metadata=chunk_meta,
+                                id_=str(uuid.uuid4()),
+                            )
+                            
+                            if not self.rag.add_node(node):
+                                chunk_ok = False
+                        
+                        if chunk_ok:
+                            synced += 1
+                            if len(chunks) > 1:
+                                logger.info(
+                                    f"Indexed: {title} ({len(chunks)} chunks)"
+                                )
+                            else:
+                                logger.info(f"Indexed: {title}")
+                        else:
+                            errors += 1
+                            logger.warning(f"Partially failed: {title}")
                         
                         # Tag the document in Paperless as processed
                         if processed_tag_id:

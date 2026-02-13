@@ -54,7 +54,7 @@ class PaperlessClient:
         self,
         page: int = 1,
         page_size: int = 50,
-        tags: Optional[List[str]] = None,
+        tags: Optional[List[int]] = None,
         exclude_tags: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
         """Fetch document list with pagination.
@@ -62,7 +62,8 @@ class PaperlessClient:
         Args:
             page: Page number (1-indexed)
             page_size: Results per page
-            tags: Optional list of tag names to filter by (include)
+            tags: Optional list of tag **IDs** to filter by (include —
+                documents must have ALL listed tags)
             exclude_tags: Optional list of tag IDs to exclude
             
         Returns:
@@ -71,8 +72,8 @@ class PaperlessClient:
         params: Dict[str, Any] = {"page": page, "page_size": page_size}
         
         if tags:
-            # Build tags__name__in filter
-            params["tags__name__in"] = ",".join(tags)
+            # tags__id__all = documents must have ALL of these tag IDs
+            params["tags__id__all"] = ",".join(str(t) for t in tags)
         
         if exclude_tags:
             # Exclude documents that have any of these tag IDs
