@@ -121,10 +121,12 @@ class PaperlessClient:
         return resp.json()
     
     def add_tag_to_document(self, doc_id: int, tag_id: int) -> bool:
-        """Add a tag to a document.
+        """Add a tag to a document using the bulk_edit endpoint.
         
-        Fetches the document's current tags, appends the new tag ID,
-        and PATCHes the document.
+        Uses the ``/api/documents/bulk_edit/`` endpoint with the
+        ``modify_tags`` method, which is more reliable than PATCH
+        because it doesn't require sending the full document payload
+        and avoids validation issues with other document fields.
         
         Args:
             doc_id: Document ID
@@ -134,28 +136,19 @@ class PaperlessClient:
             True if successful
         """
         try:
-            # Get current document data
-            resp = self.session.get(
-                f"{self.base_url}/api/documents/{doc_id}/",
+            resp = self.session.post(
+                f"{self.base_url}/api/documents/bulk_edit/",
+                json={
+                    "documents": [doc_id],
+                    "method": "modify_tags",
+                    "parameters": {
+                        "add_tags": [tag_id],
+                        "remove_tags": [],
+                    },
+                },
                 timeout=10,
             )
             resp.raise_for_status()
-            doc = resp.json()
-            
-            # Get current tag IDs and add the new one
-            current_tags = doc.get("tags", [])
-            if tag_id in current_tags:
-                return True  # Already tagged
-            
-            current_tags.append(tag_id)
-            
-            # PATCH the document with updated tags
-            patch_resp = self.session.patch(
-                f"{self.base_url}/api/documents/{doc_id}/",
-                json={"tags": current_tags},
-                timeout=10,
-            )
-            patch_resp.raise_for_status()
             return True
         except Exception as e:
             logger.error(f"Failed to add tag {tag_id} to document {doc_id}: {e}")
