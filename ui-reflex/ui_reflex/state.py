@@ -371,7 +371,7 @@ class AppState(rx.State):
         if loaded:
             self.conversation_id = convo_id
             self.messages = [
-                {"role": m["role"], "content": m["content"]}
+                {"role": m["role"], "content": m["content"], "sources": ""}
                 for m in loaded.get("messages", [])
             ]
             self.active_filters = loaded.get("filters", {})
@@ -423,7 +423,7 @@ class AppState(rx.State):
             return
 
         # Add user message immediately
-        self.messages.append({"role": "user", "content": question})
+        self.messages.append({"role": "user", "content": question, "sources": ""})
         self.input_text = ""
         self.is_loading = True
         yield  # Update UI
@@ -445,6 +445,7 @@ class AppState(rx.State):
             self.messages.append({
                 "role": "assistant",
                 "content": f"❌ {data['error']}",
+                "sources": "",
             })
         else:
             raw_answer = data.get("answer", "No answer received")
@@ -455,12 +456,15 @@ class AppState(rx.State):
             if data.get("filters"):
                 self.active_filters = data["filters"]
 
-            # Format sources into the answer content as markdown
+            # Store sources as a separate field (rendered as collapsible in UI)
             sources = data.get("sources", [])
-            if sources:
-                answer += _format_sources(sources)
+            sources_md = _format_sources(sources) if sources else ""
 
-            self.messages.append({"role": "assistant", "content": answer})
+            self.messages.append({
+                "role": "assistant",
+                "content": answer,
+                "sources": sources_md,
+            })
 
         # Refresh sidebar conversations
         await self._refresh_conversations()
@@ -706,17 +710,26 @@ def _parse_answer(raw_answer: Any) -> str:
 
 
 def _format_sources(sources: list[dict]) -> str:
-    """Format source citations as markdown appended to the answer."""
+    """Format source citations as markdown for the collapsible sources section."""
     if not sources:
         return ""
-    lines = ["\n\n---\n📎 **Sources:**\n"]
+    lines: list[str] = []
     for i, src in enumerate(sources):
-        sender = src.get("sender", "Unknown")
-        chat_name = src.get("chat_name", "Unknown")
+        sender = src.get("sender", "")
+        chat_name = src.get("chat_name", "")
         content = src.get("content", "")[:200]
         score = src.get("score")
         score_str = f" — {score:.0%}" if score else ""
-        lines.append(f"**{i + 1}. {sender}** in _{chat_name}_{score_str}")
+
+        # Build the source header: show sender only if meaningful
+        if sender and sender not in ("Unknown", ""):
+            header = f"**{i + 1}. {sender}** in _{chat_name}_{score_str}"
+        elif chat_name:
+            header = f"**{i + 1}.** _{chat_name}_{score_str}"
+        else:
+            header = f"**{i + 1}.** _Unknown source_{score_str}"
+
+        lines.append(header)
         if content:
             lines.append(f"> {content}{'…' if len(content) >= 200 else ''}\n")
     return "\n".join(lines)

@@ -220,6 +220,39 @@ class PaperlessClient:
             return 0
     
     # -------------------------------------------------------------------------
+    # Correspondents
+    # -------------------------------------------------------------------------
+    
+    def get_correspondents(self) -> Dict[int, str]:
+        """Fetch all correspondents and return as id→name mapping.
+        
+        Fetches all pages of correspondents from the Paperless API.
+        
+        Returns:
+            Dict mapping correspondent ID to name
+        """
+        mapping: Dict[int, str] = {}
+        page = 1
+        while True:
+            try:
+                resp = self.session.get(
+                    f"{self.base_url}/api/correspondents/",
+                    params={"page": page, "page_size": 100},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                for item in data.get("results", []):
+                    mapping[item["id"]] = item["name"]
+                if not data.get("next"):
+                    break
+                page += 1
+            except Exception as e:
+                logger.error(f"Failed to fetch correspondents (page {page}): {e}")
+                break
+        return mapping
+    
+    # -------------------------------------------------------------------------
     # Tags
     # -------------------------------------------------------------------------
     

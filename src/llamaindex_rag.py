@@ -796,7 +796,7 @@ class LlamaIndexRAG:
             Extracted text string, or None if no text could be found
         """
         chat_name = payload.get("chat_name", "Unknown")
-        sender = payload.get("sender", "Unknown")
+        sender = payload.get("sender", "")
         message = payload.get("message", "")
         timestamp = payload.get("timestamp", 0)
         source = payload.get("source", "")
@@ -804,7 +804,8 @@ class LlamaIndexRAG:
         # WhatsApp messages have a 'message' field in metadata
         if message:
             formatted_time = format_timestamp(str(timestamp))
-            return f"[{formatted_time}] {sender} in {chat_name}: {message}"
+            sender_display = sender or "Unknown"
+            return f"[{formatted_time}] {sender_display} in {chat_name}: {message}"
         
         # Paperless/generic documents: extract text from _node_content
         node_content = payload.get("_node_content")
@@ -818,7 +819,10 @@ class LlamaIndexRAG:
                         formatted_time = format_timestamp(str(timestamp))
                         # Truncate very long document text for display
                         display_text = text[:2000] if len(text) > 2000 else text
-                        return f"[{formatted_time}] Document '{chat_name}' from {sender}:\n{display_text}"
+                        # Only include sender if it's meaningful (not Unknown/empty)
+                        if sender and sender not in ("Unknown", "Paperless"):
+                            return f"[{formatted_time}] {sender} in {chat_name}:\n{display_text}"
+                        return f"[{formatted_time}] {chat_name}:\n{display_text}"
                     return text
             except (json.JSONDecodeError, TypeError):
                 pass

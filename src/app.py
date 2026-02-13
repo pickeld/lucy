@@ -255,10 +255,21 @@ def rag_query():
                 metadata = getattr(node, 'metadata', {})
                 if metadata.get("source") == "system":
                     continue
+                # Resolve sender: prefer metadata sender, fall back to
+                # source type (e.g. "Paperless") for documents without
+                # an explicit sender.
+                sender = metadata.get("sender") or ""
+                if not sender or sender == "Unknown":
+                    source_type = metadata.get("source", "")
+                    if source_type:
+                        sender = source_type.title()
+                    else:
+                        sender = "Unknown"
+                
                 sources.append({
                     "content": getattr(node, 'text', '')[:300],
                     "score": node_with_score.score,
-                    "sender": metadata.get("sender", "Unknown"),
+                    "sender": sender,
                     "chat_name": metadata.get("chat_name", "Unknown"),
                     "timestamp": metadata.get("timestamp"),
                 })
