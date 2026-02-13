@@ -57,15 +57,15 @@ ENV_KEY_MAP: Dict[str, str] = {
     # Secrets
     "openai_api_key": "OPENAI_API_KEY",
     "google_api_key": "GOOGLE_API_KEY",
-    "tavily_api_key": "TAVILY_API_KEY",
     "waha_api_key": "WAHA_API_KEY",
-    "langchain_api_key": "LANGCHAIN_API_KEY",
     # LLM
     "llm_provider": "LLM_PROVIDER",
     "openai_model": "OPENAI_MODEL",
     "openai_temperature": "OPENAI_TEMPERATURE",
     "gemini_model": "GEMINI_MODEL",
     "gemini_temperature": "GEMINI_TEMPERATURE",
+    "image_provider": "IMAGE_PROVIDER",
+    "imagen_model": "IMAGEN_MODEL",
     "system_prompt": "SYSTEM_PROMPT",
     # RAG
     "rag_collection_name": "RAG_COLLECTION_NAME",
@@ -97,9 +97,6 @@ ENV_KEY_MAP: Dict[str, str] = {
     "session_max_history": "SESSION_MAX_HISTORY",
     "timezone": "TIMEZONE",
     "ui_api_url": "UI_API_URL",
-    # Tracing
-    "langchain_tracing_v2": "LANGCHAIN_TRACING_V2",
-    "langchain_project": "LANGCHAIN_PROJECT",
 }
 
 # Reverse map for looking up env var name from SQLite key
@@ -134,15 +131,15 @@ DEFAULT_SETTINGS: List[Tuple[str, str, str, str, str]] = [
     # Secrets
     ("openai_api_key", "", "secrets", "secret", "OpenAI API key"),
     ("google_api_key", "", "secrets", "secret", "Google Gemini API key"),
-    ("tavily_api_key", "", "secrets", "secret", "Tavily search API key"),
     ("waha_api_key", "", "secrets", "secret", "WAHA API key"),
-    ("langchain_api_key", "", "secrets", "secret", "LangSmith API key"),
     # LLM
     ("llm_provider", "openai", "llm", "select", "LLM provider: openai or gemini"),
     ("openai_model", "gpt-4o", "llm", "text", "OpenAI model name"),
     ("openai_temperature", "0.7", "llm", "float", "OpenAI temperature (0.0-2.0)"),
     ("gemini_model", "gemini-pro", "llm", "text", "Gemini model name"),
     ("gemini_temperature", "0.7", "llm", "float", "Gemini temperature (0.0-2.0)"),
+    ("image_provider", "openai", "llm", "select", "Image generation provider: openai or google"),
+    ("imagen_model", "imagen-3.0-generate-002", "llm", "text", "Google Imagen model name"),
     ("system_prompt", _DEFAULT_SYSTEM_PROMPT, "llm", "text", "System prompt template for the AI assistant (supports {current_datetime} and {hebrew_date} placeholders)"),
     # RAG
     ("rag_collection_name", "knowledge_base", "rag", "text", "Qdrant collection name"),
@@ -174,9 +171,6 @@ DEFAULT_SETTINGS: List[Tuple[str, str, str, str, str]] = [
     ("session_max_history", "20", "app", "int", "Max conversation history turns to keep"),
     ("timezone", "Asia/Jerusalem", "app", "text", "Timezone for date/time display (e.g. Asia/Jerusalem, US/Eastern)"),
     ("ui_api_url", "http://localhost:8765", "app", "text", "Backend API URL for the Streamlit UI"),
-    # Tracing
-    ("langchain_tracing_v2", "false", "tracing", "bool", "Enable LangSmith tracing"),
-    ("langchain_project", "whatsapp-gpt", "tracing", "text", "LangSmith project name"),
 ]
 
 # Category display order and labels
@@ -188,12 +182,12 @@ CATEGORY_META: Dict[str, Dict[str, str]] = {
     "whatsapp": {"label": "💬 WhatsApp Configuration", "order": "3"},
     "infrastructure": {"label": "🏗️ Infrastructure", "order": "4"},
     "app": {"label": "🔧 App Configuration", "order": "5"},
-    "tracing": {"label": "📊 Tracing — LangSmith", "order": "6"},
 }
 
 # Select-type options
 SELECT_OPTIONS: Dict[str, List[str]] = {
     "llm_provider": ["openai", "gemini"],
+    "image_provider": ["openai", "google"],
     "log_level": ["DEBUG", "INFO", "WARNING", "ERROR"],
 }
 
