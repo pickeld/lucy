@@ -154,6 +154,71 @@ class PaperlessClient:
             logger.error(f"Failed to add tag {tag_id} to document {doc_id}: {e}")
             return False
     
+    def remove_tag_from_all_documents(self, tag_id: int) -> int:
+        """Remove a tag from ALL documents that have it.
+        
+        Fetches all documents with the given tag and removes it in bulk.
+        Useful for re-ingestion workflows where the processed tag needs
+        to be cleared.
+        
+        Args:
+            tag_id: Tag ID to remove
+            
+        Returns:
+            Number of documents the tag was removed from
+        """
+        doc_ids: List[int] = []
+        page = 1
+        
+        # Collect all document IDs that have this tag
+        while True:
+            try:
+                resp = self.session.get(
+                    f"{self.base_url}/api/documents/",
+                    params={
+                        "tags__id__all": str(tag_id),
+                        "page": page,
+                        "page_size": 100,
+                    },
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                results = data.get("results", [])
+                doc_ids.extend(d["id"] for d in results)
+                
+                if not data.get("next"):
+                    break
+                page += 1
+            except Exception as e:
+                logger.error(f"Failed to fetch documents with tag {tag_id}: {e}")
+                break
+        
+        if not doc_ids:
+            logger.info(f"No documents found with tag {tag_id}")
+            return 0
+        
+        # Remove the tag from all collected documents in one bulk call
+        try:
+            resp = self.session.post(
+                f"{self.base_url}/api/documents/bulk_edit/",
+                json={
+                    "documents": doc_ids,
+                    "method": "modify_tags",
+                    "parameters": {
+                        "add_tags": [],
+                        "remove_tags": [tag_id],
+                    },
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            logger.info(f"Removed tag {tag_id} from {len(doc_ids)} documents")
+            return len(doc_ids)
+        except Exception as e:
+            logger.error(f"Failed to bulk-remove tag {tag_id}: {e}")
+            return 0
+    
     # -------------------------------------------------------------------------
     # Tags
     # -------------------------------------------------------------------------
