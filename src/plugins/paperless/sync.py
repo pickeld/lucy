@@ -1,8 +1,13 @@
 """Document synchronization logic for Paperless-NGX."""
 
+import email
 import logging
+import re
 import time
 import uuid
+from email.policy import default as default_email_policy
+from html.parser import HTMLParser
+from io import StringIO
 from typing import List, Optional
 
 from llama_index.core.schema import TextNode
@@ -23,6 +28,226 @@ DEFAULT_PROCESSED_TAG = "rag-indexed"
 # worst-case encoded content.
 MAX_CHUNK_CHARS = 6_000
 CHUNK_OVERLAP_CHARS = 200
+
+# Minimum useful content length after sanitization (characters).
+# Documents shorter than this after cleaning are skipped entirely.
+MIN_CONTENT_CHARS = 50
+
+# Minimum ratio of word-like characters in a chunk for it to be considered
+# useful for embedding.  Chunks below this threshold are mostly base64,
+# encoded data, or other noise.
+MIN_WORD_CHAR_RATIO = 0.40
+
+# Regex patterns for content sanitization
+# Matches contiguous base64 blocks (3+ lines of base64 characters)
+_RE_BASE64_BLOCK = re.compile(
+    r"(?:^[A-Za-z0-9+/=]{40,}\s*$\n?){3,}",
+    re.MULTILINE,
+)
+
+# Matches MIME boundary markers like --0000000000000c3639060523d905
+_RE_MIME_BOUNDARY = re.compile(
+    r"^--[A-Za-z0-9_=.-]{10,}(?:--)?$",
+    re.MULTILINE,
+)
+
+# Matches common MIME/email headers
+_RE_MIME_HEADERS = re.compile(
+    r"^(?:Content-Type|Content-Disposition|Content-Transfer-Encoding|"
+    r"Content-ID|X-Attachment-Id|MIME-Version|X-Mailer|"
+    r"X-Google-DKIM-Signature|X-Gm-Message-State|X-Google-Smtp-Source|"
+    r"ARC-Seal|ARC-Message-Signature|ARC-Authentication-Results|"
+    r"Return-Path|Received|DKIM-Signature|Message-ID|Date|From|To|"
+    r"Subject|In-Reply-To|References):.*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+# Matches header continuation lines (start with whitespace after a header)
+_RE_HEADER_CONTINUATION = re.compile(
+    r"(?<=\n)[ \t]+\S.*$",
+    re.MULTILINE,
+)
+
+
+class _HTMLTextExtractor(HTMLParser):
+    """Minimal HTML-to-text extractor.
+
+    Strips all tags and returns concatenated text content.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._buf = StringIO()
+
+    def handle_data(self, data: str) -> None:
+        self._buf.write(data)
+
+    def get_text(self) -> str:
+        return self._buf.getvalue()
+
+
+def _strip_html(html: str) -> str:
+    """Remove HTML tags and return plain text.
+
+    Args:
+        html: String potentially containing HTML markup
+
+    Returns:
+        Plain text with tags removed
+    """
+    extractor = _HTMLTextExtractor()
+    try:
+        extractor.feed(html)
+        return extractor.get_text()
+    except Exception:
+        # If parsing fails, fall back to simple regex strip
+        return re.sub(r"<[^>]+>", " ", html)
+
+
+def _extract_mime_text_parts(raw: str) -> Optional[str]:
+    """Try to parse *raw* as a MIME message and extract text parts.
+
+    Uses Python's :mod:`email` library.  Returns the concatenated text
+    from all ``text/plain`` and ``text/html`` parts (HTML is stripped to
+    plain text).  Returns ``None`` if *raw* does not look like a MIME
+    message or contains no text parts.
+
+    Args:
+        raw: Raw document content that may be a MIME email
+
+    Returns:
+        Extracted plain text, or None if not a parseable MIME message
+    """
+    # Quick heuristic: only attempt MIME parsing if the content contains
+    # a MIME boundary marker or Content-Type header near the start.
+    head = raw[:2000]
+    if not (
+        "Content-Type:" in head
+        or _RE_MIME_BOUNDARY.search(head)
+        or "MIME-Version:" in head
+    ):
+        return None
+
+    try:
+        msg = email.message_from_string(raw, policy=default_email_policy)
+    except Exception:
+        return None
+
+    text_parts: List[str] = []
+    for part in msg.walk():
+        ct = part.get_content_type()
+        if ct == "text/plain":
+            payload = part.get_content()
+            if isinstance(payload, str) and payload.strip():
+                text_parts.append(payload.strip())
+        elif ct == "text/html":
+            payload = part.get_content()
+            if isinstance(payload, str):
+                plain = _strip_html(payload).strip()
+                if plain:
+                    text_parts.append(plain)
+
+    return "\n\n".join(text_parts) if text_parts else None
+
+
+def _sanitize_content(raw: str) -> str:
+    """Clean raw Paperless document content for RAG embedding.
+
+    Handles the common case where Paperless returns raw MIME email data
+    (including base64-encoded attachments, MIME headers, boundary markers)
+    as the document ``content`` field.
+
+    Processing pipeline:
+    1. Attempt full MIME parsing — if successful, extract only text parts
+    2. Otherwise, apply regex-based stripping of base64 blocks, MIME
+       headers, and boundary markers
+    3. Strip residual HTML tags
+    4. Normalise whitespace
+
+    Args:
+        raw: Raw content string from Paperless API
+
+    Returns:
+        Cleaned text suitable for embedding (may be empty)
+    """
+    if not raw:
+        return ""
+
+    # --- Step 1: Try structured MIME parsing first ---
+    mime_text = _extract_mime_text_parts(raw)
+    if mime_text:
+        text = mime_text
+        logger.debug("Extracted text via MIME parsing (%d chars)", len(text))
+    else:
+        text = raw
+
+    # --- Step 2: Regex-based cleanup (catches residual noise) ---
+    # Remove base64 blocks (must come before header stripping so we don't
+    # accidentally break multi-line base64 detection)
+    text = _RE_BASE64_BLOCK.sub("", text)
+
+    # Remove MIME headers and their continuation lines
+    text = _RE_MIME_HEADERS.sub("", text)
+    # Clean up orphaned continuation lines (indented lines after removed headers)
+    # Only remove if they follow a blank or removed line
+    text = re.sub(r"(?:^[ \t]+\S[^\n]*$\n?){1,}", "", text, flags=re.MULTILINE)
+
+    # Remove MIME boundary markers
+    text = _RE_MIME_BOUNDARY.sub("", text)
+
+    # Remove standalone Content-* fragments that may remain
+    text = re.sub(
+        r'^(?:name|filename|charset|boundary)\s*=\s*"[^"]*".*$',
+        "",
+        text,
+        flags=re.MULTILINE | re.IGNORECASE,
+    )
+
+    # --- Step 3: Strip residual HTML ---
+    if "<" in text and ">" in text:
+        text = _strip_html(text)
+
+    # --- Step 4: Normalise whitespace ---
+    # Collapse 3+ consecutive newlines to 2
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    # Collapse runs of spaces/tabs (but not newlines)
+    text = re.sub(r"[^\S\n]{2,}", " ", text)
+    text = text.strip()
+
+    return text
+
+
+def _is_quality_chunk(chunk: str) -> bool:
+    """Check whether a text chunk contains enough meaningful content.
+
+    Rejects chunks that are predominantly non-word characters (base64
+    residue, encoded data, random symbols) or too short to be useful.
+
+    Args:
+        chunk: A single text chunk
+
+    Returns:
+        True if the chunk passes quality checks
+    """
+    stripped = chunk.strip()
+    if len(stripped) < 20:
+        return False
+
+    # Count word-like characters (letters, digits, common punctuation, spaces)
+    # Hebrew/Arabic/Cyrillic etc. are included via \w
+    word_chars = len(re.findall(r"[\w\s.,;:!?'\"-]", stripped, re.UNICODE))
+    ratio = word_chars / len(stripped) if stripped else 0
+
+    if ratio < MIN_WORD_CHAR_RATIO:
+        logger.debug(
+            "Rejecting low-quality chunk (%.0f%% word chars, %d chars): %.60s...",
+            ratio * 100,
+            len(stripped),
+            stripped,
+        )
+        return False
+
+    return True
 
 
 def _split_text(
@@ -242,16 +467,42 @@ class DocumentSyncer:
                                 self.client.add_tag_to_document(doc_id, processed_tag_id)
                             continue
                         
-                        # Fetch full content
-                        content = self.client.get_document_content(doc_id)
-                        if not content:
+                        # Fetch full content and sanitize
+                        raw_content = self.client.get_document_content(doc_id)
+                        if not raw_content:
+                            skipped += 1
+                            continue
+                        
+                        title = doc.get("title", f"Document {doc_id}")
+                        content = _sanitize_content(raw_content)
+                        if len(content) < MIN_CONTENT_CHARS:
+                            logger.info(
+                                f"Skipping '{title}' (id={doc_id}): "
+                                f"only {len(content)} chars after sanitization "
+                                f"(raw was {len(raw_content)} chars)"
+                            )
                             skipped += 1
                             continue
                         
                         # Split large documents into chunks to stay within
                         # the embedding model's token limit
                         chunks = _split_text(content, MAX_CHUNK_CHARS, CHUNK_OVERLAP_CHARS)
-                        title = doc.get("title", f"Document {doc_id}")
+                        
+                        # Quality-gate: drop chunks that are mostly noise
+                        pre_filter = len(chunks)
+                        chunks = [c for c in chunks if _is_quality_chunk(c)]
+                        if pre_filter > len(chunks):
+                            logger.info(
+                                f"Quality filter dropped {pre_filter - len(chunks)}/{pre_filter} "
+                                f"chunks for '{title}'"
+                            )
+                        if not chunks:
+                            logger.info(
+                                f"Skipping '{title}' (id={doc_id}): "
+                                "no chunks passed quality filter"
+                            )
+                            skipped += 1
+                            continue
                         
                         base_metadata = {
                             "source": "paperless",
