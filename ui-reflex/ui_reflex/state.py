@@ -503,7 +503,7 @@ class AppState(rx.State):
     # =====================================================================
 
     async def _load_settings(self):
-        self.all_settings = await api_client.fetch_config()
+        self.all_settings = await api_client.fetch_config(unmask=True)
         self.config_meta = await api_client.fetch_config_meta()
         self.plugins_data = await api_client.fetch_plugins()
         self.rag_stats = await api_client.get_rag_stats()

@@ -162,9 +162,10 @@ async def get_rag_stats() -> dict[str, Any]:
 # CONFIGURATION
 # =========================================================================
 
-async def fetch_config() -> dict[str, Any]:
+async def fetch_config(unmask: bool = False) -> dict[str, Any]:
     try:
-        resp = await _get_client().get("/config", timeout=10)
+        params = {"unmask": "true"} if unmask else {}
+        resp = await _get_client().get("/config", params=params, timeout=10)
         if resp.status_code == 200:
             return resp.json()
     except Exception:

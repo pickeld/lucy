@@ -549,10 +549,14 @@ def delete_conversation_endpoint(conversation_id: str):
 
 @app.route("/config", methods=["GET"])
 def get_config():
-    """Get all settings grouped by category, with secrets masked."""
+    """Get all settings grouped by category, with secrets masked by default."""
     try:
         import settings_db
-        all_settings = settings_db.get_all_settings_masked()
+        unmask = request.args.get("unmask", "false").lower() == "true"
+        if unmask:
+            all_settings = settings_db.get_all_settings()
+        else:
+            all_settings = settings_db.get_all_settings_masked()
         return jsonify(all_settings), 200
     except Exception as e:
         trace = traceback.format_exc()
