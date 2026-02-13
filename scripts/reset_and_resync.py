@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Reset Qdrant collection, remove rag-indexed tag from Paperless, and re-sync.
 
-Usage:
+Usage (from project root):
     python3 scripts/reset_and_resync.py
 
 Requires the app to be running on localhost:8765 and Paperless to be accessible.
-Reads Paperless credentials from the app's settings DB.
 """
 
-import json
 import sys
-import time
+import os
+
+# Add src/ to path so we can import project modules
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import requests
 
@@ -44,89 +45,80 @@ def main():
     # Step 2: Remove rag-indexed tag from all Paperless documents
     print("\n[2/3] Removing 'rag-indexed' tag from Paperless documents...")
     try:
-        # Get Paperless settings from the app
-        resp = requests.get(f"{APP_BASE}/settings", timeout=10)
-        if resp.status_code != 200:
-            print(f"  ⚠️  Could not fetch settings ({resp.status_code}), skipping tag removal")
-        else:
-            settings_data = resp.json()
-            settings_list = settings_data if isinstance(settings_data, list) else settings_data.get("settings", [])
-            
-            paperless_url = ""
-            paperless_token = ""
-            processed_tag_name = "rag-indexed"
-            
-            for s in settings_list:
-                key = s.get("key", "")
-                val = s.get("value", "")
-                if key == "paperless_url":
-                    paperless_url = val
-                elif key == "paperless_token":
-                    paperless_token = val
-                elif key == "paperless_processed_tag":
-                    processed_tag_name = val or "rag-indexed"
-            
-            if paperless_url and paperless_token:
-                headers = {"Authorization": f"Token {paperless_token}"}
-                
-                # Find the tag ID
-                tag_resp = requests.get(
-                    f"{paperless_url.rstrip('/')}/api/tags/",
-                    params={"name__iexact": processed_tag_name},
-                    headers=headers,
-                    timeout=10,
-                )
-                tag_resp.raise_for_status()
-                tags = tag_resp.json().get("results", [])
-                
-                if tags:
-                    tag_id = tags[0]["id"]
-                    print(f"  Found tag '{processed_tag_name}' (id={tag_id})")
-                    
-                    # Find all documents with this tag
-                    doc_ids = []
-                    page = 1
-                    while True:
-                        docs_resp = requests.get(
-                            f"{paperless_url.rstrip('/')}/api/documents/",
-                            params={
-                                "tags__id__all": str(tag_id),
-                                "page": page,
-                                "page_size": 100,
+        from config import settings
+
+        paperless_url = settings.get("paperless_url", "")
+        paperless_token = settings.get("paperless_token", "")
+        processed_tag_name = settings.get("paperless_processed_tag", "rag-indexed")
+
+        if paperless_url and paperless_token:
+            headers = {"Authorization": f"Token {paperless_token}"}
+            base = paperless_url.rstrip("/")
+
+            # Find the tag ID
+            tag_resp = requests.get(
+                f"{base}/api/tags/",
+                params={"name__iexact": processed_tag_name},
+                headers=headers,
+                timeout=10,
+            )
+            tag_resp.raise_for_status()
+            tags = tag_resp.json().get("results", [])
+
+            if tags:
+                tag_id = tags[0]["id"]
+                print(f"  Found tag '{processed_tag_name}' (id={tag_id})")
+
+                # Find all documents with this tag
+                doc_ids = []
+                page = 1
+                while True:
+                    docs_resp = requests.get(
+                        f"{base}/api/documents/",
+                        params={
+                            "tags__id__all": str(tag_id),
+                            "page": page,
+                            "page_size": 100,
+                        },
+                        headers=headers,
+                        timeout=10,
+                    )
+                    docs_resp.raise_for_status()
+                    data = docs_resp.json()
+                    doc_ids.extend(d["id"] for d in data.get("results", []))
+                    if not data.get("next"):
+                        break
+                    page += 1
+
+                if doc_ids:
+                    # Remove tag from all documents
+                    bulk_resp = requests.post(
+                        f"{base}/api/documents/bulk_edit/",
+                        json={
+                            "documents": doc_ids,
+                            "method": "modify_tags",
+                            "parameters": {
+                                "add_tags": [],
+                                "remove_tags": [tag_id],
                             },
-                            headers=headers,
-                            timeout=10,
-                        )
-                        docs_resp.raise_for_status()
-                        data = docs_resp.json()
-                        doc_ids.extend(d["id"] for d in data.get("results", []))
-                        if not data.get("next"):
-                            break
-                        page += 1
-                    
-                    if doc_ids:
-                        # Remove tag from all documents
-                        bulk_resp = requests.post(
-                            f"{paperless_url.rstrip('/')}/api/documents/bulk_edit/",
-                            json={
-                                "documents": doc_ids,
-                                "method": "modify_tags",
-                                "parameters": {
-                                    "add_tags": [],
-                                    "remove_tags": [tag_id],
-                                },
-                            },
-                            headers=headers,
-                            timeout=30,
-                        )
-                        bulk_resp.raise_for_status()
-                        print(f"  ✅ Removed '{processed_tag_name}' tag from {len(doc_ids)} documents")
-                    else:
-                        print(f"  ℹ️  No documents found with tag '{processed_tag_name}'")
+                        },
+                        headers=headers,
+                        timeout=30,
+                    )
+                    bulk_resp.raise_for_status()
+                    print(
+                        f"  ✅ Removed '{processed_tag_name}' tag from {len(doc_ids)} documents"
+                    )
                 else:
-                    print(f"  ℹ️  Tag '{processed_tag_name}' not found in Paperless (nothing to remove)")
+                    print(
+                        f"  ℹ️  No documents found with tag '{processed_tag_name}'"
+                    )
             else:
-                print("  ⚠️  Paperless URL or token not configured, skipping tag removal")
+                print(
+                    f"  ℹ️  Tag '{processed_tag_name}' not found in Paperless (nothing to remove)"
+                )
+        else:
+            print("  ⚠️  Paperless URL or token not configured, skipping tag removal")
     except Exception as e:
         print(f"  ⚠️  Tag removal failed (non-fatal): {e}")
 
