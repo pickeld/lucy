@@ -704,4 +704,4 @@ if __name__ == "__main__":
     os.environ["LOCAL"] = "TRUE"
     is_debug = settings.log_level == "DEBUG"
     app.run(host="0.0.0.0", port=8765,
-            debug=is_debug, use_reloader=True)
+            debug=is_debug, use_reloader=True, exclude_patterns=[".venv/*", "*/.venv/*"])
