@@ -106,3 +106,17 @@ html, body {
 .typing-dot:nth-child(3) {
     animation-delay: 0.4s;
 }
+
+/* --- Collapsible sources --- */
+.sources-details summary {
+    list-style: none;
+}
+.sources-details summary::-webkit-details-marker {
+    display: none;
+}
+.sources-details .details-chevron {
+    transition: transform 0.2s ease;
+}
+.sources-details[open] .details-chevron {
+    transform: rotate(90deg);
+}
