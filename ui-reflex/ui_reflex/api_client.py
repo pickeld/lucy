@@ -207,3 +207,32 @@ async def fetch_plugins() -> dict[str, Any]:
     except Exception:
         pass
     return {}
+
+
+# =========================================================================
+# SETTINGS EXPORT/IMPORT
+# =========================================================================
+
+async def export_config() -> dict[str, Any]:
+    """Export all settings as JSON (with secrets unmasked)."""
+    try:
+        resp = await _get_client().get("/config/export", timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        logger.error(f"Error exporting config: {e}")
+    return {"error": "Failed to export settings"}
+
+
+async def import_config(settings_data: dict[str, Any]) -> dict[str, Any]:
+    """Import settings from JSON data."""
+    try:
+        resp = await _get_client().post("/config/import", json=settings_data, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            data = resp.json()
+            return {"error": data.get("error", f"HTTP {resp.status_code}")}
+    except Exception as e:
+        logger.error(f"Error importing config: {e}")
+        return {"error": str(e)}
