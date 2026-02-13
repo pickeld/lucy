@@ -2,7 +2,8 @@
 
 import logging
 import time
-from typing import Optional
+import uuid
+from typing import List, Optional
 
 from llama_index.core.schema import TextNode
 
