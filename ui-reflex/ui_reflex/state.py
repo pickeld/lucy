@@ -54,6 +54,10 @@ class AppState(rx.State):
     plugins_data: dict[str, Any] = {}
     settings_save_message: str = ""
 
+    # --- Tab state ---
+    settings_tab: str = "llm"  # Active main tab
+    plugin_tab: str = ""       # Active plugin sub-tab (empty = first plugin)
+
     # --- RAG stats ---
     rag_stats: dict[str, Any] = {}
 
@@ -177,6 +181,141 @@ class AppState(rx.State):
                 })
         return flat
 
+    @rx.var(cache=True)
+    def rag_total_docs(self) -> str:
+        """Extract total documents from rag_stats."""
+        return str(self.rag_stats.get("total_documents", "—"))
+
+    @rx.var(cache=True)
+    def rag_collection_name(self) -> str:
+        """Extract collection name from rag_stats."""
+        return str(self.rag_stats.get("collection_name", "—"))
+
+    @rx.var(cache=True)
+    def rag_dashboard_url(self) -> str:
+        """Extract Qdrant dashboard URL from rag_stats."""
+        return str(self.rag_stats.get("dashboard_url", ""))
+
+    @rx.var(cache=True)
+    def select_options(self) -> dict:
+        """Get select-type option lists from config_meta."""
+        return self.config_meta.get("select_options", {})
+
+    @rx.var(cache=True)
+    def plugin_categories(self) -> list[str]:
+        """Get list of plugin-specific setting categories (for sub-tabs)."""
+        plugin_cats = []
+        for cat in self.all_settings.keys():
+            if cat != "plugins" and cat not in [
+                "secrets", "llm", "rag", "infrastructure", "app",
+            ]:
+                plugin_cats.append(cat)
+        return sorted(plugin_cats)
+
+    @rx.var(cache=True)
+    def current_llm_provider(self) -> str:
+        """Get the current LLM provider selection."""
+        llm_settings = self.all_settings.get("llm", {})
+        return str(llm_settings.get("llm_provider", {}).get("value", "openai"))
+
+    @rx.var(cache=True)
+    def current_image_provider(self) -> str:
+        """Get the current image provider selection."""
+        llm_settings = self.all_settings.get("llm", {})
+        return str(llm_settings.get("image_provider", {}).get("value", "openai"))
+
+    # ----- Per-category setting lists for tabbed UI -----
+
+    def _cat_settings(self, category: str) -> list[dict[str, str]]:
+        """Return settings for a category as a flat list of dicts.
+
+        Each dict has: key, label, value, setting_type, description, category, options.
+        The ``options`` field is a ``|``-separated string of valid choices for
+        select-type settings (empty for non-select types).
+        """
+        settings = self.all_settings.get(category, {})
+        opts = self.config_meta.get("select_options", {})
+        result: list[dict[str, str]] = []
+        for key, info in settings.items():
+            options_list = opts.get(key, [])
+            result.append({
+                "key": key,
+                "label": key.replace("_", " ").title(),
+                "value": str(info.get("value", "")),
+                "setting_type": info.get("type", "text"),
+                "description": info.get("description", ""),
+                "category": category,
+                "options": "|".join(options_list) if options_list else "",
+            })
+        return result
+
+    @rx.var(cache=True)
+    def llm_settings_list(self) -> list[dict[str, str]]:
+        """LLM settings filtered by current provider selections."""
+        all_llm = self._cat_settings("llm")
+        provider = self.current_llm_provider
+        img_provider = self.current_image_provider
+        hide_keys: set[str] = set()
+        if provider != "openai":
+            hide_keys.update(["openai_model", "openai_temperature"])
+        if provider != "gemini":
+            hide_keys.update(["gemini_model", "gemini_temperature"])
+        if img_provider != "google":
+            hide_keys.add("imagen_model")
+        return [s for s in all_llm if s["key"] not in hide_keys]
+
+    @rx.var(cache=True)
+    def secrets_settings_list(self) -> list[dict[str, str]]:
+        """Settings for the Keys tab."""
+        return self._cat_settings("secrets")
+
+    @rx.var(cache=True)
+    def rag_settings_list(self) -> list[dict[str, str]]:
+        """Settings for the RAG tab."""
+        return self._cat_settings("rag")
+
+    @rx.var(cache=True)
+    def infra_settings_list(self) -> list[dict[str, str]]:
+        """Settings for the Infrastructure tab."""
+        return self._cat_settings("infrastructure")
+
+    @rx.var(cache=True)
+    def app_settings_list(self) -> list[dict[str, str]]:
+        """Settings for the App tab."""
+        return self._cat_settings("app")
+
+    @rx.var(cache=True)
+    def plugins_toggle_list(self) -> list[dict[str, str]]:
+        """Plugin enable/disable toggles from plugins_data."""
+        result: list[dict[str, str]] = []
+        plugins = self.plugins_data.get("plugins", {})
+        for name, info in plugins.items():
+            result.append({
+                "key": f"plugin_{name}_enabled",
+                "label": info.get("label", name.title()),
+                "value": str(info.get("enabled", False)).lower(),
+                "setting_type": "bool",
+                "description": info.get("description", ""),
+                "category": "plugins",
+            })
+        return result
+
+    @rx.var(cache=True)
+    def active_plugin_settings(self) -> list[dict[str, str]]:
+        """Settings for the currently selected plugin sub-tab."""
+        cat = self.plugin_tab
+        if not cat and self.plugin_categories:
+            cat = self.plugin_categories[0]
+        return self._cat_settings(cat) if cat else []
+
+    @rx.var(cache=True)
+    def active_plugin_tab_value(self) -> str:
+        """The resolved plugin sub-tab value (uses first if empty)."""
+        if self.plugin_tab:
+            return self.plugin_tab
+        cats = self.plugin_categories
+        return cats[0] if cats else ""
+
     # =====================================================================
     # LIFECYCLE EVENTS
     # =====================================================================
@@ -223,6 +362,8 @@ class AppState(rx.State):
             self.active_filters = loaded.get("filters", {})
             self.renaming_id = ""
             self.input_text = ""
+            # Navigate to chat view when conversation is selected
+            return rx.redirect("/")
 
     async def delete_conversation(self, convo_id: str):
         """Delete a conversation."""
@@ -377,6 +518,47 @@ class AppState(rx.State):
             count = result.get("reset_count", 0)
             self.settings_save_message = f"✅ Reset {count} settings"
         await self._load_settings()
+
+    async def export_settings(self):
+        """Export settings as JSON file download."""
+        try:
+            data = await api_client.export_config()
+            if "error" in data:
+                self.settings_save_message = f"❌ Export failed: {data['error']}"
+            else:
+                import json as _json
+                json_str = _json.dumps(data, indent=2)
+                return rx.download(
+                    data=json_str.encode(),
+                    filename="whatsapp-gpt-settings.json",
+                )
+        except Exception as e:
+            self.settings_save_message = f"❌ Export error: {str(e)}"
+
+    async def import_settings(self, files: list[rx.UploadFile]):
+        """Import settings from uploaded JSON file."""
+        try:
+            if not files:
+                self.settings_save_message = "❌ No file selected"
+                return
+
+            file = files[0]
+            content = await file.read()
+
+            import json as _json
+            data = _json.loads(content.decode())
+
+            result = await api_client.import_config(data)
+            if "error" in result:
+                self.settings_save_message = f"❌ Import failed: {result['error']}"
+            else:
+                count = result.get("count", 0)
+                self.settings_save_message = f"✅ Imported {count} settings"
+                await self._load_settings()
+        except json.JSONDecodeError:
+            self.settings_save_message = "❌ Invalid JSON file"
+        except Exception as e:
+            self.settings_save_message = f"❌ Import error: {str(e)}"
 
 
 # =========================================================================
