@@ -273,3 +273,22 @@ async def test_paperless_connection() -> dict[str, Any]:
     except Exception as e:
         logger.error(f"Error testing Paperless connection: {e}")
         return {"error": str(e)}
+
+
+async def start_paperless_sync() -> dict[str, Any]:
+    """Trigger Paperless-NGX document sync to RAG vector store."""
+    try:
+        resp = await _get_client().post("/plugins/paperless/sync", timeout=120)
+        data = resp.json()
+        if resp.status_code == 200:
+            return data
+        else:
+            msg = data.get("error") or f"HTTP {resp.status_code}"
+            return {"error": msg}
+    except httpx.ConnectError:
+        return {"error": "Cannot reach API server"}
+    except httpx.ReadTimeout:
+        return {"error": "Sync timed out — it may still be running in the background"}
+    except Exception as e:
+        logger.error(f"Error starting Paperless sync: {e}")
+        return {"error": str(e)}

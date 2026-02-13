@@ -65,6 +65,10 @@ class AppState(rx.State):
     paperless_test_status: str = ""   # "", "testing", "success", "error"
     paperless_test_message: str = ""
 
+    # --- Paperless sync state ---
+    paperless_sync_status: str = ""   # "", "syncing", "complete", "error"
+    paperless_sync_message: str = ""
+
     # --- Tab state ---
     settings_tab: str = "llm"  # Active main tab
     plugin_tab: str = ""       # Active plugin sub-tab (empty = first plugin)
@@ -585,6 +589,37 @@ class AppState(rx.State):
         else:
             self.paperless_test_status = "error"
             self.paperless_test_message = "❌ Unexpected response"
+
+    # ----- Paperless sync -----
+
+    async def start_paperless_sync(self):
+        """Trigger Paperless-NGX document sync to RAG."""
+        self.paperless_sync_status = "syncing"
+        self.paperless_sync_message = "⏳ Syncing documents…"
+        yield
+
+        result = await api_client.start_paperless_sync()
+        if "error" in result:
+            self.paperless_sync_status = "error"
+            self.paperless_sync_message = f"❌ {result['error']}"
+        elif result.get("status") == "complete":
+            synced = result.get("synced", 0)
+            tagged = result.get("tagged", 0)
+            skipped = result.get("skipped", 0)
+            errors = result.get("errors", 0)
+            self.paperless_sync_status = "complete"
+            self.paperless_sync_message = (
+                f"✅ Sync complete — {synced} indexed, "
+                f"{tagged} tagged, {skipped} skipped, {errors} errors"
+            )
+            # Refresh RAG stats to reflect new document count
+            self.rag_stats = await api_client.get_rag_stats()
+        elif result.get("status") == "already_running":
+            self.paperless_sync_status = "syncing"
+            self.paperless_sync_message = "⏳ Sync already in progress"
+        else:
+            self.paperless_sync_status = "error"
+            self.paperless_sync_message = f"❌ Unexpected response: {result}"
 
     async def reset_category(self, category: str):
         """Reset a settings category to defaults."""
