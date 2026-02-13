@@ -247,14 +247,15 @@ async def test_paperless_connection() -> dict[str, Any]:
     """Test Paperless-NGX connection."""
     try:
         resp = await _get_client().get("/plugins/paperless/test", timeout=10)
+        data = resp.json()
         if resp.status_code == 200:
-            return resp.json()
+            return data
         else:
-            try:
-                data = resp.json()
-                return {"error": data.get("error", data.get("message", "Connection failed"))}
-            except Exception:
-                return {"error": f"HTTP {resp.status_code}"}
+            # The test endpoint returns {"status": "error", "message": "..."}
+            msg = data.get("message") or data.get("error") or "Connection failed"
+            return {"error": msg}
+    except httpx.ConnectError:
+        return {"error": "Cannot reach API server"}
     except Exception as e:
         logger.error(f"Error testing Paperless connection: {e}")
         return {"error": str(e)}

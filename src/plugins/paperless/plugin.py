@@ -155,32 +155,34 @@ class PaperlessPlugin(ChannelPlugin):
         
         @bp.route("/test", methods=["GET"])
         def test():
-            """Test Paperless connection."""
-            if not plugin._client:
-                # Re-read settings in case token was just saved
-                url = settings.paperless_url
-                token = settings.paperless_token
-                if not token:
-                    return jsonify({
-                        "status": "error",
-                        "message": "Paperless token not configured",
-                    }), 400
-                # Create a temporary client for testing
-                test_client = PaperlessClient(url, token)
-                if test_client.test_connection():
-                    return jsonify({"status": "connected"}), 200
-                else:
-                    return jsonify({
-                        "status": "error",
-                        "message": "Connection failed — check URL and token",
-                    }), 500
+            """Test Paperless connection.
             
-            if plugin._client.test_connection():
+            Always reads fresh settings from the database so that a
+            newly-saved token is picked up without restarting the server.
+            """
+            import settings_db
+            url = settings_db.get_setting_value("paperless_url") or ""
+            token = settings_db.get_setting_value("paperless_token") or ""
+            
+            if not token:
+                return jsonify({
+                    "status": "error",
+                    "message": "Paperless token not configured",
+                }), 400
+            if not url:
+                return jsonify({
+                    "status": "error",
+                    "message": "Paperless URL not configured",
+                }), 400
+            
+            # Always create a fresh client with current DB settings
+            test_client = PaperlessClient(url, token)
+            if test_client.test_connection():
                 return jsonify({"status": "connected"}), 200
             else:
                 return jsonify({
                     "status": "error",
-                    "message": "Connection failed — check URL and token",
+                    "message": "Connection failed \u2014 check URL and token",
                 }), 500
         
         return bp
