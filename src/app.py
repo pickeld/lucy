@@ -635,6 +635,53 @@ def reset_config():
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
+@app.route("/config/export", methods=["GET"])
+def export_config():
+    """Export all settings as JSON (with secrets unmasked for backup)."""
+    try:
+        import settings_db
+        # Use get_all_settings (not masked) for export
+        all_settings = settings_db.get_all_settings()
+        return jsonify(all_settings), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Config export error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/config/import", methods=["POST"])
+def import_config():
+    """Import settings from JSON."""
+    try:
+        import settings_db
+        data = request.json or {}
+        
+        if not data:
+            return jsonify({"error": "No settings provided"}), 400
+        
+        # Flatten nested category structure to flat key-value pairs
+        flat_settings = {}
+        for category, settings in data.items():
+            if isinstance(settings, dict):
+                for key, info in settings.items():
+                    if isinstance(info, dict) and "value" in info:
+                        flat_settings[key] = info["value"]
+                    else:
+                        flat_settings[key] = str(info)
+        
+        updated_keys = settings_db.set_settings(flat_settings)
+        
+        return jsonify({
+            "status": "ok",
+            "updated": updated_keys,
+            "count": len(updated_keys)
+        }), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Config import error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
 # =============================================================================
 # ROOT ENDPOINT
 # =============================================================================
