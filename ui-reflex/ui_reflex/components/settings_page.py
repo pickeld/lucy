@@ -543,24 +543,34 @@ def _select_input(item: dict) -> rx.Component:
 def _secret_input(item: dict) -> rx.Component:
     """Password input for secret values with eye toggle and save button.
 
-    Always shows dots (via type=password) when a value is saved.
-    Clicking the eye toggle switches to type=text to reveal the full value.
+    Hidden by default — shows a masked placeholder when a value exists.
+    Clicking the eye toggle reveals the actual value in a text input.
     """
+    is_revealed = AppState.revealed_secrets.contains(item["key"])
+    has_value = item["value"] != ""
+
     return rx.flex(
-        rx.el.input(
-            type=rx.cond(
-                AppState.revealed_secrets.contains(item["key"]),
-                "text",
-                "password",
+        # Revealed state: editable text input with actual value
+        rx.cond(
+            is_revealed,
+            rx.el.input(
+                type="text",
+                placeholder="Enter new value…",
+                default_value=item["value"],
+                on_change=AppState.set_pending_change(item["key"]),  # type: ignore[arg-type]
+                class_name=_INPUT_CLASS + " flex-1",
             ),
-            placeholder="Enter new value…",
-            default_value=item["value"],
-            on_change=AppState.set_pending_change(item["key"]),  # type: ignore[arg-type]
-            class_name=_INPUT_CLASS + " flex-1",
+            # Hidden state: password input that doesn't expose the real value
+            rx.el.input(
+                type="password",
+                placeholder=rx.cond(has_value, "••••••••", "Enter new value…"),
+                on_change=AppState.set_pending_change(item["key"]),  # type: ignore[arg-type]
+                class_name=_INPUT_CLASS + " flex-1",
+            ),
         ),
         rx.icon_button(
             rx.cond(
-                AppState.revealed_secrets.contains(item["key"]),
+                is_revealed,
                 rx.icon("eye-off", size=16),
                 rx.icon("eye", size=16),
             ),
