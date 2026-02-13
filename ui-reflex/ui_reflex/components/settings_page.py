@@ -329,22 +329,42 @@ def _plugins_tab() -> rx.Component:
                     AppState.active_plugin_settings,
                     _render_setting,
                 ),
-                # Paperless test connection button
+                # Paperless actions (test connection + sync)
                 rx.cond(
                     AppState.active_plugin_tab_value == "paperless",
                     rx.box(
-                        rx.button(
-                            rx.icon("wifi", size=14, class_name="mr-1"),
-                            "Test Connection",
-                            on_click=AppState.test_paperless_connection,
-                            loading=AppState.paperless_test_status == "testing",
-                            size="2",
-                            class_name="bg-blue-500 text-white hover:bg-blue-600",
+                        rx.flex(
+                            rx.button(
+                                rx.icon("wifi", size=14, class_name="mr-1"),
+                                "Test Connection",
+                                on_click=AppState.test_paperless_connection,
+                                loading=AppState.paperless_test_status == "testing",
+                                size="2",
+                                class_name="bg-blue-500 text-white hover:bg-blue-600",
+                            ),
+                            rx.button(
+                                rx.icon("refresh-cw", size=14, class_name="mr-1"),
+                                "Start Sync",
+                                on_click=AppState.start_paperless_sync,
+                                loading=AppState.paperless_sync_status == "syncing",
+                                size="2",
+                                class_name="bg-green-500 text-white hover:bg-green-600",
+                            ),
+                            gap="3",
+                            align="center",
                         ),
                         rx.cond(
                             AppState.paperless_test_message != "",
                             rx.text(
                                 AppState.paperless_test_message,
+                                class_name="text-sm mt-2",
+                            ),
+                            rx.fragment(),
+                        ),
+                        rx.cond(
+                            AppState.paperless_sync_message != "",
+                            rx.text(
+                                AppState.paperless_sync_message,
                                 class_name="text-sm mt-2",
                             ),
                             rx.fragment(),
