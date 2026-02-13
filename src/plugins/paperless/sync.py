@@ -271,6 +271,10 @@ class DocumentSyncer:
                         chunk_ok = True
                         for idx, chunk in enumerate(chunks):
                             chunk_meta = dict(base_metadata)
+                            # Store chunk text in 'message' metadata so fulltext
+                            # search on the 'message' field can find documents
+                            # (truncated to 500 chars to keep payload reasonable)
+                            chunk_meta["message"] = chunk[:500]
                             if len(chunks) > 1:
                                 chunk_meta["chunk_index"] = str(idx)
                                 chunk_meta["chunk_total"] = str(len(chunks))
