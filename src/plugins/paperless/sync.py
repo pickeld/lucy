@@ -16,10 +16,13 @@ DEFAULT_PROCESSED_TAG = "rag-indexed"
 
 # Maximum characters per chunk for embedding.
 # text-embedding-3-large has an 8191 token limit.
-# Hebrew/RTL text averages ~2 chars/token (vs ~4 for English),
-# so we use 12k chars to safely stay under the limit.
-MAX_CHUNK_CHARS = 12_000
-CHUNK_OVERLAP_CHARS = 300
+# Many Paperless documents contain raw HTML, base64, or quoted-printable
+# encoded content where the char-to-token ratio is much worse than plain
+# text (~1 char/token for encoded data vs ~4 for English prose).
+# Using 6000 chars keeps us safely under the 8191 token limit even for
+# worst-case encoded content.
+MAX_CHUNK_CHARS = 6_000
+CHUNK_OVERLAP_CHARS = 200
 
 
 def _split_text(

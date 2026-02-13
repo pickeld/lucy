@@ -651,8 +651,19 @@ class LlamaIndexRAG:
             logger.error(f"Failed to add message to vector store: {e}")
             return False
     
+    # Safety limit for embedding: truncate text to this many chars before
+    # sending to the embedding API.  Covers worst-case tokenisation
+    # (base64/HTML ≈ 1 char/token).  8191 token limit → 7000 char safety.
+    EMBEDDING_MAX_CHARS = 7_000
+
     def add_node(self, node: TextNode) -> bool:
         """Add a pre-constructed TextNode to the vector store.
+        
+        If the node text exceeds EMBEDDING_MAX_CHARS it is truncated to
+        avoid hitting the embedding model's token limit (8191 for
+        text-embedding-3-large).  A first attempt is made with the full
+        text; on a 400 "maximum context length" error the text is
+        truncated and retried once.
         
         Args:
             node: LlamaIndex TextNode to add
@@ -665,6 +676,21 @@ class LlamaIndexRAG:
             logger.debug(f"Added node to RAG: {node.text[:50]}...")
             return True
         except Exception as e:
+            error_str = str(e)
+            # Detect embedding token-limit errors and retry with truncated text
+            if "maximum context length" in error_str and len(node.text) > self.EMBEDDING_MAX_CHARS:
+                logger.warning(
+                    f"Node text too long for embedding ({len(node.text)} chars), "
+                    f"truncating to {self.EMBEDDING_MAX_CHARS} chars and retrying"
+                )
+                try:
+                    node.text = node.text[:self.EMBEDDING_MAX_CHARS]
+                    self.index.insert_nodes([node])
+                    logger.debug(f"Added truncated node to RAG: {node.text[:50]}...")
+                    return True
+                except Exception as retry_err:
+                    logger.error(f"Failed to add truncated node: {retry_err}")
+                    return False
             logger.error(f"Failed to add node to vector store: {e}")
             return False
     
@@ -751,6 +777,54 @@ class LlamaIndexRAG:
             logger.error(f"Failed to add documents to vector store: {e}")
             return 0
     
+    @staticmethod
+    def _extract_text_from_payload(payload: Dict[str, Any]) -> Optional[str]:
+        """Extract display text from a Qdrant point payload.
+        
+        Handles both WhatsApp messages (which have a 'message' metadata field)
+        and Paperless/other documents (which store text only in LlamaIndex's
+        internal '_node_content' JSON blob).
+        
+        Priority:
+        1. Reconstruct from 'message' metadata (WhatsApp-style)
+        2. Extract from '_node_content' JSON (Paperless/generic documents)
+        
+        Args:
+            payload: Qdrant point payload dict
+            
+        Returns:
+            Extracted text string, or None if no text could be found
+        """
+        chat_name = payload.get("chat_name", "Unknown")
+        sender = payload.get("sender", "Unknown")
+        message = payload.get("message", "")
+        timestamp = payload.get("timestamp", 0)
+        source = payload.get("source", "")
+        
+        # WhatsApp messages have a 'message' field in metadata
+        if message:
+            formatted_time = format_timestamp(str(timestamp))
+            return f"[{formatted_time}] {sender} in {chat_name}: {message}"
+        
+        # Paperless/generic documents: extract text from _node_content
+        node_content = payload.get("_node_content")
+        if node_content and isinstance(node_content, str):
+            try:
+                content_dict = json.loads(node_content)
+                text = content_dict.get("text")
+                if text:
+                    # For documents, prefix with title/source info for context
+                    if source == "paperless":
+                        formatted_time = format_timestamp(str(timestamp))
+                        # Truncate very long document text for display
+                        display_text = text[:2000] if len(text) > 2000 else text
+                        return f"[{formatted_time}] Document '{chat_name}' from {sender}:\n{display_text}"
+                    return text
+            except (json.JSONDecodeError, TypeError):
+                pass
+        
+        return None
+    
     # Field-aware full-text search scores: sender matches are most valuable
     # because users often ask "what did X say about Y?"
     FULLTEXT_SCORE_SENDER = float(settings.get("rag_fulltext_score_sender", "0.95"))
@@ -795,14 +869,9 @@ class LlamaIndexRAG:
             nodes = []
             for record in results:
                 payload = record.payload or {}
-                chat_name = payload.get("chat_name", "Unknown")
-                sender = payload.get("sender", "Unknown")
-                message = payload.get("message", "")
-                timestamp = payload.get("timestamp", 0)
+                text = self._extract_text_from_payload(payload)
                 
-                if message:
-                    formatted_time = format_timestamp(str(timestamp))
-                    text = f"[{formatted_time}] {sender} in {chat_name}: {message}"
+                if text:
                     node = TextNode(
                         text=text,
                         metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
@@ -998,18 +1067,12 @@ class LlamaIndexRAG:
             nodes = []
             for record in results:
                 payload = record.payload or {}
-                chat_name = payload.get("chat_name", "Unknown")
-                sender = payload.get("sender", "Unknown")
-                message = payload.get("message", "")
-                timestamp = payload.get("timestamp", 0)
+                text = self._extract_text_from_payload(payload)
                 
-                if message:
-                    formatted_time = format_timestamp(str(timestamp))
-                    text = f"[{formatted_time}] {sender} in {chat_name}: {message}"
-                    
+                if text:
                     node = TextNode(
                         text=text,
-                        metadata={k: v for k, v in payload.items() if not k.startswith("_")},
+                        metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
                         id_=str(record.id)
                     )
                     nodes.append(NodeWithScore(node=node, score=1.0))
@@ -1113,30 +1176,9 @@ class LlamaIndexRAG:
             valid_results = []
             for result in search_results:
                 payload = result.payload or {}
+                text = self._extract_text_from_payload(payload)
                 
-                # Try to get text from _node_content first (LlamaIndex storage format),
-                # then fall back to reconstructing from payload fields
-                text = None
-                node_content = payload.get("_node_content")
-                if node_content and isinstance(node_content, str):
-                    try:
-                        import json
-                        content_dict = json.loads(node_content)
-                        text = content_dict.get("text")
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                
-                # Fallback: reconstruct text from payload metadata
-                if not text:
-                    chat_name = payload.get("chat_name", "Unknown")
-                    sender = payload.get("sender", "Unknown")
-                    message = payload.get("message", "")
-                    timestamp = payload.get("timestamp", 0)
-                    if message:
-                        formatted_time = format_timestamp(str(timestamp))
-                        text = f"[{formatted_time}] {sender} in {chat_name}: {message}"
-                
-                # Skip if we still don't have valid text
+                # Skip if we couldn't extract valid text
                 if not text:
                     logger.warning(f"Skipping result with no valid text: point_id={result.id}")
                     continue
@@ -1144,7 +1186,7 @@ class LlamaIndexRAG:
                 # Create TextNode with valid text
                 node = TextNode(
                     text=text,
-                    metadata={k: v for k, v in payload.items() if not k.startswith("_")},
+                    metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
                     id_=str(result.id)
                 )
                 
