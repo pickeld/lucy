@@ -503,7 +503,9 @@ class AppState(rx.State):
     # =====================================================================
 
     async def _load_settings(self):
-        self.all_settings = await api_client.fetch_config(unmask=True)
+        # Fetch masked settings so secret placeholders show "sk-a...xyz"
+        # instead of the full unmasked value
+        self.all_settings = await api_client.fetch_config(unmask=False)
         self.config_meta = await api_client.fetch_config_meta()
         self.plugins_data = await api_client.fetch_plugins()
         self.rag_stats = await api_client.get_rag_stats()

@@ -9,7 +9,7 @@ from config import settings
 from plugins.base import ChannelPlugin
 
 from .client import PaperlessClient
-from .sync import DocumentSyncer
+from .sync import DEFAULT_PROCESSED_TAG, DocumentSyncer
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +18,8 @@ class PaperlessPlugin(ChannelPlugin):
     """Paperless-NGX document management integration.
     
     Syncs documents from Paperless-NGX and indexes them in the RAG system.
+    Processed documents are tagged with a configurable tag (default:
+    ``rag-indexed``) so they are automatically excluded from future syncs.
     """
     
     def __init__(self):
@@ -60,6 +62,8 @@ class PaperlessPlugin(ChannelPlugin):
             ("paperless_sync_interval", "3600", "paperless", "int", "Sync interval in seconds (0 = manual only)"),
             ("paperless_sync_tags", "", "paperless", "text", "Comma-separated tag names to sync (empty = all)"),
             ("paperless_max_docs", "1000", "paperless", "int", "Maximum documents to sync per run"),
+            ("paperless_processed_tag", DEFAULT_PROCESSED_TAG, "paperless", "text",
+             "Tag name applied to documents after RAG indexing (prevents reprocessing)"),
         ]
     
     def get_env_key_map(self) -> Dict[str, str]:
@@ -69,6 +73,7 @@ class PaperlessPlugin(ChannelPlugin):
             "paperless_sync_interval": "PAPERLESS_SYNC_INTERVAL",
             "paperless_sync_tags": "PAPERLESS_SYNC_TAGS",
             "paperless_max_docs": "PAPERLESS_MAX_DOCS",
+            "paperless_processed_tag": "PAPERLESS_PROCESSED_TAG",
         }
     
     def get_category_meta(self) -> Dict[str, Dict[str, str]]:
@@ -124,10 +129,14 @@ class PaperlessPlugin(ChannelPlugin):
             max_docs = int(settings.get("paperless_max_docs", 1000))
             tags_str = settings.get("paperless_sync_tags", "")
             tags = [t.strip() for t in tags_str.split(",") if t.strip()] if tags_str else None
+            processed_tag = settings.get(
+                "paperless_processed_tag", DEFAULT_PROCESSED_TAG
+            )
             
             result = plugin._syncer.sync_documents(
                 max_docs=max_docs,
                 tags_filter=tags,
+                processed_tag_name=processed_tag,
             )
             
             return jsonify(result), 200
@@ -148,12 +157,31 @@ class PaperlessPlugin(ChannelPlugin):
         def test():
             """Test Paperless connection."""
             if not plugin._client:
-                return jsonify({"error": "Plugin not initialized"}), 500
+                # Re-read settings in case token was just saved
+                url = settings.paperless_url
+                token = settings.paperless_token
+                if not token:
+                    return jsonify({
+                        "status": "error",
+                        "message": "Paperless token not configured",
+                    }), 400
+                # Create a temporary client for testing
+                test_client = PaperlessClient(url, token)
+                if test_client.test_connection():
+                    return jsonify({"status": "connected"}), 200
+                else:
+                    return jsonify({
+                        "status": "error",
+                        "message": "Connection failed — check URL and token",
+                    }), 500
             
             if plugin._client.test_connection():
                 return jsonify({"status": "connected"}), 200
             else:
-                return jsonify({"status": "error", "message": "Connection failed"}), 500
+                return jsonify({
+                    "status": "error",
+                    "message": "Connection failed — check URL and token",
+                }), 500
         
         return bp
     

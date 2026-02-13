@@ -10,11 +10,16 @@ from .client import PaperlessClient
 
 logger = logging.getLogger(__name__)
 
+# Default tag name applied to documents after RAG indexing
+DEFAULT_PROCESSED_TAG = "rag-indexed"
+
 
 class DocumentSyncer:
     """Handles syncing documents from Paperless-NGX to RAG.
     
-    Tracks sync status in Redis to avoid re-indexing.
+    Tags processed documents in Paperless with a custom tag (default:
+    ``rag-indexed``) so they are automatically excluded from future sync
+    runs.  The tag is created in Paperless on first use.
     """
     
     def __init__(self, client: PaperlessClient, rag):
@@ -29,6 +34,8 @@ class DocumentSyncer:
         self._syncing = False
         self._last_sync = 0
         self._doc_count = 0
+        # Resolved tag ID — populated lazily on first sync
+        self._processed_tag_id: Optional[int] = None
     
     @property
     def is_syncing(self) -> bool:
@@ -45,16 +52,56 @@ class DocumentSyncer:
         """Get count of synced documents."""
         return self._doc_count
     
+    def _ensure_processed_tag(self, tag_name: str) -> Optional[int]:
+        """Ensure the processed-documents tag exists in Paperless.
+        
+        Creates the tag if it doesn't exist yet.  Caches the tag ID for
+        the lifetime of this syncer instance.
+        
+        Args:
+            tag_name: Name of the tag to use (e.g. ``rag-indexed``)
+            
+        Returns:
+            Tag ID, or None if tag creation failed
+        """
+        if self._processed_tag_id is not None:
+            return self._processed_tag_id
+        
+        tag_id = self.client.get_or_create_tag(
+            name=tag_name,
+            color="#17a2b8",  # teal / info-blue
+        )
+        if tag_id is not None:
+            self._processed_tag_id = tag_id
+            logger.info(
+                f"Using Paperless tag '{tag_name}' (id={tag_id}) "
+                "for processed documents"
+            )
+        else:
+            logger.warning(
+                f"Could not get/create Paperless tag '{tag_name}'. "
+                "Documents will still be synced but not tagged."
+            )
+        return tag_id
+    
     def sync_documents(
         self,
         max_docs: int = 1000,
         tags_filter: Optional[list] = None,
+        processed_tag_name: str = DEFAULT_PROCESSED_TAG,
     ) -> dict:
         """Sync documents from Paperless to RAG.
         
+        Documents that already carry the ``processed_tag_name`` tag in
+        Paperless are automatically excluded from the query, so they
+        won't be fetched or re-processed.  After successful indexing
+        each document is tagged in Paperless.
+        
         Args:
             max_docs: Maximum documents to sync
-            tags_filter: Optional list of tag names to filter
+            tags_filter: Optional list of tag names to include
+            processed_tag_name: Tag name to mark processed docs
+                (default: ``rag-indexed``)
             
         Returns:
             Dict with sync results
@@ -66,9 +113,16 @@ class DocumentSyncer:
         synced = 0
         skipped = 0
         errors = 0
+        tagged = 0
         
         try:
             logger.info("Starting Paperless document sync...")
+            
+            # Ensure the processed tag exists and get its ID
+            processed_tag_id = self._ensure_processed_tag(processed_tag_name)
+            
+            # Build exclusion list — skip docs already tagged as processed
+            exclude_tag_ids = [processed_tag_id] if processed_tag_id else []
             
             # Fetch documents from Paperless API
             page = 1
@@ -78,6 +132,7 @@ class DocumentSyncer:
                     page=page,
                     page_size=50,
                     tags=tags_filter,
+                    exclude_tags=exclude_tag_ids,
                 )
                 
                 docs = resp.get("results", [])
@@ -92,9 +147,12 @@ class DocumentSyncer:
                         doc_id = doc["id"]
                         source_id = f"paperless:{doc_id}"
                         
-                        # Check if already indexed
+                        # Check if already indexed in RAG (belt-and-suspenders)
                         if self.rag._message_exists(source_id):
                             skipped += 1
+                            # Still tag it in Paperless if not tagged yet
+                            if processed_tag_id:
+                                self.client.add_tag_to_document(doc_id, processed_tag_id)
                             continue
                         
                         # Fetch full content
@@ -113,7 +171,9 @@ class DocumentSyncer:
                                 "chat_name": doc.get("title", f"Document {doc_id}"),
                                 "sender": doc.get("correspondent_name", "Unknown"),
                                 "timestamp": int(time.time()),
-                                "tags": ",".join([t["name"] for t in doc.get("tags", [])]),
+                                "tags": ",".join(
+                                    str(t) for t in doc.get("tags", [])
+                                ),
                                 "document_type": doc.get("document_type_name", ""),
                                 "created": doc.get("created", ""),
                                 "modified": doc.get("modified", ""),
@@ -125,6 +185,11 @@ class DocumentSyncer:
                         self.rag.add_node(node)
                         synced += 1
                         logger.info(f"Indexed: {doc.get('title', doc_id)}")
+                        
+                        # Tag the document in Paperless as processed
+                        if processed_tag_id:
+                            if self.client.add_tag_to_document(doc_id, processed_tag_id):
+                                tagged += 1
                         
                     except Exception as e:
                         logger.error(f"Error syncing document {doc.get('id')}: {e}")
@@ -140,12 +205,13 @@ class DocumentSyncer:
             
             logger.info(
                 f"Paperless sync complete: {synced} indexed, "
-                f"{skipped} skipped, {errors} errors"
+                f"{tagged} tagged, {skipped} skipped, {errors} errors"
             )
             
             return {
                 "status": "complete",
                 "synced": synced,
+                "tagged": tagged,
                 "skipped": skipped,
                 "errors": errors,
             }

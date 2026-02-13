@@ -541,7 +541,11 @@ def _select_input(item: dict) -> rx.Component:
 
 
 def _secret_input(item: dict) -> rx.Component:
-    """Password input for secret values with eye toggle and save button."""
+    """Password input for secret values with eye toggle and save button.
+
+    Shows a masked hint (e.g. 'sk-a...xyz') when a value is already saved,
+    so the user can tell a token is configured without revealing it.
+    """
     return rx.flex(
         rx.el.input(
             type=rx.cond(
@@ -549,7 +553,15 @@ def _secret_input(item: dict) -> rx.Component:
                 "text",
                 "password",
             ),
-            placeholder="Enter new value…",
+            placeholder=rx.cond(
+                item["value"] != "",
+                rx.cond(
+                    item["value"] == "****",
+                    "Value saved (too short to preview)",
+                    item["value"],
+                ),
+                "Enter new value…",
+            ),
             default_value="",
             on_change=AppState.set_pending_change(item["key"]),  # type: ignore[arg-type]
             class_name=_INPUT_CLASS + " flex-1",
