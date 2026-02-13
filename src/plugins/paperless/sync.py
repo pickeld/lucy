@@ -14,6 +14,12 @@ logger = logging.getLogger(__name__)
 # Default tag name applied to documents after RAG indexing
 DEFAULT_PROCESSED_TAG = "rag-indexed"
 
+# Maximum characters per chunk for embedding.
+# text-embedding-3-large has an 8191 token limit; ~4 chars/token gives ~30k chars.
+# We use a conservative 25k to leave headroom for metadata.
+MAX_CHUNK_CHARS = 25_000
+CHUNK_OVERLAP_CHARS = 500
+
 
 class DocumentSyncer:
     """Handles syncing documents from Paperless-NGX to RAG.
