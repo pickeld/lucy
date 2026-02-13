@@ -239,6 +239,20 @@ async def import_config(settings_data: dict[str, Any]) -> dict[str, Any]:
         return {"error": str(e)}
 
 
+async def fetch_secret_value(key: str) -> dict[str, Any]:
+    """Fetch the unmasked value of a single secret setting."""
+    try:
+        resp = await _get_client().get(f"/config/secret/{key}", timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            data = resp.json()
+            return {"error": data.get("error", f"HTTP {resp.status_code}")}
+    except Exception as e:
+        logger.error(f"Error fetching secret {key}: {e}")
+        return {"error": str(e)}
+
+
 # =========================================================================
 # PLUGINS — PAPERLESS
 # =========================================================================

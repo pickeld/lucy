@@ -543,27 +543,28 @@ def _select_input(item: dict) -> rx.Component:
 def _secret_input(item: dict) -> rx.Component:
     """Password input for secret values with eye toggle and save button.
 
-    Hidden by default — shows a masked placeholder when a value exists.
-    Clicking the eye toggle reveals the actual value in a text input.
+    Hidden by default — shows a masked value (e.g. ``sk-a...xyz``).
+    Clicking the eye toggle fetches and reveals the actual value.
     """
     is_revealed = AppState.revealed_secrets.contains(item["key"])
     has_value = item["value"] != ""
 
     return rx.flex(
-        # Revealed state: editable text input with actual value
+        # Revealed state: editable text input with unmasked value from API
         rx.cond(
             is_revealed,
             rx.el.input(
                 type="text",
                 placeholder="Enter new value…",
-                default_value=item["value"],
+                default_value=AppState.revealed_secret_values[item["key"]],
                 on_change=AppState.set_pending_change(item["key"]),  # type: ignore[arg-type]
                 class_name=_INPUT_CLASS + " flex-1",
             ),
-            # Hidden state: password input that doesn't expose the real value
+            # Hidden state: show masked value (e.g. "sk-a...xyz") as read-only display,
+            # with a separate editable field for entering new values
             rx.el.input(
                 type="password",
-                placeholder=rx.cond(has_value, "••••••••", "Enter new value…"),
+                placeholder=rx.cond(has_value, item["value"], "Enter new value…"),
                 on_change=AppState.set_pending_change(item["key"]),  # type: ignore[arg-type]
                 class_name=_INPUT_CLASS + " flex-1",
             ),

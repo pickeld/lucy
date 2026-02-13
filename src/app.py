@@ -564,6 +564,23 @@ def get_config():
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
+@app.route("/config/secret/<key>", methods=["GET"])
+def get_secret_value(key):
+    """Get the unmasked value of a single secret setting."""
+    try:
+        import settings_db
+        row = settings_db.get_setting_row(key)
+        if not row:
+            return jsonify({"error": "Setting not found"}), 404
+        if row["type"] != "secret":
+            return jsonify({"error": "Not a secret setting"}), 400
+        return jsonify({"key": key, "value": row["value"]}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Secret fetch error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
 @app.route("/config", methods=["PUT"])
 def update_config():
     """Update one or more settings."""

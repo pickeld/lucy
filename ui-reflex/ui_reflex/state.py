@@ -59,6 +59,7 @@ class AppState(rx.State):
 
     # --- Secret visibility ---
     revealed_secrets: list[str] = []  # Keys of secrets currently revealed
+    revealed_secret_values: dict[str, str] = {}  # key -> unmasked value
 
     # --- Paperless test state ---
     paperless_test_status: str = ""   # "", "testing", "success", "error"
@@ -503,14 +504,17 @@ class AppState(rx.State):
     # =====================================================================
 
     async def _load_settings(self):
-        # Fetch unmasked settings — the UI shows dots via type="password"
-        # and only reveals the full value when the eye toggle is clicked
-        self.all_settings = await api_client.fetch_config(unmask=True)
+        # Fetch masked settings — secrets show as "sk-a...xyz"
+        # Unmasked values are fetched on-demand when the user clicks reveal
+        self.all_settings = await api_client.fetch_config(unmask=False)
         self.config_meta = await api_client.fetch_config_meta()
         self.plugins_data = await api_client.fetch_plugins()
         self.rag_stats = await api_client.get_rag_stats()
         self.chat_list = await api_client.get_chat_list()
         self.sender_list = await api_client.get_sender_list()
+        # Clear revealed secrets so stale unmasked values don't persist
+        self.revealed_secrets = []
+        self.revealed_secret_values = {}
 
     async def save_setting(self, key: str, value: str):
         """Save a single setting."""
@@ -540,12 +544,26 @@ class AppState(rx.State):
 
     # ----- Secret visibility -----
 
-    def toggle_secret_visibility(self, key: str):
-        """Toggle visibility of a secret field."""
+    async def toggle_secret_visibility(self, key: str):
+        """Toggle visibility of a secret field.
+
+        When revealing, fetches the unmasked value from the API.
+        When hiding, removes the cached unmasked value.
+        """
         new_revealed = list(self.revealed_secrets)
         if key in new_revealed:
+            # Hide: remove from revealed list and clear cached value
             new_revealed.remove(key)
+            new_values = dict(self.revealed_secret_values)
+            new_values.pop(key, None)
+            self.revealed_secret_values = new_values
         else:
+            # Reveal: fetch unmasked value from API
+            result = await api_client.fetch_secret_value(key)
+            if "error" not in result:
+                new_values = dict(self.revealed_secret_values)
+                new_values[key] = result.get("value", "")
+                self.revealed_secret_values = new_values
             new_revealed.append(key)
         self.revealed_secrets = new_revealed
 
