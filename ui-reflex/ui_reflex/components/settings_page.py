@@ -329,6 +329,30 @@ def _plugins_tab() -> rx.Component:
                     AppState.active_plugin_settings,
                     _render_setting,
                 ),
+                # Paperless test connection button
+                rx.cond(
+                    AppState.active_plugin_tab_value == "paperless",
+                    rx.box(
+                        rx.button(
+                            rx.icon("wifi", size=14, class_name="mr-1"),
+                            "Test Connection",
+                            on_click=AppState.test_paperless_connection,
+                            loading=AppState.paperless_test_status == "testing",
+                            size="2",
+                            class_name="bg-blue-500 text-white hover:bg-blue-600",
+                        ),
+                        rx.cond(
+                            AppState.paperless_test_message != "",
+                            rx.text(
+                                AppState.paperless_test_message,
+                                class_name="text-sm mt-2",
+                            ),
+                            rx.fragment(),
+                        ),
+                        class_name="mt-4 pt-4 border-t border-gray-200",
+                    ),
+                    rx.fragment(),
+                ),
             ),
             rx.text(
                 "No plugin-specific settings found.",
@@ -517,40 +541,91 @@ def _select_input(item: dict) -> rx.Component:
 
 
 def _secret_input(item: dict) -> rx.Component:
-    """Password input for secret values.
-
-    Uses on_blur to save when the user tabs/clicks away.
-    """
-    return rx.el.input(
-        type="password",
-        placeholder="Enter new value…",
-        default_value="",
-        on_blur=AppState.save_setting(item["key"]),  # type: ignore[arg-type]
-        class_name=_INPUT_CLASS,
+    """Password input for secret values with eye toggle and save button."""
+    return rx.flex(
+        rx.el.input(
+            type=rx.cond(
+                AppState.revealed_secrets.contains(item["key"]),
+                "text",
+                "password",
+            ),
+            placeholder="Enter new value…",
+            default_value="",
+            on_change=AppState.set_pending_change(item["key"]),  # type: ignore[arg-type]
+            class_name=_INPUT_CLASS + " flex-1",
+        ),
+        rx.icon_button(
+            rx.cond(
+                AppState.revealed_secrets.contains(item["key"]),
+                rx.icon("eye-off", size=16),
+                rx.icon("eye", size=16),
+            ),
+            on_click=AppState.toggle_secret_visibility(item["key"]),
+            variant="ghost",
+            size="1",
+            class_name="text-gray-400 hover:text-gray-600 shrink-0",
+        ),
+        rx.cond(
+            AppState.pending_changes.contains(item["key"]),
+            rx.button(
+                rx.icon("save", size=14, class_name="mr-1"),
+                "Save",
+                on_click=AppState.save_pending_change(item["key"]),
+                size="1",
+                class_name="bg-green-500 text-white hover:bg-green-600 shrink-0",
+            ),
+            rx.fragment(),
+        ),
+        align="center",
+        gap="2",
     )
 
 
 def _text_input(item: dict) -> rx.Component:
-    """Text input for text, int, float types.
-
-    Uses on_blur to save when the user tabs/clicks away.
-    """
-    return rx.el.input(
-        type="text",
-        default_value=item["value"],
-        on_blur=AppState.save_setting(item["key"]),  # type: ignore[arg-type]
-        class_name=_INPUT_CLASS,
+    """Text input with explicit save button."""
+    return rx.flex(
+        rx.el.input(
+            type="text",
+            default_value=item["value"],
+            on_change=AppState.set_pending_change(item["key"]),  # type: ignore[arg-type]
+            class_name=_INPUT_CLASS + " flex-1",
+        ),
+        rx.cond(
+            AppState.pending_changes.contains(item["key"]),
+            rx.button(
+                rx.icon("save", size=14, class_name="mr-1"),
+                "Save",
+                on_click=AppState.save_pending_change(item["key"]),
+                size="1",
+                class_name="bg-green-500 text-white hover:bg-green-600 shrink-0",
+            ),
+            rx.fragment(),
+        ),
+        align="center",
+        gap="2",
     )
 
 
 def _textarea_input(item: dict) -> rx.Component:
-    """Textarea for long text values like system_prompt.
-
-    Uses on_blur to save when the user tabs/clicks away.
-    """
-    return rx.el.textarea(
-        default_value=item["value"],
-        rows=8,
-        on_blur=AppState.save_setting(item["key"]),  # type: ignore[arg-type]
-        class_name=_INPUT_CLASS + " resize-y",
+    """Textarea with explicit save button."""
+    return rx.flex(
+        rx.el.textarea(
+            default_value=item["value"],
+            rows=8,
+            on_change=AppState.set_pending_change(item["key"]),  # type: ignore[arg-type]
+            class_name=_INPUT_CLASS + " resize-y flex-1",
+        ),
+        rx.cond(
+            AppState.pending_changes.contains(item["key"]),
+            rx.button(
+                rx.icon("save", size=14, class_name="mr-1"),
+                "Save",
+                on_click=AppState.save_pending_change(item["key"]),
+                size="1",
+                class_name="bg-green-500 text-white hover:bg-green-600 shrink-0 self-start",
+            ),
+            rx.fragment(),
+        ),
+        align="start",
+        gap="2",
     )

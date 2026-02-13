@@ -54,6 +54,16 @@ class AppState(rx.State):
     plugins_data: dict[str, Any] = {}
     settings_save_message: str = ""
 
+    # --- Pending changes (explicit save) ---
+    pending_changes: dict[str, str] = {}  # key -> new_value
+
+    # --- Secret visibility ---
+    revealed_secrets: list[str] = []  # Keys of secrets currently revealed
+
+    # --- Paperless test state ---
+    paperless_test_status: str = ""   # "", "testing", "success", "error"
+    paperless_test_message: str = ""
+
     # --- Tab state ---
     settings_tab: str = "llm"  # Active main tab
     plugin_tab: str = ""       # Active plugin sub-tab (empty = first plugin)
@@ -508,6 +518,53 @@ class AppState(rx.State):
         else:
             self.settings_save_message = "✅ Saved"
         await self._load_settings()
+
+    # ----- Pending changes (explicit save button) -----
+
+    def set_pending_change(self, key: str, value: str):
+        """Track a pending change before explicit save."""
+        new_pending = dict(self.pending_changes)
+        new_pending[key] = value
+        self.pending_changes = new_pending
+
+    async def save_pending_change(self, key: str):
+        """Save a single pending change."""
+        if key in self.pending_changes:
+            value = self.pending_changes[key]
+            await self.save_setting(key, value)
+            new_pending = dict(self.pending_changes)
+            del new_pending[key]
+            self.pending_changes = new_pending
+
+    # ----- Secret visibility -----
+
+    def toggle_secret_visibility(self, key: str):
+        """Toggle visibility of a secret field."""
+        new_revealed = list(self.revealed_secrets)
+        if key in new_revealed:
+            new_revealed.remove(key)
+        else:
+            new_revealed.append(key)
+        self.revealed_secrets = new_revealed
+
+    # ----- Paperless test -----
+
+    async def test_paperless_connection(self):
+        """Test Paperless-NGX connection."""
+        self.paperless_test_status = "testing"
+        self.paperless_test_message = "Testing connection..."
+        yield
+
+        result = await api_client.test_paperless_connection()
+        if "error" in result:
+            self.paperless_test_status = "error"
+            self.paperless_test_message = f"❌ {result['error']}"
+        elif result.get("status") == "connected":
+            self.paperless_test_status = "success"
+            self.paperless_test_message = "✅ Connected successfully"
+        else:
+            self.paperless_test_status = "error"
+            self.paperless_test_message = "❌ Unexpected response"
 
     async def reset_category(self, category: str):
         """Reset a settings category to defaults."""
