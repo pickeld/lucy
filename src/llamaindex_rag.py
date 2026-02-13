@@ -831,31 +831,72 @@ class LlamaIndexRAG:
     FULLTEXT_SCORE_CHAT_NAME = float(settings.get("rag_fulltext_score_chat_name", "0.85"))
     FULLTEXT_SCORE_MESSAGE = float(settings.get("rag_fulltext_score_message", "0.75"))
     
+    @staticmethod
+    def _tokenize_query(query: str) -> List[str]:
+        """Tokenize a query into words for full-text search.
+        
+        Language-agnostic: splits on word boundaries and keeps tokens
+        ≥ 3 characters.  No hardcoded stop-word lists — Qdrant's
+        ``should`` (OR) filter handles the matching, so common words
+        simply produce more candidates without hurting precision (RRF
+        ranking takes care of relevance).
+        
+        Args:
+            query: The search query string
+            
+        Returns:
+            Deduplicated list of tokens (≥ 3 chars)
+        """
+        import re as _re
+        tokens = _re.findall(r"[\w]{3,}", query, _re.UNICODE)
+        # Deduplicate while preserving order
+        seen: set = set()
+        unique: List[str] = []
+        for t in tokens:
+            low = t.lower()
+            if low not in seen:
+                seen.add(low)
+                unique.append(t)
+        return unique
+    
     def _fulltext_search_by_field(
         self,
         field_name: str,
-        query: str,
+        tokens: List[str],
         score: float,
         k: int = 10,
         must_conditions: Optional[List] = None,
     ) -> List[NodeWithScore]:
-        """Search a single metadata field with full-text matching.
+        """Search a single metadata field using OR-matched tokens.
+        
+        Uses Qdrant's ``should`` filter so that a document matches if
+        it contains **any** of the given tokens in the specified field.
+        This avoids the AND-logic limitation of ``MatchText`` when the
+        full query string contains words absent from the indexed field.
         
         Args:
             field_name: Qdrant payload field to search (sender, chat_name, message)
-            query: Text to search for
+            tokens: List of keyword tokens to match (OR logic)
             score: Score to assign to matches from this field
             k: Max results
-            must_conditions: Additional filter conditions
+            must_conditions: Additional filter conditions (AND logic)
             
         Returns:
             List of NodeWithScore with the specified score
         """
+        if not tokens:
+            return []
+        
         try:
+            # Build OR conditions: match ANY of the tokens in this field
+            should_conditions = [
+                FieldCondition(key=field_name, match=MatchText(text=token))
+                for token in tokens
+            ]
+            
             qdrant_filter = Filter(
-                must=(must_conditions or []) + [
-                    FieldCondition(key=field_name, match=MatchText(text=query))
-                ]
+                must=must_conditions or None,
+                should=should_conditions,
             )
             
             results, _ = self.qdrant_client.scroll(
@@ -893,9 +934,16 @@ class LlamaIndexRAG:
     ) -> List[NodeWithScore]:
         """Perform field-aware full-text search on metadata fields.
         
-        Runs separate queries per field (sender, chat_name, message) with
-        different scores to prioritize sender matches over message content
-        matches. Results are deduplicated by node ID, keeping the highest score.
+        Tokenizes the query into words (≥ 3 chars) and searches each
+        metadata field using Qdrant ``should`` (OR) conditions — a
+        document matches if it contains **any** of the query tokens in
+        the searched field.  This is language-agnostic and requires no
+        hardcoded stop-word lists.
+        
+        Runs one query per field (sender, chat_name, message) with
+        different scores to prioritize sender matches over message
+        content matches.  Results are deduplicated by node ID, keeping
+        the highest score.
         
         Args:
             query: Text to search for
@@ -907,7 +955,15 @@ class LlamaIndexRAG:
             List of matching NodeWithScore objects with field-aware scores
         """
         try:
-            # Build common filter conditions
+            # Tokenize query into words ≥ 3 chars (language-agnostic)
+            tokens = self._tokenize_query(query)
+            if not tokens:
+                logger.debug("No tokens extracted from query, skipping fulltext search")
+                return []
+            
+            logger.debug(f"Fulltext tokens: {tokens} (from: {query[:60]})")
+            
+            # Build common filter conditions (AND logic)
             must_conditions: List = []
             
             if filter_chat_name:
@@ -921,7 +977,7 @@ class LlamaIndexRAG:
                     FieldCondition(key="timestamp", range=Range(gte=min_timestamp))
                 )
             
-            # Search each field separately with different scores
+            # Search each field with OR-matched tokens, different scores
             field_searches = [
                 ("sender", self.FULLTEXT_SCORE_SENDER),
                 ("chat_name", self.FULLTEXT_SCORE_CHAT_NAME),
@@ -935,7 +991,7 @@ class LlamaIndexRAG:
             for field_name, field_score in field_searches:
                 results = self._fulltext_search_by_field(
                     field_name=field_name,
-                    query=query,
+                    tokens=tokens,
                     score=field_score,
                     k=k,
                     must_conditions=must_conditions if must_conditions else None,
