@@ -44,6 +44,7 @@ def settings_page() -> rx.Component:
                     rx.tabs.trigger("🔌 Plugins", value="plugins"),
                     rx.tabs.trigger("🏗️ Infra", value="infra"),
                     rx.tabs.trigger("🔧 App", value="app"),
+                    rx.tabs.trigger("💰 Costs", value="costs"),
                     size="2",
                 ),
                 rx.tabs.content(_llm_tab(), value="llm", class_name="pt-4"),
@@ -52,6 +53,7 @@ def settings_page() -> rx.Component:
                 rx.tabs.content(_plugins_tab(), value="plugins", class_name="pt-4"),
                 rx.tabs.content(_infra_tab(), value="infra", class_name="pt-4"),
                 rx.tabs.content(_app_tab(), value="app", class_name="pt-4"),
+                rx.tabs.content(_costs_tab(), value="costs", class_name="pt-4"),
                 default_value="llm",
                 class_name="mt-4",
             ),
@@ -239,7 +241,7 @@ def _rag_stats_section() -> rx.Component:
         rx.grid(
             rx.box(
                 rx.text(
-                    "Total Documents",
+                    "Total Vectors",
                     class_name="text-xs text-gray-400 uppercase tracking-wider",
                 ),
                 rx.text(
@@ -250,12 +252,46 @@ def _rag_stats_section() -> rx.Component:
             ),
             rx.box(
                 rx.text(
+                    "WhatsApp Messages",
+                    class_name="text-xs text-gray-400 uppercase tracking-wider",
+                ),
+                rx.flex(
+                    rx.icon("message-circle", size=18, class_name="text-green-500"),
+                    rx.text(
+                        AppState.rag_whatsapp_count,
+                        class_name="text-2xl font-semibold text-gray-800",
+                    ),
+                    align="center",
+                    gap="2",
+                    class_name="mt-1",
+                ),
+                class_name="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3",
+            ),
+            rx.box(
+                rx.text(
+                    "Documents",
+                    class_name="text-xs text-gray-400 uppercase tracking-wider",
+                ),
+                rx.flex(
+                    rx.icon("file-text", size=18, class_name="text-blue-500"),
+                    rx.text(
+                        AppState.rag_document_count,
+                        class_name="text-2xl font-semibold text-gray-800",
+                    ),
+                    align="center",
+                    gap="2",
+                    class_name="mt-1",
+                ),
+                class_name="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3",
+            ),
+            rx.box(
+                rx.text(
                     "Collection",
                     class_name="text-xs text-gray-400 uppercase tracking-wider",
                 ),
                 rx.text(
                     AppState.rag_collection_name,
-                    class_name="text-2xl font-semibold text-gray-800 mt-1",
+                    class_name="text-lg font-semibold text-gray-800 mt-1",
                 ),
                 class_name="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3",
             ),
@@ -329,22 +365,42 @@ def _plugins_tab() -> rx.Component:
                     AppState.active_plugin_settings,
                     _render_setting,
                 ),
-                # Paperless test connection button
+                # Paperless actions (test connection + sync)
                 rx.cond(
                     AppState.active_plugin_tab_value == "paperless",
                     rx.box(
-                        rx.button(
-                            rx.icon("wifi", size=14, class_name="mr-1"),
-                            "Test Connection",
-                            on_click=AppState.test_paperless_connection,
-                            loading=AppState.paperless_test_status == "testing",
-                            size="2",
-                            class_name="bg-blue-500 text-white hover:bg-blue-600",
+                        rx.flex(
+                            rx.button(
+                                rx.icon("wifi", size=14, class_name="mr-1"),
+                                "Test Connection",
+                                on_click=AppState.test_paperless_connection,
+                                loading=AppState.paperless_test_status == "testing",
+                                size="2",
+                                class_name="bg-blue-500 text-white hover:bg-blue-600",
+                            ),
+                            rx.button(
+                                rx.icon("refresh-cw", size=14, class_name="mr-1"),
+                                "Start Sync",
+                                on_click=AppState.start_paperless_sync,
+                                loading=AppState.paperless_sync_status == "syncing",
+                                size="2",
+                                class_name="bg-green-500 text-white hover:bg-green-600",
+                            ),
+                            gap="3",
+                            align="center",
                         ),
                         rx.cond(
                             AppState.paperless_test_message != "",
                             rx.text(
                                 AppState.paperless_test_message,
+                                class_name="text-sm mt-2",
+                            ),
+                            rx.fragment(),
+                        ),
+                        rx.cond(
+                            AppState.paperless_sync_message != "",
+                            rx.text(
+                                AppState.paperless_sync_message,
                                 class_name="text-sm mt-2",
                             ),
                             rx.fragment(),
@@ -541,22 +597,37 @@ def _select_input(item: dict) -> rx.Component:
 
 
 def _secret_input(item: dict) -> rx.Component:
-    """Password input for secret values with eye toggle and save button."""
+    """Password input for secret values with eye toggle and save button.
+
+    Hidden by default — shows a masked value (e.g. ``sk-a...xyz``).
+    Clicking the eye toggle fetches and reveals the actual value.
+    """
+    is_revealed = AppState.revealed_secrets.contains(item["key"])
+    has_value = item["value"] != ""
+
     return rx.flex(
-        rx.el.input(
-            type=rx.cond(
-                AppState.revealed_secrets.contains(item["key"]),
-                "text",
-                "password",
+        # Revealed state: editable text input with unmasked value from API
+        rx.cond(
+            is_revealed,
+            rx.el.input(
+                type="text",
+                placeholder="Enter new value…",
+                default_value=AppState.revealed_secret_values[item["key"]],
+                on_change=AppState.set_pending_change(item["key"]),  # type: ignore[arg-type]
+                class_name=_INPUT_CLASS + " flex-1",
             ),
-            placeholder="Enter new value…",
-            default_value="",
-            on_change=AppState.set_pending_change(item["key"]),  # type: ignore[arg-type]
-            class_name=_INPUT_CLASS + " flex-1",
+            # Hidden state: show masked value (e.g. "sk-a...xyz") as read-only display,
+            # with a separate editable field for entering new values
+            rx.el.input(
+                type="password",
+                placeholder=rx.cond(has_value, item["value"], "Enter new value…"),
+                on_change=AppState.set_pending_change(item["key"]),  # type: ignore[arg-type]
+                class_name=_INPUT_CLASS + " flex-1",
+            ),
         ),
         rx.icon_button(
             rx.cond(
-                AppState.revealed_secrets.contains(item["key"]),
+                is_revealed,
                 rx.icon("eye-off", size=16),
                 rx.icon("eye", size=16),
             ),
@@ -629,3 +700,14 @@ def _textarea_input(item: dict) -> rx.Component:
         align="start",
         gap="2",
     )
+
+
+# =========================================================================
+# COSTS TAB
+# =========================================================================
+
+
+def _costs_tab() -> rx.Component:
+    """Cost tracking dashboard tab."""
+    from .cost_display import cost_dashboard
+    return cost_dashboard()

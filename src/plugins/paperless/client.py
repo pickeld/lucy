@@ -27,30 +27,44 @@ class PaperlessClient:
         self.session.headers.update(self.headers)
     
     def test_connection(self) -> bool:
-        """Test API connectivity.
+        """Test API connectivity with authentication validation.
+        
+        Uses /api/documents/?page_size=1 which requires a valid token,
+        unlike /api/ which returns 200 even without authentication.
         
         Returns:
-            True if connection successful
+            True if connection and authentication successful
         """
         try:
-            resp = self.session.get(f"{self.base_url}/api/", timeout=5)
+            resp = self.session.get(
+                f"{self.base_url}/api/documents/",
+                params={"page_size": 1},
+                timeout=5,
+            )
             return resp.status_code == 200
         except Exception as e:
             logger.error(f"Paperless connection test failed: {e}")
             return False
     
+    # -------------------------------------------------------------------------
+    # Documents
+    # -------------------------------------------------------------------------
+    
     def get_documents(
         self,
         page: int = 1,
         page_size: int = 50,
-        tags: Optional[List[str]] = None,
+        tags: Optional[List[int]] = None,
+        exclude_tags: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
         """Fetch document list with pagination.
         
         Args:
             page: Page number (1-indexed)
             page_size: Results per page
-            tags: Optional list of tag names to filter by
+            tags: Optional list of tag **IDs** to filter by (include —
+                documents must have ALL listed tags)
+            exclude_tags: Optional list of tag IDs to exclude
             
         Returns:
             API response with 'results', 'count', 'next', 'previous' keys
@@ -58,8 +72,12 @@ class PaperlessClient:
         params: Dict[str, Any] = {"page": page, "page_size": page_size}
         
         if tags:
-            # Build tags__name__in filter
-            params["tags__name__in"] = ",".join(tags)
+            # tags__id__all = documents must have ALL of these tag IDs
+            params["tags__id__all"] = ",".join(str(t) for t in tags)
+        
+        if exclude_tags:
+            # Exclude documents that have any of these tag IDs
+            params["tags__id__none"] = ",".join(str(t) for t in exclude_tags)
         
         resp = self.session.get(
             f"{self.base_url}/api/documents/",
@@ -101,3 +119,223 @@ class PaperlessClient:
         )
         resp.raise_for_status()
         return resp.json()
+    
+    def add_tag_to_document(self, doc_id: int, tag_id: int) -> bool:
+        """Add a tag to a document using the bulk_edit endpoint.
+        
+        Uses the ``/api/documents/bulk_edit/`` endpoint with the
+        ``modify_tags`` method, which is more reliable than PATCH
+        because it doesn't require sending the full document payload
+        and avoids validation issues with other document fields.
+        
+        Args:
+            doc_id: Document ID
+            tag_id: Tag ID to add
+            
+        Returns:
+            True if successful
+        """
+        try:
+            resp = self.session.post(
+                f"{self.base_url}/api/documents/bulk_edit/",
+                json={
+                    "documents": [doc_id],
+                    "method": "modify_tags",
+                    "parameters": {
+                        "add_tags": [tag_id],
+                        "remove_tags": [],
+                    },
+                },
+                timeout=10,
+            )
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add tag {tag_id} to document {doc_id}: {e}")
+            return False
+    
+    def remove_tag_from_all_documents(self, tag_id: int) -> int:
+        """Remove a tag from ALL documents that have it.
+        
+        Fetches all documents with the given tag and removes it in bulk.
+        Useful for re-ingestion workflows where the processed tag needs
+        to be cleared.
+        
+        Args:
+            tag_id: Tag ID to remove
+            
+        Returns:
+            Number of documents the tag was removed from
+        """
+        doc_ids: List[int] = []
+        page = 1
+        
+        # Collect all document IDs that have this tag
+        while True:
+            try:
+                resp = self.session.get(
+                    f"{self.base_url}/api/documents/",
+                    params={
+                        "tags__id__all": str(tag_id),
+                        "page": page,
+                        "page_size": 100,
+                    },
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                results = data.get("results", [])
+                doc_ids.extend(d["id"] for d in results)
+                
+                if not data.get("next"):
+                    break
+                page += 1
+            except Exception as e:
+                logger.error(f"Failed to fetch documents with tag {tag_id}: {e}")
+                break
+        
+        if not doc_ids:
+            logger.info(f"No documents found with tag {tag_id}")
+            return 0
+        
+        # Remove the tag from all collected documents in one bulk call
+        try:
+            resp = self.session.post(
+                f"{self.base_url}/api/documents/bulk_edit/",
+                json={
+                    "documents": doc_ids,
+                    "method": "modify_tags",
+                    "parameters": {
+                        "add_tags": [],
+                        "remove_tags": [tag_id],
+                    },
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            logger.info(f"Removed tag {tag_id} from {len(doc_ids)} documents")
+            return len(doc_ids)
+        except Exception as e:
+            logger.error(f"Failed to bulk-remove tag {tag_id}: {e}")
+            return 0
+    
+    # -------------------------------------------------------------------------
+    # Correspondents
+    # -------------------------------------------------------------------------
+    
+    def get_correspondents(self) -> Dict[int, str]:
+        """Fetch all correspondents and return as id→name mapping.
+        
+        Fetches all pages of correspondents from the Paperless API.
+        
+        Returns:
+            Dict mapping correspondent ID to name
+        """
+        mapping: Dict[int, str] = {}
+        page = 1
+        while True:
+            try:
+                resp = self.session.get(
+                    f"{self.base_url}/api/correspondents/",
+                    params={"page": page, "page_size": 100},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                for item in data.get("results", []):
+                    mapping[item["id"]] = item["name"]
+                if not data.get("next"):
+                    break
+                page += 1
+            except Exception as e:
+                logger.error(f"Failed to fetch correspondents (page {page}): {e}")
+                break
+        return mapping
+    
+    # -------------------------------------------------------------------------
+    # Tags
+    # -------------------------------------------------------------------------
+    
+    def get_tags(self) -> List[Dict[str, Any]]:
+        """Fetch all tags.
+        
+        Returns:
+            List of tag dicts with 'id', 'name', etc.
+        """
+        try:
+            resp = self.session.get(
+                f"{self.base_url}/api/tags/",
+                params={"page_size": 1000},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            return resp.json().get("results", [])
+        except Exception as e:
+            logger.error(f"Failed to fetch tags: {e}")
+            return []
+    
+    def get_tag_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        """Find a tag by its exact name.
+        
+        Args:
+            name: Tag name to search for
+            
+        Returns:
+            Tag dict if found, None otherwise
+        """
+        try:
+            resp = self.session.get(
+                f"{self.base_url}/api/tags/",
+                params={"name__iexact": name},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
+            return results[0] if results else None
+        except Exception as e:
+            logger.error(f"Failed to search for tag '{name}': {e}")
+            return None
+    
+    def create_tag(self, name: str, color: str = "#a6cee3") -> Optional[Dict[str, Any]]:
+        """Create a new tag.
+        
+        Args:
+            name: Tag name
+            color: Tag color in hex format (default: light blue)
+            
+        Returns:
+            Created tag dict, or None on failure
+        """
+        try:
+            resp = self.session.post(
+                f"{self.base_url}/api/tags/",
+                json={"name": name, "color": color},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            tag = resp.json()
+            logger.info(f"Created Paperless tag: '{name}' (id={tag.get('id')})")
+            return tag
+        except Exception as e:
+            logger.error(f"Failed to create tag '{name}': {e}")
+            return None
+    
+    def get_or_create_tag(self, name: str, color: str = "#a6cee3") -> Optional[int]:
+        """Get a tag ID by name, creating it if it doesn't exist.
+        
+        Args:
+            name: Tag name
+            color: Tag color for creation (default: light blue)
+            
+        Returns:
+            Tag ID, or None on failure
+        """
+        existing = self.get_tag_by_name(name)
+        if existing:
+            return existing["id"]
+        
+        created = self.create_tag(name, color)
+        if created:
+            return created["id"]
+        
+        return None

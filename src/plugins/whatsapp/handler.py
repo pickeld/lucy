@@ -416,6 +416,7 @@ class ImageMessage(MediaMessageBase):
         Sends the base64-encoded image to GPT-4 Vision for analysis.
         On success, sets self.description and appends it to self.message
         so the description is indexed in RAG for semantic search.
+        Also tracks the API cost via the CostMeter.
         """
         try:
             from openai import OpenAI
@@ -425,8 +426,9 @@ class ImageMessage(MediaMessageBase):
             # Build the image URL for the API (data URI with base64)
             image_url = f"data:{self.media_type};base64,{self.media_base64}"
             
+            model = settings.get("openai_model", "gpt-4o")
             response = client.chat.completions.create(
-                model=settings.get("openai_model", "gpt-4o"),
+                model=model,
                 messages=[
                     {
                         "role": "user",
@@ -452,6 +454,24 @@ class ImageMessage(MediaMessageBase):
                 ],
                 max_tokens=250,
             )
+            
+            # Track cost from usage metadata
+            try:
+                from cost_meter import METER
+                usage = response.usage
+                if usage:
+                    in_t = usage.prompt_tokens or 0
+                    out_t = usage.completion_tokens or 0
+                    actual_model = getattr(response, "model", model) or model
+                    METER.record_chat(
+                        provider="openai",
+                        model=actual_model,
+                        in_tokens=in_t,
+                        out_tokens=out_t,
+                        request_context="image_describe",
+                    )
+            except Exception:
+                pass  # Non-fatal: cost tracking failure shouldn't break image description
             
             self.description = response.choices[0].message.content
             if self.description:
@@ -513,6 +533,7 @@ class VoiceMessage(MediaMessageBase):
         Decodes the base64 audio, writes to a temp file, and sends to
         the Whisper API for transcription. On success, sets both
         self.transcription and self.message so the text is indexed in RAG.
+        Also tracks the API cost via the CostMeter (Whisper is priced per minute).
         """
         import tempfile
         
@@ -546,6 +567,19 @@ class VoiceMessage(MediaMessageBase):
                         model="whisper-1",
                         file=audio_file,
                     )
+                
+                # Track cost: Whisper is priced per minute of audio
+                # Estimate duration from file size (~16KB/s for OGG at typical bitrate)
+                try:
+                    from cost_meter import METER
+                    duration_estimate = max(1.0, len(audio_bytes) / 16000.0)
+                    METER.record_whisper(
+                        duration_seconds=duration_estimate,
+                        model="whisper-1",
+                        request_context="transcribe",
+                    )
+                except Exception:
+                    pass  # Non-fatal
                 
                 self.transcription = result.text
                 # Set message so it gets stored in RAG

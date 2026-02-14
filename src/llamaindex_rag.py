@@ -207,13 +207,16 @@ class LlamaIndexRAG:
         logger.info(f"LlamaIndex RAG initialized with Qdrant at {self.qdrant_host}:{self.qdrant_port}")
     
     def _configure_embedding(self):
-        """Configure embedding model (fast, required at startup).
+        """Configure embedding model and cost tracking callback (fast, required at startup).
         
         Uses text-embedding-3-large with dimensions=1024 for best multilingual
         (Hebrew + English) support. The 'large' model significantly outperforms
         'small' on non-English languages. Using 1024 dimensions (reduced from
         native 3072) provides an excellent quality/cost tradeoff — OpenAI's
         Matryoshka representation learning ensures minimal quality loss.
+        
+        Also sets up the LlamaIndex CallbackManager with a CostTrackingHandler
+        to automatically track token usage and costs for all LLM and embedding calls.
         
         Reads model name from settings.embedding_model for configurability.
         """
@@ -225,6 +228,26 @@ class LlamaIndexRAG:
             dimensions=self.VECTOR_SIZE,
         )
         logger.debug(f"OpenAI embedding model configured ({model_name}, dims={self.VECTOR_SIZE})")
+        
+        # Set up cost tracking callback manager
+        try:
+            from cost_callbacks import create_cost_callback_manager
+            
+            llm_provider = settings.get("llm_provider", "openai").lower()
+            llm_model = (
+                settings.get("gemini_model", "gemini-pro")
+                if llm_provider == "gemini"
+                else settings.get("openai_model", "gpt-4o")
+            )
+            Settings.callback_manager = create_cost_callback_manager(
+                llm_provider=llm_provider,
+                llm_model=llm_model,
+                embed_provider="openai",
+                embed_model=model_name,
+            )
+            logger.info("Cost tracking callback manager configured")
+        except Exception as e:
+            logger.warning(f"Cost tracking setup failed (non-fatal): {e}")
     
     def _ensure_llm_configured(self):
         """Lazily configure LLM on first use (Gemini import is slow)."""
@@ -234,29 +257,45 @@ class LlamaIndexRAG:
         llm_provider = settings.llm_provider.lower()
         logger.info(f"Configuring LLM provider: {llm_provider} (lazy init)...")
         
+        actual_model = ""
         if llm_provider == 'gemini':
             try:
                 from llama_index.llms.gemini import Gemini
+                actual_model = settings.gemini_model
                 Settings.llm = Gemini(
                     api_key=settings.google_api_key,
-                    model=settings.gemini_model,
+                    model=actual_model,
                     temperature=0.3
                 )
                 logger.info("Gemini LLM configured")
             except ImportError:
                 logger.warning("Gemini LLM not available, falling back to OpenAI")
+                llm_provider = "openai"
+                actual_model = settings.openai_model
                 Settings.llm = LlamaIndexOpenAI(
                     api_key=settings.openai_api_key,
-                    model=settings.openai_model,
+                    model=actual_model,
                     temperature=0.3
                 )
         else:
+            actual_model = settings.openai_model
             Settings.llm = LlamaIndexOpenAI(
                 api_key=settings.openai_api_key,
-                model=settings.openai_model,
+                model=actual_model,
                 temperature=0.3
             )
             logger.info("OpenAI LLM configured")
+        
+        # Update cost tracking handler with actual provider/model
+        try:
+            from cost_callbacks import get_cost_handler
+            handler = get_cost_handler()
+            if handler:
+                handler.llm_provider = llm_provider
+                handler.llm_model = actual_model
+                logger.debug(f"Cost handler updated: LLM={llm_provider}:{actual_model}")
+        except Exception:
+            pass  # Non-fatal
         
         self._llm_configured = True
     
@@ -651,8 +690,19 @@ class LlamaIndexRAG:
             logger.error(f"Failed to add message to vector store: {e}")
             return False
     
+    # Safety limit for embedding: truncate text to this many chars before
+    # sending to the embedding API.  Covers worst-case tokenisation
+    # (base64/HTML ≈ 1 char/token).  8191 token limit → 7000 char safety.
+    EMBEDDING_MAX_CHARS = 7_000
+
     def add_node(self, node: TextNode) -> bool:
         """Add a pre-constructed TextNode to the vector store.
+        
+        If the node text exceeds EMBEDDING_MAX_CHARS it is truncated to
+        avoid hitting the embedding model's token limit (8191 for
+        text-embedding-3-large).  A first attempt is made with the full
+        text; on a 400 "maximum context length" error the text is
+        truncated and retried once.
         
         Args:
             node: LlamaIndex TextNode to add
@@ -665,6 +715,21 @@ class LlamaIndexRAG:
             logger.debug(f"Added node to RAG: {node.text[:50]}...")
             return True
         except Exception as e:
+            error_str = str(e)
+            # Detect embedding token-limit errors and retry with truncated text
+            if "maximum context length" in error_str and len(node.text) > self.EMBEDDING_MAX_CHARS:
+                logger.warning(
+                    f"Node text too long for embedding ({len(node.text)} chars), "
+                    f"truncating to {self.EMBEDDING_MAX_CHARS} chars and retrying"
+                )
+                try:
+                    node.text = node.text[:self.EMBEDDING_MAX_CHARS]
+                    self.index.insert_nodes([node])
+                    logger.debug(f"Added truncated node to RAG: {node.text[:50]}...")
+                    return True
+                except Exception as retry_err:
+                    logger.error(f"Failed to add truncated node: {retry_err}")
+                    return False
             logger.error(f"Failed to add node to vector store: {e}")
             return False
     
@@ -751,37 +816,225 @@ class LlamaIndexRAG:
             logger.error(f"Failed to add documents to vector store: {e}")
             return 0
     
+    @staticmethod
+    def _extract_text_from_payload(payload: Dict[str, Any]) -> Optional[str]:
+        """Extract display text from a Qdrant point payload.
+        
+        Handles both WhatsApp messages (which have a 'message' metadata field)
+        and Paperless/other documents (which store text only in LlamaIndex's
+        internal '_node_content' JSON blob).
+        
+        Priority:
+        1. Reconstruct from 'message' metadata (WhatsApp-style)
+        2. Extract from '_node_content' JSON (Paperless/generic documents)
+        
+        Args:
+            payload: Qdrant point payload dict
+            
+        Returns:
+            Extracted text string, or None if no text could be found
+        """
+        chat_name = payload.get("chat_name", "Unknown")
+        sender = payload.get("sender", "Unknown")
+        message = payload.get("message", "")
+        timestamp = payload.get("timestamp", 0)
+        source = payload.get("source", "")
+        
+        # WhatsApp messages have a 'message' field in metadata
+        if message:
+            formatted_time = format_timestamp(str(timestamp))
+            return f"[{formatted_time}] {sender} in {chat_name}: {message}"
+        
+        # Paperless/generic documents: extract text from _node_content
+        node_content = payload.get("_node_content")
+        if node_content and isinstance(node_content, str):
+            try:
+                content_dict = json.loads(node_content)
+                text = content_dict.get("text")
+                if text:
+                    # For documents, prefix with title/source info for context
+                    if source == "paperless":
+                        formatted_time = format_timestamp(str(timestamp))
+                        # Truncate very long document text for display
+                        display_text = text[:2000] if len(text) > 2000 else text
+                        if sender:
+                            return f"[{formatted_time}] {sender} in {chat_name}:\n{display_text}"
+                        return f"[{formatted_time}] Document '{chat_name}':\n{display_text}"
+                    return text
+            except (json.JSONDecodeError, TypeError):
+                pass
+        
+        return None
+    
     # Field-aware full-text search scores: sender matches are most valuable
     # because users often ask "what did X say about Y?"
     FULLTEXT_SCORE_SENDER = float(settings.get("rag_fulltext_score_sender", "0.95"))
     FULLTEXT_SCORE_CHAT_NAME = float(settings.get("rag_fulltext_score_chat_name", "0.85"))
     FULLTEXT_SCORE_MESSAGE = float(settings.get("rag_fulltext_score_message", "0.75"))
     
+    # Common Hebrew prefixes (prepositions, conjunctions, articles)
+    # that are attached to words: ה (the), ב (in), ל (to), מ (from),
+    # ש (that), כ (like), ו (and).  Stripping these helps match
+    # inflected forms against stored text.
+    _HEBREW_PREFIXES = "הבלמשכו"
+    
+    @staticmethod
+    def _expand_hebrew_tokens(tokens: List[str]) -> List[str]:
+        """Expand Hebrew tokens by stripping prefixes and verb patterns.
+        
+        Hebrew is a morphologically rich language where prefixes (ה, ב, ל, מ, ש, כ, ו)
+        attach directly to words, and verb conjugations change the word form significantly.
+        For example:
+        - "התגרשתי" (I got divorced) → root "גרש" → also matches "גירושין" (divorce)
+        - "שהתגרשתי" → strip ש prefix → "התגרשתי" → root "גרש"
+        
+        This method generates additional search tokens from Hebrew morphological
+        variants to improve full-text search recall without requiring a full
+        Hebrew NLP library.
+        
+        Args:
+            tokens: Original query tokens
+            
+        Returns:
+            Expanded list of tokens (originals + morphological variants)
+        """
+        import re as _re
+        expanded: List[str] = []
+        seen: set = set()
+        
+        for token in tokens:
+            low = token.lower()
+            if low in seen:
+                continue
+            seen.add(low)
+            expanded.append(token)
+            
+            # Only expand Hebrew tokens (contain Hebrew characters)
+            if not _re.search(r'[\u0590-\u05FF]', token):
+                continue
+            
+            # Strip common Hebrew prefixes (one or two prefix letters)
+            word = token
+            for _ in range(2):  # Strip up to 2 prefix letters
+                if len(word) > 3 and word[0] in LlamaIndexRAG._HEBREW_PREFIXES:
+                    stripped = word[1:]
+                    if stripped.lower() not in seen and len(stripped) >= 3:
+                        seen.add(stripped.lower())
+                        expanded.append(stripped)
+                    word = stripped
+                else:
+                    break
+            
+            # Hebrew Hitpael verb pattern: הת + root (e.g., התגרשתי → גרש)
+            # Strip הת prefix and common suffixes (תי, נו, תם, תן, ת, ה, ו, י)
+            if len(token) >= 5 and token[:2] == "הת":
+                base = token[2:]
+                # Strip verb conjugation suffixes
+                for suffix in ["תי", "נו", "תם", "תן", "ת", "ה", "ו", "י"]:
+                    if len(base) > 3 and base.endswith(suffix):
+                        root = base[:-len(suffix)]
+                        if len(root) >= 2 and root.lower() not in seen:
+                            seen.add(root.lower())
+                            expanded.append(root)
+                        break
+                # Also add the base without הת prefix
+                if base.lower() not in seen and len(base) >= 3:
+                    seen.add(base.lower())
+                    expanded.append(base)
+            
+            # Hebrew Piel/Pual patterns with י/ו infix: e.g., גירושין → גרש
+            # Try removing common Hebrew noun suffixes (ין, ים, ות, ה)
+            for suffix in ["ושין", "ושים", "ין", "ים", "ות", "ה"]:
+                if len(token) > len(suffix) + 2 and token.endswith(suffix):
+                    stem = token[:-len(suffix)]
+                    if len(stem) >= 2 and stem.lower() not in seen:
+                        seen.add(stem.lower())
+                        expanded.append(stem)
+            
+            # Strip common verb suffixes from the original token
+            for suffix in ["תי", "נו", "תם", "תן", "ת", "ה"]:
+                if len(token) > len(suffix) + 2 and token.endswith(suffix):
+                    stem = token[:-len(suffix)]
+                    if len(stem) >= 3 and stem.lower() not in seen:
+                        seen.add(stem.lower())
+                        expanded.append(stem)
+                    break
+        
+        return expanded
+    
+    @staticmethod
+    def _tokenize_query(query: str) -> List[str]:
+        """Tokenize a query into words for full-text search.
+        
+        Language-agnostic: splits on word boundaries and keeps tokens
+        ≥ 3 characters.  No hardcoded stop-word lists — Qdrant's
+        ``should`` (OR) filter handles the matching, so common words
+        simply produce more candidates without hurting precision (RRF
+        ranking takes care of relevance).
+        
+        For Hebrew tokens, also generates morphological variants by
+        stripping prefixes and verb conjugation patterns to improve
+        recall across different word forms.
+        
+        Args:
+            query: The search query string
+            
+        Returns:
+            Deduplicated list of tokens (≥ 3 chars) with Hebrew expansions
+        """
+        import re as _re
+        tokens = _re.findall(r"[\w]{3,}", query, _re.UNICODE)
+        # Deduplicate while preserving order
+        seen: set = set()
+        unique: List[str] = []
+        for t in tokens:
+            low = t.lower()
+            if low not in seen:
+                seen.add(low)
+                unique.append(t)
+        
+        # Expand Hebrew tokens with morphological variants
+        expanded = LlamaIndexRAG._expand_hebrew_tokens(unique)
+        return expanded
+    
     def _fulltext_search_by_field(
         self,
         field_name: str,
-        query: str,
+        tokens: List[str],
         score: float,
         k: int = 10,
         must_conditions: Optional[List] = None,
     ) -> List[NodeWithScore]:
-        """Search a single metadata field with full-text matching.
+        """Search a single metadata field using OR-matched tokens.
+        
+        Uses Qdrant's ``should`` filter so that a document matches if
+        it contains **any** of the given tokens in the specified field.
+        This avoids the AND-logic limitation of ``MatchText`` when the
+        full query string contains words absent from the indexed field.
         
         Args:
             field_name: Qdrant payload field to search (sender, chat_name, message)
-            query: Text to search for
+            tokens: List of keyword tokens to match (OR logic)
             score: Score to assign to matches from this field
             k: Max results
-            must_conditions: Additional filter conditions
+            must_conditions: Additional filter conditions (AND logic)
             
         Returns:
             List of NodeWithScore with the specified score
         """
+        if not tokens:
+            return []
+        
         try:
+            # Build OR conditions: match ANY of the tokens in this field
+            should_conditions = [
+                FieldCondition(key=field_name, match=MatchText(text=token))
+                for token in tokens
+            ]
+            
             qdrant_filter = Filter(
-                must=(must_conditions or []) + [
-                    FieldCondition(key=field_name, match=MatchText(text=query))
-                ]
+                must=must_conditions or None,
+                should=should_conditions,
             )
             
             results, _ = self.qdrant_client.scroll(
@@ -795,14 +1048,9 @@ class LlamaIndexRAG:
             nodes = []
             for record in results:
                 payload = record.payload or {}
-                chat_name = payload.get("chat_name", "Unknown")
-                sender = payload.get("sender", "Unknown")
-                message = payload.get("message", "")
-                timestamp = payload.get("timestamp", 0)
+                text = self._extract_text_from_payload(payload)
                 
-                if message:
-                    formatted_time = format_timestamp(str(timestamp))
-                    text = f"[{formatted_time}] {sender} in {chat_name}: {message}"
+                if text:
                     node = TextNode(
                         text=text,
                         metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
@@ -824,9 +1072,16 @@ class LlamaIndexRAG:
     ) -> List[NodeWithScore]:
         """Perform field-aware full-text search on metadata fields.
         
-        Runs separate queries per field (sender, chat_name, message) with
-        different scores to prioritize sender matches over message content
-        matches. Results are deduplicated by node ID, keeping the highest score.
+        Tokenizes the query into words (≥ 3 chars) and searches each
+        metadata field using Qdrant ``should`` (OR) conditions — a
+        document matches if it contains **any** of the query tokens in
+        the searched field.  This is language-agnostic and requires no
+        hardcoded stop-word lists.
+        
+        Runs one query per field (sender, chat_name, message) with
+        different scores to prioritize sender matches over message
+        content matches.  Results are deduplicated by node ID, keeping
+        the highest score.
         
         Args:
             query: Text to search for
@@ -838,7 +1093,15 @@ class LlamaIndexRAG:
             List of matching NodeWithScore objects with field-aware scores
         """
         try:
-            # Build common filter conditions
+            # Tokenize query into words ≥ 3 chars (language-agnostic)
+            tokens = self._tokenize_query(query)
+            if not tokens:
+                logger.debug("No tokens extracted from query, skipping fulltext search")
+                return []
+            
+            logger.debug(f"Fulltext tokens: {tokens} (from: {query[:60]})")
+            
+            # Build common filter conditions (AND logic)
             must_conditions: List = []
             
             if filter_chat_name:
@@ -852,7 +1115,7 @@ class LlamaIndexRAG:
                     FieldCondition(key="timestamp", range=Range(gte=min_timestamp))
                 )
             
-            # Search each field separately with different scores
+            # Search each field with OR-matched tokens, different scores
             field_searches = [
                 ("sender", self.FULLTEXT_SCORE_SENDER),
                 ("chat_name", self.FULLTEXT_SCORE_CHAT_NAME),
@@ -866,7 +1129,7 @@ class LlamaIndexRAG:
             for field_name, field_score in field_searches:
                 results = self._fulltext_search_by_field(
                     field_name=field_name,
-                    query=query,
+                    tokens=tokens,
                     score=field_score,
                     k=k,
                     must_conditions=must_conditions if must_conditions else None,
@@ -998,18 +1261,12 @@ class LlamaIndexRAG:
             nodes = []
             for record in results:
                 payload = record.payload or {}
-                chat_name = payload.get("chat_name", "Unknown")
-                sender = payload.get("sender", "Unknown")
-                message = payload.get("message", "")
-                timestamp = payload.get("timestamp", 0)
+                text = self._extract_text_from_payload(payload)
                 
-                if message:
-                    formatted_time = format_timestamp(str(timestamp))
-                    text = f"[{formatted_time}] {sender} in {chat_name}: {message}"
-                    
+                if text:
                     node = TextNode(
                         text=text,
-                        metadata={k: v for k, v in payload.items() if not k.startswith("_")},
+                        metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
                         id_=str(record.id)
                     )
                     nodes.append(NodeWithScore(node=node, score=1.0))
@@ -1098,14 +1355,18 @@ class LlamaIndexRAG:
             qdrant_filters = Filter(must=must_conditions) if must_conditions else None
             
             # Use direct Qdrant search to avoid LlamaIndex TextNode validation issues
-            # with documents that have None text values
+            # with documents that have None text values.
+            # Fetch more candidates (k * 2) to compensate for score-threshold filtering,
+            # especially for morphologically rich languages like Hebrew where semantic
+            # similarity may be lower for inflected query forms.
             query_embedding = Settings.embed_model.get_query_embedding(query)
+            vector_fetch_limit = k * 2
             
             search_results = self.qdrant_client.query_points(
                 collection_name=self.COLLECTION_NAME,
                 query=query_embedding,
                 query_filter=qdrant_filters,
-                limit=k,
+                limit=vector_fetch_limit,
                 with_payload=True
             ).points
             
@@ -1113,30 +1374,9 @@ class LlamaIndexRAG:
             valid_results = []
             for result in search_results:
                 payload = result.payload or {}
+                text = self._extract_text_from_payload(payload)
                 
-                # Try to get text from _node_content first (LlamaIndex storage format),
-                # then fall back to reconstructing from payload fields
-                text = None
-                node_content = payload.get("_node_content")
-                if node_content and isinstance(node_content, str):
-                    try:
-                        import json
-                        content_dict = json.loads(node_content)
-                        text = content_dict.get("text")
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                
-                # Fallback: reconstruct text from payload metadata
-                if not text:
-                    chat_name = payload.get("chat_name", "Unknown")
-                    sender = payload.get("sender", "Unknown")
-                    message = payload.get("message", "")
-                    timestamp = payload.get("timestamp", 0)
-                    if message:
-                        formatted_time = format_timestamp(str(timestamp))
-                        text = f"[{formatted_time}] {sender} in {chat_name}: {message}"
-                
-                # Skip if we still don't have valid text
+                # Skip if we couldn't extract valid text
                 if not text:
                     logger.warning(f"Skipping result with no valid text: point_id={result.id}")
                     continue
@@ -1144,7 +1384,7 @@ class LlamaIndexRAG:
                 # Create TextNode with valid text
                 node = TextNode(
                     text=text,
-                    metadata={k: v for k, v in payload.items() if not k.startswith("_")},
+                    metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
                     id_=str(result.id)
                 )
                 
@@ -1289,6 +1529,15 @@ class LlamaIndexRAG:
         # Ensure LLM is configured (lazy init for faster startup)
         self._ensure_llm_configured()
         
+        # Tag cost tracking events with the conversation ID
+        try:
+            from cost_callbacks import get_cost_handler
+            handler = get_cost_handler()
+            if handler:
+                handler.conversation_id = conversation_id
+        except Exception:
+            pass  # Non-fatal
+        
         # Memory backed by Redis with token limit
         token_limit = int(settings.session_max_history) * 200  # ~200 tokens per turn
         memory = ChatMemoryBuffer.from_defaults(
@@ -1336,13 +1585,36 @@ class LlamaIndexRAG:
     def get_stats(self) -> Dict[str, Any]:
         """Get statistics about the vector store.
         
+        Returns total point count plus per-source breakdowns so the UI
+        can show WhatsApp messages vs documents separately.
+        
         Returns:
-            Dictionary with collection stats
+            Dictionary with collection stats including source_counts
         """
         try:
             collection_info = self.qdrant_client.get_collection(self.COLLECTION_NAME)
+            total = collection_info.points_count or 0
+
+            # Count points by source type using Qdrant scroll with filters
+            source_counts: Dict[str, int] = {}
+            for source_value in ("whatsapp", "paperless"):
+                try:
+                    count_result = self.qdrant_client.count(
+                        collection_name=self.COLLECTION_NAME,
+                        count_filter=Filter(must=[
+                            FieldCondition(key="source", match=MatchValue(value=source_value))
+                        ]),
+                        exact=True,
+                    )
+                    source_counts[source_value] = count_result.count
+                except Exception:
+                    source_counts[source_value] = 0
+
             return {
-                "total_documents": collection_info.points_count,
+                "total_documents": total,
+                "whatsapp_messages": source_counts.get("whatsapp", 0),
+                "documents": source_counts.get("paperless", 0),
+                "source_counts": source_counts,
                 "qdrant_server": f"{self.qdrant_host}:{self.qdrant_port}",
                 "collection_name": self.COLLECTION_NAME,
                 "dashboard_url": f"http://{self.qdrant_host}:{self.qdrant_port}/dashboard"
@@ -1351,6 +1623,52 @@ class LlamaIndexRAG:
             logger.error(f"Failed to get RAG stats: {e}")
             return {"error": str(e)}
     
+    def delete_by_source(self, source_value: str) -> int:
+        """Delete all points matching a specific source value.
+        
+        Uses Qdrant's delete with filter to remove points where
+        source == source_value. This allows selective cleanup
+        (e.g., delete only WhatsApp messages or only Paperless documents)
+        without dropping the entire collection.
+        
+        Args:
+            source_value: The source field value to match (e.g., "whatsapp", "paperless")
+            
+        Returns:
+            Number of points deleted
+        """
+        try:
+            # Count before delete
+            count_before = self.qdrant_client.count(
+                collection_name=self.COLLECTION_NAME,
+                count_filter=Filter(must=[
+                    FieldCondition(key="source", match=MatchValue(value=source_value))
+                ]),
+                exact=True,
+            ).count
+
+            if count_before == 0:
+                logger.info(f"No points with source='{source_value}' to delete")
+                return 0
+
+            # Delete by filter
+            self.qdrant_client.delete(
+                collection_name=self.COLLECTION_NAME,
+                points_selector=Filter(must=[
+                    FieldCondition(key="source", match=MatchValue(value=source_value))
+                ]),
+            )
+
+            # Invalidate caches since data changed
+            self.invalidate_list_caches()
+
+            logger.info(f"Deleted {count_before} points with source='{source_value}'")
+            return count_before
+
+        except Exception as e:
+            logger.error(f"Failed to delete points by source '{source_value}': {e}")
+            return 0
+
     def reset_collection(self) -> bool:
         """Drop and recreate the Qdrant collection with fresh configuration.
         

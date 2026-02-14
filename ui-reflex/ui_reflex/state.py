@@ -54,15 +54,26 @@ class AppState(rx.State):
     plugins_data: dict[str, Any] = {}
     settings_save_message: str = ""
 
+    # --- Cost tracking ---
+    session_cost: float = 0.0
+    last_query_cost: float = 0.0
+    cost_summary: dict[str, Any] = {}
+    cost_breakdown: dict[str, Any] = {}
+
     # --- Pending changes (explicit save) ---
     pending_changes: dict[str, str] = {}  # key -> new_value
 
     # --- Secret visibility ---
     revealed_secrets: list[str] = []  # Keys of secrets currently revealed
+    revealed_secret_values: dict[str, str] = {}  # key -> unmasked value
 
     # --- Paperless test state ---
     paperless_test_status: str = ""   # "", "testing", "success", "error"
     paperless_test_message: str = ""
+
+    # --- Paperless sync state ---
+    paperless_sync_status: str = ""   # "", "syncing", "complete", "error"
+    paperless_sync_message: str = ""
 
     # --- Tab state ---
     settings_tab: str = "llm"  # Active main tab
@@ -195,6 +206,16 @@ class AppState(rx.State):
     def rag_total_docs(self) -> str:
         """Extract total documents from rag_stats."""
         return str(self.rag_stats.get("total_documents", "—"))
+
+    @rx.var(cache=True)
+    def rag_whatsapp_count(self) -> str:
+        """Extract WhatsApp message count from rag_stats."""
+        return str(self.rag_stats.get("whatsapp_messages", "—"))
+
+    @rx.var(cache=True)
+    def rag_document_count(self) -> str:
+        """Extract document count (Paperless etc.) from rag_stats."""
+        return str(self.rag_stats.get("documents", "—"))
 
     @rx.var(cache=True)
     def rag_collection_name(self) -> str:
@@ -339,6 +360,7 @@ class AppState(rx.State):
         """Called when settings page loads."""
         await self.on_load()
         await self._load_settings()
+        await self._load_cost_data()
 
     # =====================================================================
     # CONVERSATION MANAGEMENT
@@ -366,7 +388,7 @@ class AppState(rx.State):
         if loaded:
             self.conversation_id = convo_id
             self.messages = [
-                {"role": m["role"], "content": m["content"]}
+                {"role": m["role"], "content": m["content"], "sources": "", "cost": ""}
                 for m in loaded.get("messages", [])
             ]
             self.active_filters = loaded.get("filters", {})
@@ -418,7 +440,7 @@ class AppState(rx.State):
             return
 
         # Add user message immediately
-        self.messages.append({"role": "user", "content": question})
+        self.messages.append({"role": "user", "content": question, "sources": "", "cost": ""})
         self.input_text = ""
         self.is_loading = True
         yield  # Update UI
@@ -440,6 +462,8 @@ class AppState(rx.State):
             self.messages.append({
                 "role": "assistant",
                 "content": f"❌ {data['error']}",
+                "sources": "",
+                "cost": "",
             })
         else:
             raw_answer = data.get("answer", "No answer received")
@@ -450,12 +474,23 @@ class AppState(rx.State):
             if data.get("filters"):
                 self.active_filters = data["filters"]
 
-            # Format sources into the answer content as markdown
-            sources = data.get("sources", [])
-            if sources:
-                answer += _format_sources(sources)
+            # Extract cost info from response
+            cost_data = data.get("cost", {})
+            query_cost = cost_data.get("query_cost_usd", 0.0)
+            self.last_query_cost = query_cost
+            self.session_cost = cost_data.get("session_total_usd", self.session_cost)
+            cost_str = f"${query_cost:.4f}" if query_cost > 0 else ""
 
-            self.messages.append({"role": "assistant", "content": answer})
+            # Store sources as a separate field (rendered as collapsible in UI)
+            sources = data.get("sources", [])
+            sources_md = _format_sources(sources) if sources else ""
+
+            self.messages.append({
+                "role": "assistant",
+                "content": answer,
+                "sources": sources_md,
+                "cost": cost_str,
+            })
 
         # Refresh sidebar conversations
         await self._refresh_conversations()
@@ -499,16 +534,85 @@ class AppState(rx.State):
         self.health_deps = health.get("dependencies", {})
 
     # =====================================================================
+    # COST TRACKING
+    # =====================================================================
+
+    async def _load_cost_data(self):
+        """Load cost summary and breakdown from the backend."""
+        self.cost_summary = await api_client.get_cost_summary(days=7)
+        self.cost_breakdown = await api_client.get_cost_breakdown(days=7)
+        session_data = await api_client.get_cost_session(n=20)
+        self.session_cost = session_data.get("session_total_usd", 0.0)
+
+    async def refresh_cost_data(self):
+        """Public wrapper for _load_cost_data — usable as an on_click handler."""
+        await self._load_cost_data()
+
+    @rx.var(cache=True)
+    def session_cost_display(self) -> str:
+        """Formatted session cost for display."""
+        if self.session_cost <= 0:
+            return ""
+        return f"${self.session_cost:.4f}"
+
+    @rx.var(cache=True)
+    def cost_today_display(self) -> str:
+        """Today's total cost for display."""
+        total = self.cost_summary.get("total_cost_usd", 0.0)
+        if total <= 0:
+            return "$0.00"
+        return f"${total:.4f}"
+
+    @rx.var(cache=True)
+    def cost_by_kind_list(self) -> list[dict[str, str]]:
+        """Cost breakdown by kind (chat/embed/whisper/image) for display."""
+        by_kind = self.cost_summary.get("by_kind", {})
+        if not by_kind:
+            return []
+        result: list[dict[str, str]] = []
+        kind_labels = {
+            "chat": "💬 Chat (LLM)",
+            "embed": "🔢 Embeddings",
+            "whisper": "🎙️ Transcription",
+            "image": "🖼️ Image Gen",
+        }
+        for kind, cost in by_kind.items():
+            result.append({
+                "kind": kind,
+                "label": kind_labels.get(kind) or kind.title(),
+                "cost": f"${cost:.4f}" if cost else "$0.00",
+            })
+        return result
+
+    @rx.var(cache=True)
+    def cost_daily_list(self) -> list[dict[str, str]]:
+        """Daily cost totals for display."""
+        daily = self.cost_summary.get("daily", [])
+        result: list[dict[str, str]] = []
+        for day in daily:
+            result.append({
+                "date": str(day.get("date", "")),
+                "cost": f"${day.get('total_cost', 0):.4f}",
+                "events": str(day.get("event_count", 0)),
+            })
+        return result
+
+    # =====================================================================
     # SETTINGS
     # =====================================================================
 
     async def _load_settings(self):
-        self.all_settings = await api_client.fetch_config(unmask=True)
+        # Fetch masked settings — secrets show as "sk-a...xyz"
+        # Unmasked values are fetched on-demand when the user clicks reveal
+        self.all_settings = await api_client.fetch_config(unmask=False)
         self.config_meta = await api_client.fetch_config_meta()
         self.plugins_data = await api_client.fetch_plugins()
         self.rag_stats = await api_client.get_rag_stats()
         self.chat_list = await api_client.get_chat_list()
         self.sender_list = await api_client.get_sender_list()
+        # Clear revealed secrets so stale unmasked values don't persist
+        self.revealed_secrets = []
+        self.revealed_secret_values = {}
 
     async def save_setting(self, key: str, value: str):
         """Save a single setting."""
@@ -538,12 +642,26 @@ class AppState(rx.State):
 
     # ----- Secret visibility -----
 
-    def toggle_secret_visibility(self, key: str):
-        """Toggle visibility of a secret field."""
+    async def toggle_secret_visibility(self, key: str):
+        """Toggle visibility of a secret field.
+
+        When revealing, fetches the unmasked value from the API.
+        When hiding, removes the cached unmasked value.
+        """
         new_revealed = list(self.revealed_secrets)
         if key in new_revealed:
+            # Hide: remove from revealed list and clear cached value
             new_revealed.remove(key)
+            new_values = dict(self.revealed_secret_values)
+            new_values.pop(key, None)
+            self.revealed_secret_values = new_values
         else:
+            # Reveal: fetch unmasked value from API
+            result = await api_client.fetch_secret_value(key)
+            if "error" not in result:
+                new_values = dict(self.revealed_secret_values)
+                new_values[key] = result.get("value", "")
+                self.revealed_secret_values = new_values
             new_revealed.append(key)
         self.revealed_secrets = new_revealed
 
@@ -566,6 +684,42 @@ class AppState(rx.State):
             self.paperless_test_status = "error"
             self.paperless_test_message = "❌ Unexpected response"
 
+    # ----- Paperless sync -----
+
+    async def start_paperless_sync(self):
+        """Trigger Paperless-NGX document sync to RAG.
+
+        The backend auto-detects an empty Qdrant collection and
+        switches to force mode (skipping processed-tag exclusion)
+        so this single button works after a collection reset too.
+        """
+        self.paperless_sync_status = "syncing"
+        self.paperless_sync_message = "⏳ Syncing documents…"
+        yield
+
+        result = await api_client.start_paperless_sync()
+        if "error" in result:
+            self.paperless_sync_status = "error"
+            self.paperless_sync_message = f"❌ {result['error']}"
+        elif result.get("status") == "complete":
+            synced = result.get("synced", 0)
+            tagged = result.get("tagged", 0)
+            skipped = result.get("skipped", 0)
+            errors = result.get("errors", 0)
+            self.paperless_sync_status = "complete"
+            self.paperless_sync_message = (
+                f"✅ Sync complete — {synced} indexed, "
+                f"{tagged} tagged, {skipped} skipped, {errors} errors"
+            )
+            # Refresh RAG stats to reflect new document count
+            self.rag_stats = await api_client.get_rag_stats()
+        elif result.get("status") == "already_running":
+            self.paperless_sync_status = "syncing"
+            self.paperless_sync_message = "⏳ Sync already in progress"
+        else:
+            self.paperless_sync_status = "error"
+            self.paperless_sync_message = f"❌ Unexpected response: {result}"
+
     async def reset_category(self, category: str):
         """Reset a settings category to defaults."""
         result = await api_client.reset_config(category=category)
@@ -587,7 +741,7 @@ class AppState(rx.State):
                 json_str = _json.dumps(data, indent=2)
                 return rx.download(
                     data=json_str.encode(),
-                    filename="whatsapp-gpt-settings.json",
+                    filename="lucy-settings.json",
                 )
         except Exception as e:
             self.settings_save_message = f"❌ Export error: {str(e)}"
@@ -651,17 +805,25 @@ def _parse_answer(raw_answer: Any) -> str:
 
 
 def _format_sources(sources: list[dict]) -> str:
-    """Format source citations as markdown appended to the answer."""
+    """Format source citations as markdown for the collapsible sources section."""
     if not sources:
         return ""
-    lines = ["\n\n---\n📎 **Sources:**\n"]
+    lines: list[str] = []
     for i, src in enumerate(sources):
-        sender = src.get("sender", "Unknown")
-        chat_name = src.get("chat_name", "Unknown")
+        sender = src.get("sender", "")
+        chat_name = src.get("chat_name", "")
         content = src.get("content", "")[:200]
         score = src.get("score")
         score_str = f" — {score:.0%}" if score else ""
-        lines.append(f"**{i + 1}. {sender}** in _{chat_name}_{score_str}")
+
+        if sender:
+            header = f"**{i + 1}. {sender}** in _{chat_name}_{score_str}"
+        elif chat_name:
+            header = f"**{i + 1}.** _{chat_name}_{score_str}"
+        else:
+            header = f"**{i + 1}.** _Source_{score_str}"
+
+        lines.append(header)
         if content:
             lines.append(f"> {content}{'…' if len(content) >= 200 else ''}\n")
     return "\n".join(lines)

@@ -52,7 +52,7 @@ services:
   
   app:
     build: .
-    container_name: rag-assistant
+    container_name: lucy
     restart: unless-stopped
     env_file:
       - .env
@@ -78,7 +78,5 @@ services:
 
 volumes:
   waha_data:
-  pg_data:
-  pgadmin_data:
   redis_data:
   qdrant_data:

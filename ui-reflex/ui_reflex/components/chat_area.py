@@ -105,8 +105,23 @@ def _filter_chip(chip: dict) -> rx.Component:
 # =========================================================================
 
 def _chat_input_bar() -> rx.Component:
-    """Auto-growing textarea with send button."""
+    """Auto-growing textarea with send button.
+
+    Enter submits the form; Shift+Enter inserts a newline.
+    """
+    # Client-side JS: submit form on Enter (without Shift) in the textarea.
+    _enter_to_submit_js = """
+    document.addEventListener("keydown", function(e) {
+        if (e.target.classList.contains("chat-textarea") &&
+            e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            var form = e.target.closest("form");
+            if (form) form.requestSubmit();
+        }
+    });
+    """
     return rx.box(
+        rx.script(_enter_to_submit_js),
         rx.el.form(
             rx.flex(
                 rx.el.textarea(

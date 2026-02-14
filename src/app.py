@@ -29,6 +29,10 @@ print("✅ Utils imported", flush=True)
 import conversations_db
 print("✅ Conversations DB imported", flush=True)
 
+import cost_db
+from cost_meter import METER
+print("✅ Cost tracking imported", flush=True)
+
 from plugins.registry import plugin_registry
 print("✅ Plugin registry imported", flush=True)
 
@@ -240,8 +244,14 @@ def rag_query():
             k=k,
         )
         
+        # Snapshot cost meter before query to compute per-query cost
+        cost_snapshot = METER.snapshot()
+        
         response = chat_engine.chat(question)
         answer = str(response)
+        
+        # Compute per-query cost
+        query_cost = METER.session_total - cost_snapshot
         
         # Persist messages to SQLite
         conversations_db.add_message(conversation_id, "user", question)
@@ -258,8 +268,8 @@ def rag_query():
                 sources.append({
                     "content": getattr(node, 'text', '')[:300],
                     "score": node_with_score.score,
-                    "sender": metadata.get("sender", "Unknown"),
-                    "chat_name": metadata.get("chat_name", "Unknown"),
+                    "sender": metadata.get("sender", ""),
+                    "chat_name": metadata.get("chat_name", ""),
                     "timestamp": metadata.get("timestamp"),
                 })
 
@@ -272,6 +282,10 @@ def rag_query():
             "filters": filters,
             "sources": sources,
             "stats": stats,
+            "cost": {
+                "query_cost_usd": round(query_cost, 6),
+                "session_total_usd": round(METER.session_total, 6),
+            },
         }), 200
 
     except Exception as e:
@@ -450,6 +464,49 @@ def rag_reset():
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
+@app.route("/rag/delete-by-source", methods=["POST"])
+def rag_delete_by_source():
+    """Delete all RAG vectors matching a specific source type.
+    
+    Allows selective cleanup — e.g., delete only WhatsApp messages
+    or only Paperless documents without dropping the entire collection.
+    
+    Body: {"source": "whatsapp"|"paperless", "confirm": true}
+    """
+    try:
+        data = request.json or {}
+        source_value = data.get("source")
+        
+        if not source_value:
+            return jsonify({"error": "Missing 'source' in request body"}), 400
+        
+        if not data.get("confirm", False):
+            # Dry run: show how many would be deleted
+            stats = rag.get_stats()
+            source_counts = stats.get("source_counts", {})
+            count = source_counts.get(source_value, 0)
+            return jsonify({
+                "status": "dry_run",
+                "source": source_value,
+                "would_delete": count,
+                "message": f"Would delete {count} vectors with source='{source_value}'. "
+                           f"Pass {{\"confirm\": true}} to proceed.",
+            }), 200
+        
+        deleted = rag.delete_by_source(source_value)
+        return jsonify({
+            "status": "ok",
+            "source": source_value,
+            "deleted": deleted,
+            "message": f"Deleted {deleted} vectors with source='{source_value}'.",
+        }), 200
+        
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"RAG delete-by-source error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
 # =============================================================================
 # CONVERSATION MANAGEMENT ENDPOINTS
 # =============================================================================
@@ -561,6 +618,23 @@ def get_config():
     except Exception as e:
         trace = traceback.format_exc()
         logger.error(f"Config get error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/config/secret/<key>", methods=["GET"])
+def get_secret_value(key):
+    """Get the unmasked value of a single secret setting."""
+    try:
+        import settings_db
+        row = settings_db.get_setting_row(key)
+        if not row:
+            return jsonify({"error": "Setting not found"}), 404
+        if row["type"] != "secret":
+            return jsonify({"error": "Not a secret setting"}), 400
+        return jsonify({"key": key, "value": row["value"]}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Secret fetch error: {e}\n{trace}")
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
@@ -684,6 +758,85 @@ def import_config():
         trace = traceback.format_exc()
         logger.error(f"Config import error: {e}\n{trace}")
         return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+# =============================================================================
+# COST TRACKING ENDPOINTS
+# =============================================================================
+
+@app.route("/costs/session", methods=["GET"])
+def costs_session():
+    """Get current session cost total and recent events."""
+    try:
+        n = request.args.get("n", 20, type=int)
+        return jsonify({
+            "session_total_usd": round(METER.session_total, 6),
+            "recent_events": METER.get_recent_events(n),
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/costs/summary", methods=["GET"])
+def costs_summary():
+    """Get daily cost summary for the last N days."""
+    try:
+        days = request.args.get("days", 7, type=int)
+        daily = cost_db.get_daily_summary(days=days)
+        total = cost_db.get_total_cost(days=days)
+        by_kind = cost_db.get_cost_by_kind(days=days)
+        return jsonify({
+            "days": days,
+            "total_cost_usd": round(total, 6),
+            "by_kind": {k: round(v, 6) for k, v in by_kind.items()},
+            "daily": daily,
+        }), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Cost summary error: {e}\n{trace}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/costs/events", methods=["GET"])
+def costs_events():
+    """Get paginated cost event log with optional filters."""
+    try:
+        limit = min(request.args.get("limit", 50, type=int), 200)
+        offset = request.args.get("offset", 0, type=int)
+        conversation_id = request.args.get("conversation_id")
+        kind = request.args.get("kind")
+        
+        events = cost_db.get_events(
+            limit=limit,
+            offset=offset,
+            conversation_id=conversation_id,
+            kind=kind,
+        )
+        return jsonify({"events": events, "count": len(events)}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Cost events error: {e}\n{trace}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/costs/breakdown", methods=["GET"])
+def costs_breakdown():
+    """Get cost breakdown by provider and model."""
+    try:
+        days = request.args.get("days", 7, type=int)
+        by_model = cost_db.get_cost_by_model(days=days)
+        by_kind = cost_db.get_cost_by_kind(days=days)
+        total = cost_db.get_total_cost(days=days)
+        return jsonify({
+            "days": days,
+            "total_cost_usd": round(total, 6),
+            "by_kind": {k: round(v, 6) for k, v in by_kind.items()},
+            "by_model": by_model,
+        }), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Cost breakdown error: {e}\n{trace}")
+        return jsonify({"error": str(e)}), 500
 
 
 # =============================================================================
