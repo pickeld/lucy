@@ -109,16 +109,26 @@ def _chat_input_bar() -> rx.Component:
 
     Enter submits the form; Shift+Enter inserts a newline.
     """
-    # Client-side JS: submit form on Enter (without Shift) in the textarea.
+    # Client-side JS: intercept Enter (without Shift) in the textarea
+    # and click the submit button to trigger Reflex's on_submit handler.
+    # Using button.click() instead of form.requestSubmit() because Reflex
+    # uses React's synthetic event system which doesn't respond to native
+    # DOM submit events.
     _enter_to_submit_js = """
-    document.addEventListener("keydown", function(e) {
-        if (e.target.classList.contains("chat-textarea") &&
-            e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            var form = e.target.closest("form");
-            if (form) form.requestSubmit();
-        }
-    });
+    (function() {
+        document.addEventListener("keydown", function(e) {
+            if (e.target && e.target.classList &&
+                e.target.classList.contains("chat-textarea") &&
+                e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                var form = e.target.closest("form");
+                if (form) {
+                    var btn = form.querySelector('button[type="submit"]');
+                    if (btn) btn.click();
+                }
+            }
+        });
+    })();
     """
     return rx.box(
         rx.script(_enter_to_submit_js),
