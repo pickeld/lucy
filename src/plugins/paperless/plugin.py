@@ -197,13 +197,14 @@ class PaperlessPlugin(ChannelPlugin):
         
         @bp.route("/tags", methods=["GET"])
         def tags():
-            """Fetch all tags from Paperless-NGX.
+            """Fetch all tags from Paperless-NGX (paginated).
             
             Always reads fresh settings from the database so that a
             newly-saved token is picked up without restarting the server.
+            Fetches ALL pages of tags to handle large tag collections.
             
             Returns:
-                JSON list of tags: [{id, name, color, ...}, ...]
+                JSON list of tags: [{id, name, color}, ...]
             """
             import settings_db
             url = settings_db.get_setting_value("paperless_url") or ""
@@ -220,21 +221,47 @@ class PaperlessPlugin(ChannelPlugin):
                     "tags": [],
                 }), 400
             
+            import requests as _requests
+            base = url.rstrip("/")
+            headers = {"Authorization": f"Token {token}"}
+            tag_list: list = []
+            page = 1
+            
             try:
-                tags_client = PaperlessClient(url, token)
-                all_tags = tags_client.get_tags()
-                # Return only the fields needed by the UI
-                tag_list = [
-                    {
-                        "id": t.get("id"),
-                        "name": t.get("name", ""),
-                        "color": t.get("color", "#a6cee3"),
-                    }
-                    for t in all_tags
-                ]
+                while True:
+                    resp = _requests.get(
+                        f"{base}/api/tags/",
+                        headers=headers,
+                        params={"page": page, "page_size": 1000},
+                        timeout=30,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    
+                    for t in data.get("results", []):
+                        tag_list.append({
+                            "id": t.get("id"),
+                            "name": t.get("name", ""),
+                            "color": t.get("color", "#a6cee3"),
+                        })
+                    
+                    if not data.get("next"):
+                        break
+                    page += 1
+                
+                # Sort alphabetically by name
+                tag_list.sort(key=lambda t: t.get("name", "").lower())
                 return jsonify({"tags": tag_list}), 200
+            except _requests.Timeout:
+                msg = "Paperless tags request timed out"
+                logger.error(msg)
+                return jsonify({"error": msg, "tags": []}), 504
+            except _requests.ConnectionError as e:
+                msg = f"Cannot reach Paperless server: {e}"
+                logger.error(msg)
+                return jsonify({"error": msg, "tags": []}), 502
             except Exception as e:
-                logger.error(f"Failed to fetch Paperless tags: {e}")
+                logger.error(f"Failed to fetch Paperless tags: {e}", exc_info=True)
                 return jsonify({"error": str(e), "tags": []}), 500
         
         return bp

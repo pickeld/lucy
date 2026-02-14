@@ -357,9 +357,13 @@ async def test_paperless_connection() -> dict[str, Any]:
 
 
 async def fetch_paperless_tags() -> list[dict[str, Any]]:
-    """Fetch all tags from Paperless-NGX via the backend."""
+    """Fetch all tags from Paperless-NGX via the backend.
+
+    Uses a long timeout because the backend paginates through all tags
+    from the Paperless server (can be thousands).
+    """
     try:
-        resp = await _get_client().get("/plugins/paperless/tags", timeout=15)
+        resp = await _get_client().get("/plugins/paperless/tags", timeout=120)
         if resp.status_code == 200:
             return resp.json().get("tags", [])
         else:
@@ -367,6 +371,8 @@ async def fetch_paperless_tags() -> list[dict[str, Any]]:
             logger.warning(f"Failed to fetch paperless tags: {data.get('error', '')}")
     except httpx.ConnectError:
         logger.warning("Cannot reach API server for paperless tags")
+    except httpx.ReadTimeout:
+        logger.warning("Timeout fetching paperless tags — large tag collection?")
     except Exception as e:
         logger.error(f"Error fetching paperless tags: {e}")
     return []

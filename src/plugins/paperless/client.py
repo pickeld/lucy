@@ -72,8 +72,8 @@ class PaperlessClient:
         params: Dict[str, Any] = {"page": page, "page_size": page_size}
         
         if tags:
-            # tags__id__all = documents must have ALL of these tag IDs
-            params["tags__id__all"] = ",".join(str(t) for t in tags)
+            # tags__id__in = documents must have ANY of these tag IDs
+            params["tags__id__in"] = ",".join(str(t) for t in tags)
         
         if exclude_tags:
             # Exclude documents that have any of these tag IDs

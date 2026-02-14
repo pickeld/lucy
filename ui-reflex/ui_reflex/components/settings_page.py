@@ -739,37 +739,36 @@ def _textarea_input(item: dict) -> rx.Component:
 
 
 def _paperless_tag_bubble(tag: rx.Var[dict]) -> rx.Component:
-    """Render a single selected tag as a removable bubble."""
-    return rx.flex(
-        rx.icon_button(
-            rx.icon("x", size=12),
-            on_click=AppState.remove_paperless_tag(tag["name"]),
-            variant="ghost",
-            size="1",
-            class_name="text-gray-400 hover:text-gray-600 shrink-0 p-0 h-5 w-5",
-        ),
-        rx.box(
+    """Render a single selected tag as a removable bubble with × inside."""
+    return rx.box(
+        rx.flex(
+            rx.icon(
+                "x",
+                size=14,
+                class_name="shrink-0 cursor-pointer opacity-60 hover:opacity-100",
+                on_click=AppState.remove_paperless_tag(tag["name"]),
+            ),
             rx.text(
                 tag["name"],
                 class_name="text-sm font-medium",
             ),
-            class_name="px-3 py-1 rounded-full border",
-            style={
-                "background_color": rx.cond(
-                    tag["color"] != "",
-                    tag["color"] + "30",  # 30 = ~19% opacity hex suffix
-                    "#a6cee330",
-                ),
-                "border_color": rx.cond(
-                    tag["color"] != "",
-                    tag["color"] + "80",  # 80 = ~50% opacity
-                    "#a6cee380",
-                ),
-                "color": "#374151",
-            },
+            align="center",
+            gap="1.5",
         ),
-        align="center",
-        gap="1",
+        class_name="px-3 py-1 rounded-full border inline-flex",
+        style={
+            "background_color": rx.cond(
+                tag["color"] != "",
+                tag["color"] + "30",  # 30 = ~19% opacity hex suffix
+                "#a6cee330",
+            ),
+            "border_color": rx.cond(
+                tag["color"] != "",
+                tag["color"] + "80",  # 80 = ~50% opacity
+                "#a6cee380",
+            ),
+            "color": "#374151",
+        },
     )
 
 
