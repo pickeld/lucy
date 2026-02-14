@@ -4,6 +4,7 @@ import email
 import logging
 import re
 import time
+import unicodedata
 import uuid
 from email.policy import default as default_email_policy
 from html.parser import HTMLParser
@@ -37,6 +38,42 @@ MIN_CONTENT_CHARS = 50
 # useful for embedding.  Chunks below this threshold are mostly base64,
 # encoded data, or other noise.
 MIN_WORD_CHAR_RATIO = 0.40
+
+# Unicode categories to strip from document content.
+# Category "Cf" (Format) covers all invisible formatting characters:
+#   - RTL/LTR marks (U+200E, U+200F)
+#   - Zero-width space/joiner/non-joiner (U+200B–U+200D)
+#   - Directional overrides (U+202A–U+202E, U+2066–U+2069)
+#   - BOM (U+FEFF), soft hyphen (U+00AD), etc.
+# These are commonly inserted by OCR engines when processing
+# Hebrew/Arabic documents and break Qdrant's multilingual tokenizer,
+# preventing proper word matching in fulltext search.
+_STRIP_UNICODE_CATEGORIES = {"Cf"}
+
+
+def _strip_unicode_control(text: str) -> str:
+    """Remove Unicode format characters (category Cf) from text.
+
+    Uses :mod:`unicodedata` to identify characters by category rather
+    than maintaining a manual list of code points.  Category ``Cf``
+    (Format) covers all invisible formatting characters such as
+    RTL/LTR marks, zero-width joiners, directional overrides, BOM,
+    soft hyphens, etc.
+
+    Args:
+        text: Input string potentially containing control characters
+
+    Returns:
+        Cleaned string with format characters removed
+    """
+    return "".join(
+        ch for ch in text
+        if unicodedata.category(ch) not in _STRIP_UNICODE_CATEGORIES
+    )
+
+# Regex to extract numeric sequences (≥5 digits) from document content.
+# Used to populate a 'numbers' metadata field for reverse ID lookups.
+_RE_NUMERIC_SEQUENCES = re.compile(r"\b\d{5,}\b")
 
 # Regex patterns for content sanitization
 # Matches contiguous base64 blocks (3+ lines of base64 characters)
@@ -172,6 +209,12 @@ def _sanitize_content(raw: str) -> str:
     """
     if not raw:
         return ""
+
+    # --- Step 0: Strip Unicode control characters (RTL/LTR marks, etc.) ---
+    # OCR engines (especially for Hebrew/Arabic) insert these characters
+    # which break Qdrant's multilingual tokenizer and prevent fulltext
+    # search from matching words like "דוד" wrapped in RTL marks (‫דוד‬).
+    raw = _strip_unicode_control(raw)
 
     # --- Step 1: Try structured MIME parsing first ---
     mime_text = _extract_mime_text_parts(raw)
@@ -563,14 +606,27 @@ class DocumentSyncer:
                             "modified": doc.get("modified", ""),
                         }
                         
+                        # Extract all numeric sequences (≥5 digits) from the
+                        # full document content for reverse ID/number lookups.
+                        # Stored as space-separated string in 'numbers' metadata
+                        # field which has a fulltext index in Qdrant.
+                        all_numbers = sorted(set(
+                            _RE_NUMERIC_SEQUENCES.findall(content)
+                        ))
+                        numbers_str = " ".join(all_numbers) if all_numbers else ""
+                        
                         chunk_ok = True
                         for idx, chunk in enumerate(chunks):
                             chunk_meta = dict(base_metadata)
                             # Store chunk text in 'message' metadata so fulltext
-                            # search on the 'message' field can find documents
-                            # (truncated to 1000 chars to keep payload reasonable
-                            # while improving full-text search coverage)
-                            chunk_meta["message"] = chunk[:1000]
+                            # search on the 'message' field can find documents.
+                            # Use 2000 chars (up from 1000) to improve fulltext
+                            # coverage for documents with key info beyond the
+                            # first paragraph (e.g., birth dates, ID numbers).
+                            chunk_meta["message"] = chunk[:2000]
+                            # Store extracted numbers for reverse ID lookups
+                            if numbers_str:
+                                chunk_meta["numbers"] = numbers_str
                             if len(chunks) > 1:
                                 chunk_meta["chunk_index"] = str(idx)
                                 chunk_meta["chunk_total"] = str(len(chunks))

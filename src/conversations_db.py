@@ -56,10 +56,16 @@ def init_conversations_db() -> None:
                 conversation_id TEXT NOT NULL,
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
+                sources TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             )
         """)
+        # Migration: add sources column if missing (existing databases)
+        try:
+            conn.execute("ALTER TABLE conversation_messages ADD COLUMN sources TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_conv_messages_conv_id
                 ON conversation_messages(conversation_id)
@@ -150,7 +156,7 @@ def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
             return None
 
         messages = conn.execute(
-            """SELECT role, content, created_at
+            """SELECT role, content, sources, created_at
                FROM conversation_messages
                WHERE conversation_id = ?
                ORDER BY id ASC""",
@@ -168,6 +174,7 @@ def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
                 {
                     "role": m["role"],
                     "content": m["content"],
+                    "sources": m["sources"] or "",
                     "created_at": m["created_at"],
                 }
                 for m in messages
@@ -260,13 +267,16 @@ def update_conversation_filters(conversation_id: str, filters: Dict[str, str]) -
         conn.close()
 
 
-def add_message(conversation_id: str, role: str, content: str) -> Dict[str, Any]:
+def add_message(
+    conversation_id: str, role: str, content: str, sources: str = "",
+) -> Dict[str, Any]:
     """Add a message to a conversation and update metadata.
 
     Args:
         conversation_id: The conversation UUID
         role: 'user' or 'assistant'
         content: The message content
+        sources: Optional JSON-encoded source citations (for assistant messages)
 
     Returns:
         Dict with the created message data
@@ -274,9 +284,9 @@ def add_message(conversation_id: str, role: str, content: str) -> Dict[str, Any]
     conn = _get_connection()
     try:
         conn.execute(
-            """INSERT INTO conversation_messages (conversation_id, role, content)
-               VALUES (?, ?, ?)""",
-            (conversation_id, role, content),
+            """INSERT INTO conversation_messages (conversation_id, role, content, sources)
+               VALUES (?, ?, ?, ?)""",
+            (conversation_id, role, content, sources),
         )
         conn.execute(
             """UPDATE conversations

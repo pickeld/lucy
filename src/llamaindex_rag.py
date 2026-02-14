@@ -460,6 +460,26 @@ class LlamaIndexRAG:
             logger.info("Created text index on 'message' field")
         except Exception as e:
             logger.debug(f"Could not create message index (may exist): {e}")
+        
+        try:
+            # Create text index on 'numbers' field for reverse ID/number lookups.
+            # Paperless documents store extracted numeric sequences (≥5 digits)
+            # in this field as space-separated values, enabling queries like
+            # "למי שייכת תעודה הזהות 227839586?" to find the matching document.
+            self.qdrant_client.create_payload_index(
+                collection_name=self.COLLECTION_NAME,
+                field_name="numbers",
+                field_schema=TextIndexParams(
+                    type=TextIndexType.TEXT,
+                    tokenizer=TokenizerType.WORD,
+                    min_token_len=5,
+                    max_token_len=20,
+                    lowercase=True
+                )
+            )
+            logger.info("Created text index on 'numbers' field")
+        except Exception as e:
+            logger.debug(f"Could not create numbers index (may exist): {e}")
     
     def _ensure_payload_indexes(self):
         """Create payload indexes for efficient filtering on non-text fields.
@@ -932,6 +952,7 @@ class LlamaIndexRAG:
     FULLTEXT_SCORE_SENDER = float(settings.get("rag_fulltext_score_sender", "0.95"))
     FULLTEXT_SCORE_CHAT_NAME = float(settings.get("rag_fulltext_score_chat_name", "0.85"))
     FULLTEXT_SCORE_MESSAGE = float(settings.get("rag_fulltext_score_message", "0.75"))
+    FULLTEXT_SCORE_NUMBERS = float(settings.get("rag_fulltext_score_numbers", "0.90"))
     
     # Common Hebrew prefixes (prepositions, conjunctions, articles)
     # that are attached to words: ה (the), ב (in), ל (to), מ (from),
@@ -1044,7 +1065,14 @@ class LlamaIndexRAG:
             Deduplicated list of tokens (≥ 3 chars) with Hebrew expansions
         """
         import re as _re
-        tokens = _re.findall(r"[\w]{3,}", query, _re.UNICODE)
+        import unicodedata as _ud
+        # Strip Unicode format characters (category Cf: RTL/LTR marks,
+        # zero-width joiners, directional overrides, BOM, soft hyphens)
+        # that OCR engines insert — these break tokenization and matching.
+        clean_query = "".join(
+            ch for ch in query if _ud.category(ch) != "Cf"
+        )
+        tokens = _re.findall(r"[\w]{3,}", clean_query, _re.UNICODE)
         # Deduplicate while preserving order
         seen: set = set()
         unique: List[str] = []
@@ -1176,6 +1204,10 @@ class LlamaIndexRAG:
                     FieldCondition(key="timestamp", range=Range(gte=min_timestamp))
                 )
             
+            # Extract numeric tokens (≥5 digits) for dedicated numbers field search
+            import re as _re_local
+            numeric_tokens = [t for t in tokens if _re_local.fullmatch(r"\d{5,}", t)]
+            
             # Search each field with OR-matched tokens, different scores
             field_searches = [
                 ("sender", self.FULLTEXT_SCORE_SENDER),
@@ -1183,14 +1215,20 @@ class LlamaIndexRAG:
                 ("message", self.FULLTEXT_SCORE_MESSAGE),
             ]
             
+            # Add numbers field search when query contains numeric sequences
+            if numeric_tokens:
+                field_searches.append(("numbers", self.FULLTEXT_SCORE_NUMBERS))
+            
             # Collect all results, dedup by node ID keeping highest score
             best_scores: Dict[str, float] = {}
             best_nodes: Dict[str, NodeWithScore] = {}
             
             for field_name, field_score in field_searches:
+                # For the 'numbers' field, only use numeric tokens
+                search_tokens = numeric_tokens if field_name == "numbers" else tokens
                 results = self._fulltext_search_by_field(
                     field_name=field_name,
-                    tokens=tokens,
+                    tokens=search_tokens,
                     score=field_score,
                     k=k,
                     must_conditions=must_conditions if must_conditions else None,
@@ -1843,12 +1881,43 @@ class LlamaIndexRAG:
             "AND the chat history lack the information needed to answer."
         )
         
+        # Custom condense prompt for bilingual (Hebrew/English) follow-ups.
+        # The default English-only prompt struggles with Hebrew referential
+        # patterns like "ושל בן פיקל?" (and Ben Pickel's?), dropping context.
+        condense_prompt = (
+            "Given the following conversation between a user and an assistant, "
+            "and a follow-up message from the user, rewrite the follow-up into "
+            "a standalone question that captures ALL relevant context from the "
+            "conversation history.\n\n"
+            "IMPORTANT RULES:\n"
+            "- If the follow-up references something from a previous turn "
+            "(like 'and his?', 'what about her?', 'ושל X?', 'מה לגבי Y?'), "
+            "you MUST include the full context in the standalone question.\n"
+            "- Preserve the language of the follow-up (Hebrew stays Hebrew, "
+            "English stays English).\n"
+            "- Include names, IDs, topics, and other specifics from the chat "
+            "history that are needed to understand the standalone question.\n"
+            "- If the follow-up asks about a different person/entity but the "
+            "same topic, include the topic in the rewritten question.\n\n"
+            "Examples:\n"
+            "- Chat: 'What is David's ID?' → 'His ID is 038041612'\n"
+            "  Follow-up: 'And Mia's?' → 'What is Mia's ID number?'\n"
+            "- Chat: 'מה התעודת זהות של דוד?' → 'תעודת הזהות של דוד היא 038041612'\n"
+            "  Follow-up: 'ושל בן?' → 'מה מספר תעודת הזהות של בן?'\n"
+            "- Chat: 'מה התעודת זהות של דוד?' → '038041612'\n"
+            "  Follow-up: 'מה תאריך הלידה שלו?' → 'מה תאריך הלידה של דוד פיקל?'\n\n"
+            "Chat History:\n{chat_history}\n\n"
+            "Follow Up Message: {question}\n"
+            "Standalone Question:"
+        )
+        
         engine = CondensePlusContextChatEngine.from_defaults(
             retriever=retriever,
             memory=memory,
             llm=Settings.llm,
             system_prompt=system_prompt,
             context_prompt=context_prompt,
+            condense_prompt=condense_prompt,
             verbose=(settings.get("log_level", "INFO") == "DEBUG"),
         )
         

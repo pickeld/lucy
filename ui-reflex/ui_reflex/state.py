@@ -579,10 +579,23 @@ class AppState(rx.State):
         loaded = await api_client.fetch_conversation(convo_id)
         if loaded:
             self.conversation_id = convo_id
-            self.messages = [
-                {"role": m["role"], "content": m["content"], "sources": "", "cost": ""}
-                for m in loaded.get("messages", [])
-            ]
+            msgs: list[dict[str, str]] = []
+            for m in loaded.get("messages", []):
+                sources_md = ""
+                raw_sources = m.get("sources", "")
+                if raw_sources and m.get("role") == "assistant":
+                    try:
+                        src_list = json.loads(raw_sources)
+                        sources_md = _format_sources(src_list) if src_list else ""
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                msgs.append({
+                    "role": m["role"],
+                    "content": m["content"],
+                    "sources": sources_md,
+                    "cost": "",
+                })
+            self.messages = msgs
             self.active_filters = loaded.get("filters", {})
             self.renaming_id = ""
             self.input_text = ""

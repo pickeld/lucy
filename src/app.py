@@ -1,3 +1,4 @@
+import json
 import os
 import time
 import traceback
@@ -253,10 +254,6 @@ def rag_query():
         # Compute per-query cost
         query_cost = METER.session_total - cost_snapshot
         
-        # Persist messages to SQLite
-        conversations_db.add_message(conversation_id, "user", question)
-        conversations_db.add_message(conversation_id, "assistant", answer)
-
         # Extract source documents
         sources = []
         if hasattr(response, 'source_nodes') and response.source_nodes:
@@ -272,6 +269,13 @@ def rag_query():
                     "chat_name": metadata.get("chat_name", ""),
                     "timestamp": metadata.get("timestamp"),
                 })
+
+        # Persist messages to SQLite (include sources JSON for assistant)
+        conversations_db.add_message(conversation_id, "user", question)
+        conversations_db.add_message(
+            conversation_id, "assistant", answer,
+            sources=json.dumps(sources) if sources else "",
+        )
 
         stats = rag.get_stats()
 
@@ -625,6 +629,7 @@ def export_conversation_endpoint(conversation_id: str):
             role = msg.get("role", "unknown")
             content = msg.get("content", "")
             timestamp = msg.get("created_at", "")
+            sources_json = msg.get("sources", "")
             if role == "user":
                 lines.append(f"### 🧑 You")
             else:
@@ -634,6 +639,35 @@ def export_conversation_endpoint(conversation_id: str):
             lines.append("")
             lines.append(content)
             lines.append("")
+
+            # Append sources for assistant messages
+            if role == "assistant" and sources_json:
+                try:
+                    src_list = json.loads(sources_json)
+                    if src_list:
+                        lines.append("<details>")
+                        lines.append("<summary>📚 Sources</summary>")
+                        lines.append("")
+                        for i, src in enumerate(src_list):
+                            sender = src.get("sender", "")
+                            chat_name = src.get("chat_name", "")
+                            src_content = src.get("content", "")[:200]
+                            score = src.get("score")
+                            score_str = f" — {score:.0%}" if score else ""
+                            if sender:
+                                header = f"**{i + 1}. {sender}** in _{chat_name}_{score_str}"
+                            elif chat_name:
+                                header = f"**{i + 1}.** _{chat_name}_{score_str}"
+                            else:
+                                header = f"**{i + 1}.** _Source_{score_str}"
+                            lines.append(header)
+                            if src_content:
+                                lines.append(f"> {src_content}{'…' if len(src_content) >= 200 else ''}")
+                            lines.append("")
+                        lines.append("</details>")
+                        lines.append("")
+                except (ValueError, TypeError):
+                    pass  # Skip malformed sources JSON
 
         markdown = "\n".join(lines)
 
