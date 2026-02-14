@@ -275,10 +275,18 @@ async def test_paperless_connection() -> dict[str, Any]:
         return {"error": str(e)}
 
 
-async def start_paperless_sync() -> dict[str, Any]:
-    """Trigger Paperless-NGX document sync to RAG vector store."""
+async def start_paperless_sync(force: bool = False) -> dict[str, Any]:
+    """Trigger Paperless-NGX document sync to RAG vector store.
+
+    Args:
+        force: If True, skip processed-tag exclusion and dedup checks.
+               Required after deleting/recreating the Qdrant collection.
+    """
     try:
-        resp = await _get_client().post("/plugins/paperless/sync", timeout=120)
+        params = {"force": "true"} if force else {}
+        resp = await _get_client().post(
+            "/plugins/paperless/sync", params=params, timeout=120,
+        )
         data = resp.json()
         if resp.status_code == 200:
             return data

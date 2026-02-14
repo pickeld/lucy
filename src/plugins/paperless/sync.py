@@ -373,6 +373,7 @@ class DocumentSyncer:
         max_docs: int = 1000,
         tags_filter: Optional[list] = None,
         processed_tag_name: str = DEFAULT_PROCESSED_TAG,
+        force: bool = False,
     ) -> dict:
         """Sync documents from Paperless to RAG.
         
@@ -381,11 +382,19 @@ class DocumentSyncer:
         won't be fetched or re-processed.  After successful indexing
         each document is tagged in Paperless.
         
+        When ``force=True``, the processed-tag exclusion filter and the
+        Qdrant deduplication check are both skipped.  This is required
+        after deleting/recreating the Qdrant collection, because the
+        documents in Paperless still carry the tag from the previous
+        sync run but the vectors are gone.
+        
         Args:
             max_docs: Maximum documents to sync
             tags_filter: Optional list of tag names to include
             processed_tag_name: Tag name to mark processed docs
                 (default: ``rag-indexed``)
+            force: If True, skip tag exclusion and dedup checks
+                (re-index everything)
             
         Returns:
             Dict with sync results
@@ -400,7 +409,10 @@ class DocumentSyncer:
         tagged = 0
         
         try:
-            logger.info("Starting Paperless document sync...")
+            if force:
+                logger.info("Starting Paperless FORCE re-sync (ignoring processed tag)...")
+            else:
+                logger.info("Starting Paperless document sync...")
             
             # Pre-fetch correspondent id→name mapping for sender resolution
             correspondents = self.client.get_correspondents()
@@ -410,7 +422,11 @@ class DocumentSyncer:
             processed_tag_id = self._ensure_processed_tag(processed_tag_name)
             
             # Build exclusion list — skip docs already tagged as processed
-            exclude_tag_ids = [processed_tag_id] if processed_tag_id else []
+            # When force=True, don't exclude anything so ALL docs are re-fetched
+            if force:
+                exclude_tag_ids = []
+            else:
+                exclude_tag_ids = [processed_tag_id] if processed_tag_id else []
             
             # Resolve tag names to IDs for the include filter
             include_tag_ids: Optional[List[int]] = None
@@ -464,7 +480,8 @@ class DocumentSyncer:
                         source_id = f"paperless:{doc_id}"
                         
                         # Check if already indexed in RAG (belt-and-suspenders)
-                        if self.rag._message_exists(source_id):
+                        # Skip this check when force=True (collection was reset)
+                        if not force and self.rag._message_exists(source_id):
                             skipped += 1
                             # Still tag it in Paperless if not tagged yet
                             if processed_tag_id:

@@ -122,9 +122,18 @@ class PaperlessPlugin(ChannelPlugin):
         
         @bp.route("/sync", methods=["POST"])
         def sync():
-            """Trigger manual document sync."""
+            """Trigger manual document sync.
+            
+            Query parameters:
+                force: If ``true``, skip the processed-tag exclusion and
+                    Qdrant dedup check.  Required after deleting/recreating
+                    the Qdrant collection when documents still carry the
+                    processed tag in Paperless.
+            """
             if not plugin._syncer:
                 return jsonify({"error": "Plugin not initialized"}), 500
+            
+            force = request.args.get("force", "").lower() in ("true", "1", "yes")
             
             max_docs = int(settings.get("paperless_max_docs", 1000))
             tags_str = settings.get("paperless_sync_tags", "")
@@ -137,6 +146,7 @@ class PaperlessPlugin(ChannelPlugin):
                 max_docs=max_docs,
                 tags_filter=tags,
                 processed_tag_name=processed_tag,
+                force=force,
             )
             
             return jsonify(result), 200
