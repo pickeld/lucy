@@ -1,0 +1,6 @@
+.web/
+.states/
+__pycache__/
+*.pyc
+.git/
+uploaded_files/
