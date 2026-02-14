@@ -56,6 +56,12 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      # Override localhost values from .env with Docker service names
+      REDIS_HOST: redis
+      QDRANT_HOST: qdrant
+      WAHA_BASE_URL: "http://waha:3000"
+      WEBHOOK_URL: "http://app:8765/webhook"
     ports:
       - "8765:8765"
     volumes:
@@ -64,8 +70,6 @@ services:
       - ./data:/app/data      # SQLite settings database persistence
     depends_on:
       redis:
-        condition: service_started
-      waha:
         condition: service_started
       qdrant:
         condition: service_started
