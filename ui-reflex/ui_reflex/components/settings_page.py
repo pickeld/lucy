@@ -50,6 +50,8 @@ def settings_page() -> rx.Component:
                 rx.tabs.content(_plugins_tab(), value="plugins", class_name="pt-4"),
                 rx.tabs.content(_system_tab(), value="system", class_name="pt-4"),
                 rx.tabs.content(_costs_tab(), value="costs", class_name="pt-4"),
+                value=AppState.settings_tab,
+                on_value_change=AppState.set_settings_tab,  # type: ignore[attr-defined]
                 default_value="ai",
                 class_name="mt-2",
             ),
