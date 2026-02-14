@@ -54,6 +54,12 @@ class AppState(rx.State):
     plugins_data: dict[str, Any] = {}
     settings_save_message: str = ""
 
+    # --- Cost tracking ---
+    session_cost: float = 0.0
+    last_query_cost: float = 0.0
+    cost_summary: dict[str, Any] = {}
+    cost_breakdown: dict[str, Any] = {}
+
     # --- Pending changes (explicit save) ---
     pending_changes: dict[str, str] = {}  # key -> new_value
 
@@ -354,6 +360,7 @@ class AppState(rx.State):
         """Called when settings page loads."""
         await self.on_load()
         await self._load_settings()
+        await self._load_cost_data()
 
     # =====================================================================
     # CONVERSATION MANAGEMENT
@@ -381,7 +388,7 @@ class AppState(rx.State):
         if loaded:
             self.conversation_id = convo_id
             self.messages = [
-                {"role": m["role"], "content": m["content"], "sources": ""}
+                {"role": m["role"], "content": m["content"], "sources": "", "cost": ""}
                 for m in loaded.get("messages", [])
             ]
             self.active_filters = loaded.get("filters", {})
@@ -433,7 +440,7 @@ class AppState(rx.State):
             return
 
         # Add user message immediately
-        self.messages.append({"role": "user", "content": question, "sources": ""})
+        self.messages.append({"role": "user", "content": question, "sources": "", "cost": ""})
         self.input_text = ""
         self.is_loading = True
         yield  # Update UI
@@ -456,6 +463,7 @@ class AppState(rx.State):
                 "role": "assistant",
                 "content": f"❌ {data['error']}",
                 "sources": "",
+                "cost": "",
             })
         else:
             raw_answer = data.get("answer", "No answer received")
@@ -466,6 +474,13 @@ class AppState(rx.State):
             if data.get("filters"):
                 self.active_filters = data["filters"]
 
+            # Extract cost info from response
+            cost_data = data.get("cost", {})
+            query_cost = cost_data.get("query_cost_usd", 0.0)
+            self.last_query_cost = query_cost
+            self.session_cost = cost_data.get("session_total_usd", self.session_cost)
+            cost_str = f"${query_cost:.4f}" if query_cost > 0 else ""
+
             # Store sources as a separate field (rendered as collapsible in UI)
             sources = data.get("sources", [])
             sources_md = _format_sources(sources) if sources else ""
@@ -474,6 +489,7 @@ class AppState(rx.State):
                 "role": "assistant",
                 "content": answer,
                 "sources": sources_md,
+                "cost": cost_str,
             })
 
         # Refresh sidebar conversations
@@ -516,6 +532,66 @@ class AppState(rx.State):
         health = await api_client.check_health()
         self.api_status = health.get("status", "unreachable")
         self.health_deps = health.get("dependencies", {})
+
+    # =====================================================================
+    # COST TRACKING
+    # =====================================================================
+
+    async def _load_cost_data(self):
+        """Load cost summary and breakdown from the backend."""
+        self.cost_summary = await api_client.get_cost_summary(days=7)
+        self.cost_breakdown = await api_client.get_cost_breakdown(days=7)
+        session_data = await api_client.get_cost_session(n=20)
+        self.session_cost = session_data.get("session_total_usd", 0.0)
+
+    @rx.var(cache=True)
+    def session_cost_display(self) -> str:
+        """Formatted session cost for display."""
+        if self.session_cost <= 0:
+            return ""
+        return f"${self.session_cost:.4f}"
+
+    @rx.var(cache=True)
+    def cost_today_display(self) -> str:
+        """Today's total cost for display."""
+        total = self.cost_summary.get("total_cost_usd", 0.0)
+        if total <= 0:
+            return "$0.00"
+        return f"${total:.4f}"
+
+    @rx.var(cache=True)
+    def cost_by_kind_list(self) -> list[dict[str, str]]:
+        """Cost breakdown by kind (chat/embed/whisper/image) for display."""
+        by_kind = self.cost_summary.get("by_kind", {})
+        if not by_kind:
+            return []
+        result: list[dict[str, str]] = []
+        kind_labels = {
+            "chat": "💬 Chat (LLM)",
+            "embed": "🔢 Embeddings",
+            "whisper": "🎙️ Transcription",
+            "image": "🖼️ Image Gen",
+        }
+        for kind, cost in by_kind.items():
+            result.append({
+                "kind": kind,
+                "label": kind_labels.get(kind) or kind.title(),
+                "cost": f"${cost:.4f}" if cost else "$0.00",
+            })
+        return result
+
+    @rx.var(cache=True)
+    def cost_daily_list(self) -> list[dict[str, str]]:
+        """Daily cost totals for display."""
+        daily = self.cost_summary.get("daily", [])
+        result: list[dict[str, str]] = []
+        for day in daily:
+            result.append({
+                "date": str(day.get("date", "")),
+                "cost": f"${day.get('total_cost', 0):.4f}",
+                "events": str(day.get("event_count", 0)),
+            })
+        return result
 
     # =====================================================================
     # SETTINGS

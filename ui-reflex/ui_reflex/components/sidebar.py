@@ -223,7 +223,7 @@ def _rename_mode() -> rx.Component:
 # =========================================================================
 
 def _bottom_section() -> rx.Component:
-    """Health indicator + settings link at the bottom."""
+    """Health indicator + session cost + settings link at the bottom."""
     return rx.box(
         rx.separator(class_name="border-sidebar-border mb-2"),
         rx.flex(
@@ -245,6 +245,25 @@ def _bottom_section() -> rx.Component:
             align="center",
             gap="2",
             class_name="px-3 py-1",
+        ),
+        # Session cost indicator
+        rx.cond(
+            AppState.session_cost_display != "",
+            rx.flex(
+                rx.icon("coins", size=14, class_name="text-amber-400"),
+                rx.text(
+                    "Session: ",
+                    class_name="text-xs text-sidebar-muted",
+                ),
+                rx.text(
+                    AppState.session_cost_display,
+                    class_name="text-xs text-amber-400 font-mono font-medium",
+                ),
+                align="center",
+                gap="1",
+                class_name="px-3 py-1",
+            ),
+            rx.fragment(),
         ),
         rx.link(
             rx.flex(

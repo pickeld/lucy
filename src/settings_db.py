@@ -97,6 +97,7 @@ ENV_KEY_MAP: Dict[str, str] = {
     "session_max_history": "SESSION_MAX_HISTORY",
     "timezone": "TIMEZONE",
     "ui_api_url": "UI_API_URL",
+    "cost_tracking_enabled": "COST_TRACKING_ENABLED",
 }
 
 # Reverse map for looking up env var name from SQLite key
@@ -171,6 +172,7 @@ DEFAULT_SETTINGS: List[Tuple[str, str, str, str, str]] = [
     ("session_max_history", "20", "app", "int", "Max conversation history turns to keep"),
     ("timezone", "Asia/Jerusalem", "app", "text", "Timezone for date/time display (e.g. Asia/Jerusalem, US/Eastern)"),
     ("ui_api_url", "http://localhost:8765", "app", "text", "Backend API URL for the Streamlit UI"),
+    ("cost_tracking_enabled", "true", "app", "bool", "Enable real-time LLM cost tracking and logging"),
 ]
 
 # Category display order and labels

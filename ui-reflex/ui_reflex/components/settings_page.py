@@ -44,6 +44,7 @@ def settings_page() -> rx.Component:
                     rx.tabs.trigger("🔌 Plugins", value="plugins"),
                     rx.tabs.trigger("🏗️ Infra", value="infra"),
                     rx.tabs.trigger("🔧 App", value="app"),
+                    rx.tabs.trigger("💰 Costs", value="costs"),
                     size="2",
                 ),
                 rx.tabs.content(_llm_tab(), value="llm", class_name="pt-4"),
@@ -52,6 +53,7 @@ def settings_page() -> rx.Component:
                 rx.tabs.content(_plugins_tab(), value="plugins", class_name="pt-4"),
                 rx.tabs.content(_infra_tab(), value="infra", class_name="pt-4"),
                 rx.tabs.content(_app_tab(), value="app", class_name="pt-4"),
+                rx.tabs.content(_costs_tab(), value="costs", class_name="pt-4"),
                 default_value="llm",
                 class_name="mt-4",
             ),
@@ -698,3 +700,14 @@ def _textarea_input(item: dict) -> rx.Component:
         align="start",
         gap="2",
     )
+
+
+# =========================================================================
+# COSTS TAB
+# =========================================================================
+
+
+def _costs_tab() -> rx.Component:
+    """Cost tracking dashboard tab."""
+    from .cost_display import cost_dashboard
+    return cost_dashboard()

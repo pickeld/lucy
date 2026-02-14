@@ -44,6 +44,7 @@ def _assistant_bubble(msg: dict) -> rx.Component:
     """Assistant message — white background, brain avatar.
 
     Sources (if any) are rendered as a collapsible section below the answer.
+    A cost badge is shown when per-query cost data is available.
     """
     return rx.flex(
         # Avatar
@@ -54,7 +55,7 @@ def _assistant_bubble(msg: dict) -> rx.Component:
                 "justify-center shrink-0 mt-0.5"
             ),
         ),
-        # Content + collapsible sources
+        # Content + collapsible sources + cost badge
         rx.box(
             # Main answer
             rx.markdown(
@@ -65,6 +66,21 @@ def _assistant_bubble(msg: dict) -> rx.Component:
             rx.cond(
                 msg["sources"] != "",
                 _collapsible_sources(msg["sources"]),
+                rx.fragment(),
+            ),
+            # Cost badge (only if cost data exists)
+            rx.cond(
+                msg["cost"] != "",
+                rx.flex(
+                    rx.icon("coins", size=12, class_name="text-amber-400"),
+                    rx.text(
+                        msg["cost"],
+                        class_name="text-[0.7rem] text-amber-600 font-mono",
+                    ),
+                    align="center",
+                    gap="1",
+                    class_name="mt-2 opacity-60 hover:opacity-100 transition-opacity",
+                ),
                 rx.fragment(),
             ),
             class_name="flex-1 min-w-0",

@@ -254,6 +254,43 @@ async def fetch_secret_value(key: str) -> dict[str, Any]:
 
 
 # =========================================================================
+# COST TRACKING
+# =========================================================================
+
+async def get_cost_session(n: int = 20) -> dict[str, Any]:
+    """Get current session cost total and recent events."""
+    try:
+        resp = await _get_client().get("/costs/session", params={"n": n}, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception:
+        pass
+    return {"session_total_usd": 0.0, "recent_events": []}
+
+
+async def get_cost_summary(days: int = 7) -> dict[str, Any]:
+    """Get daily cost summary for the last N days."""
+    try:
+        resp = await _get_client().get("/costs/summary", params={"days": days}, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception:
+        pass
+    return {"total_cost_usd": 0.0, "by_kind": {}, "daily": []}
+
+
+async def get_cost_breakdown(days: int = 7) -> dict[str, Any]:
+    """Get cost breakdown by provider and model."""
+    try:
+        resp = await _get_client().get("/costs/breakdown", params={"days": days}, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception:
+        pass
+    return {"total_cost_usd": 0.0, "by_kind": {}, "by_model": []}
+
+
+# =========================================================================
 # PLUGINS — PAPERLESS
 # =========================================================================
 

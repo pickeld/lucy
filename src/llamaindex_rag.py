@@ -207,13 +207,16 @@ class LlamaIndexRAG:
         logger.info(f"LlamaIndex RAG initialized with Qdrant at {self.qdrant_host}:{self.qdrant_port}")
     
     def _configure_embedding(self):
-        """Configure embedding model (fast, required at startup).
+        """Configure embedding model and cost tracking callback (fast, required at startup).
         
         Uses text-embedding-3-large with dimensions=1024 for best multilingual
         (Hebrew + English) support. The 'large' model significantly outperforms
         'small' on non-English languages. Using 1024 dimensions (reduced from
         native 3072) provides an excellent quality/cost tradeoff — OpenAI's
         Matryoshka representation learning ensures minimal quality loss.
+        
+        Also sets up the LlamaIndex CallbackManager with a CostTrackingHandler
+        to automatically track token usage and costs for all LLM and embedding calls.
         
         Reads model name from settings.embedding_model for configurability.
         """
@@ -225,6 +228,26 @@ class LlamaIndexRAG:
             dimensions=self.VECTOR_SIZE,
         )
         logger.debug(f"OpenAI embedding model configured ({model_name}, dims={self.VECTOR_SIZE})")
+        
+        # Set up cost tracking callback manager
+        try:
+            from cost_callbacks import create_cost_callback_manager
+            
+            llm_provider = settings.get("llm_provider", "openai").lower()
+            llm_model = (
+                settings.get("gemini_model", "gemini-pro")
+                if llm_provider == "gemini"
+                else settings.get("openai_model", "gpt-4o")
+            )
+            Settings.callback_manager = create_cost_callback_manager(
+                llm_provider=llm_provider,
+                llm_model=llm_model,
+                embed_provider="openai",
+                embed_model=model_name,
+            )
+            logger.info("Cost tracking callback manager configured")
+        except Exception as e:
+            logger.warning(f"Cost tracking setup failed (non-fatal): {e}")
     
     def _ensure_llm_configured(self):
         """Lazily configure LLM on first use (Gemini import is slow)."""
@@ -234,29 +257,45 @@ class LlamaIndexRAG:
         llm_provider = settings.llm_provider.lower()
         logger.info(f"Configuring LLM provider: {llm_provider} (lazy init)...")
         
+        actual_model = ""
         if llm_provider == 'gemini':
             try:
                 from llama_index.llms.gemini import Gemini
+                actual_model = settings.gemini_model
                 Settings.llm = Gemini(
                     api_key=settings.google_api_key,
-                    model=settings.gemini_model,
+                    model=actual_model,
                     temperature=0.3
                 )
                 logger.info("Gemini LLM configured")
             except ImportError:
                 logger.warning("Gemini LLM not available, falling back to OpenAI")
+                llm_provider = "openai"
+                actual_model = settings.openai_model
                 Settings.llm = LlamaIndexOpenAI(
                     api_key=settings.openai_api_key,
-                    model=settings.openai_model,
+                    model=actual_model,
                     temperature=0.3
                 )
         else:
+            actual_model = settings.openai_model
             Settings.llm = LlamaIndexOpenAI(
                 api_key=settings.openai_api_key,
-                model=settings.openai_model,
+                model=actual_model,
                 temperature=0.3
             )
             logger.info("OpenAI LLM configured")
+        
+        # Update cost tracking handler with actual provider/model
+        try:
+            from cost_callbacks import get_cost_handler
+            handler = get_cost_handler()
+            if handler:
+                handler.llm_provider = llm_provider
+                handler.llm_model = actual_model
+                logger.debug(f"Cost handler updated: LLM={llm_provider}:{actual_model}")
+        except Exception:
+            pass  # Non-fatal
         
         self._llm_configured = True
     
@@ -1388,6 +1427,15 @@ class LlamaIndexRAG:
         """
         # Ensure LLM is configured (lazy init for faster startup)
         self._ensure_llm_configured()
+        
+        # Tag cost tracking events with the conversation ID
+        try:
+            from cost_callbacks import get_cost_handler
+            handler = get_cost_handler()
+            if handler:
+                handler.conversation_id = conversation_id
+        except Exception:
+            pass  # Non-fatal
         
         # Memory backed by Redis with token limit
         token_limit = int(settings.session_max_history) * 200  # ~200 tokens per turn
