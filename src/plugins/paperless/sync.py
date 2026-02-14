@@ -409,6 +409,25 @@ class DocumentSyncer:
         tagged = 0
         
         try:
+            # Auto-detect empty collection → force mode
+            # After deleting/recreating the Qdrant collection the vectors
+            # are gone but the Paperless docs still carry the processed tag,
+            # so a normal sync returns 0 results.  Detect this and switch
+            # to force mode automatically.
+            if not force:
+                try:
+                    info = self.rag.qdrant_client.get_collection(
+                        self.rag.COLLECTION_NAME
+                    )
+                    if (info.points_count or 0) == 0:
+                        logger.info(
+                            "Qdrant collection is empty — automatically "
+                            "enabling force mode for full re-sync"
+                        )
+                        force = True
+                except Exception as e:
+                    logger.debug(f"Could not check collection point count: {e}")
+            
             if force:
                 logger.info("Starting Paperless FORCE re-sync (ignoring processed tag)...")
             else:

@@ -606,14 +606,18 @@ class AppState(rx.State):
 
     # ----- Paperless sync -----
 
-    async def _do_paperless_sync(self, force: bool = False):
-        """Shared logic for normal and force Paperless sync."""
-        label = "Force re-sync" if force else "Sync"
+    async def start_paperless_sync(self):
+        """Trigger Paperless-NGX document sync to RAG.
+
+        The backend auto-detects an empty Qdrant collection and
+        switches to force mode (skipping processed-tag exclusion)
+        so this single button works after a collection reset too.
+        """
         self.paperless_sync_status = "syncing"
-        self.paperless_sync_message = f"⏳ {label}ing documents…"
+        self.paperless_sync_message = "⏳ Syncing documents…"
         yield
 
-        result = await api_client.start_paperless_sync(force=force)
+        result = await api_client.start_paperless_sync()
         if "error" in result:
             self.paperless_sync_status = "error"
             self.paperless_sync_message = f"❌ {result['error']}"
@@ -624,7 +628,7 @@ class AppState(rx.State):
             errors = result.get("errors", 0)
             self.paperless_sync_status = "complete"
             self.paperless_sync_message = (
-                f"✅ {label} complete — {synced} indexed, "
+                f"✅ Sync complete — {synced} indexed, "
                 f"{tagged} tagged, {skipped} skipped, {errors} errors"
             )
             # Refresh RAG stats to reflect new document count
@@ -635,20 +639,6 @@ class AppState(rx.State):
         else:
             self.paperless_sync_status = "error"
             self.paperless_sync_message = f"❌ Unexpected response: {result}"
-
-    async def start_paperless_sync(self):
-        """Trigger normal Paperless-NGX document sync to RAG."""
-        async for _ in self._do_paperless_sync(force=False):
-            yield
-
-    async def start_paperless_force_sync(self):
-        """Trigger force Paperless-NGX re-sync (ignores processed tag).
-
-        Use after deleting/recreating the Qdrant collection when documents
-        in Paperless still carry the ``rag-indexed`` tag from a previous run.
-        """
-        async for _ in self._do_paperless_sync(force=True):
-            yield
 
     async def reset_category(self, category: str):
         """Reset a settings category to defaults."""
