@@ -141,6 +141,30 @@ class AppState(rx.State):
     rag_stats: dict[str, Any] = {}
 
     # =====================================================================
+    # EXPLICIT SETTERS (avoid deprecated state_auto_setters)
+    # =====================================================================
+
+    def set_input_text(self, value: str):
+        """Set the chat input text."""
+        self.input_text = value
+
+    def set_sidebar_search(self, value: str):
+        """Set the sidebar search filter text."""
+        self.sidebar_search = value
+
+    def set_rename_text(self, value: str):
+        """Set the conversation rename text."""
+        self.rename_text = value
+
+    def set_settings_tab(self, value: str):
+        """Set the active settings tab."""
+        self.settings_tab = value
+
+    def set_plugin_tab(self, value: str):
+        """Set the active plugin sub-tab."""
+        self.plugin_tab = value
+
+    # =====================================================================
     # COMPUTED VARS
     # =====================================================================
 
