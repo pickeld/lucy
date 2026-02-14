@@ -1,4 +1,4 @@
-"""Logging configuration for WhatsApp-GPT application.
+"""Logging configuration for Lucy application.
 
 Uses Python's built-in logging with automatic filename/function name
 in log output via format specifiers (no frame inspection needed).

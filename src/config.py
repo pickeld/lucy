@@ -1,4 +1,4 @@
-"""Configuration management for WhatsApp-GPT application.
+"""Configuration management for Lucy application.
 
 All configuration is stored in SQLite (managed by settings_db module).
 On first run, settings_db seeds the database from .env values.

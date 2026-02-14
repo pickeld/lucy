@@ -1,4 +1,4 @@
-"""SQLite-backed conversation persistence for WhatsApp-GPT.
+"""SQLite-backed conversation persistence for Lucy.
 
 Stores conversation metadata and message history in SQLite for the
 "previous chats" feature. SQLite is the source of truth — if Redis

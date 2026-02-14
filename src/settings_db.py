@@ -1,4 +1,4 @@
-"""SQLite-backed settings database for WhatsApp-GPT.
+"""SQLite-backed settings database for Lucy.
 
 All application configuration is stored in a SQLite database. On first run,
 defaults are seeded and any values found in environment variables (from .env)

@@ -52,7 +52,7 @@ services:
   
   app:
     build: .
-    container_name: rag-assistant
+    container_name: lucy
     restart: unless-stopped
     env_file:
       - .env

@@ -1,4 +1,4 @@
-"""Custom exception classes for WhatsApp-GPT application.
+"""Custom exception classes for Lucy application.
 
 This module provides a hierarchy of exceptions for better error handling
 and debugging throughout the application.
@@ -7,8 +7,8 @@ and debugging throughout the application.
 from typing import Optional, Any, Dict
 
 
-class WhatsAppGPTError(Exception):
-    """Base exception for all WhatsApp-GPT errors."""
+class LucyError(Exception):
+    """Base exception for all Lucy errors."""
     
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
         self.message = message
@@ -25,7 +25,7 @@ class WhatsAppGPTError(Exception):
 # External API Errors
 # =============================================================================
 
-class ExternalAPIError(WhatsAppGPTError):
+class ExternalAPIError(LucyError):
     """Base exception for external API errors."""
     
     def __init__(
@@ -64,7 +64,7 @@ class WAHAAPIError(ExternalAPIError):
 # Message Processing Errors
 # =============================================================================
 
-class MessageProcessingError(WhatsAppGPTError):
+class MessageProcessingError(LucyError):
     """Raised when message processing fails."""
     
     def __init__(
@@ -83,6 +83,6 @@ class MessageProcessingError(WhatsAppGPTError):
 # RAG Errors
 # =============================================================================
 
-class RAGError(WhatsAppGPTError):
-    """Base exception for RAG-related errors."""
+class RAGError(LucyError):
+    """Base exception for all RAG-related errors."""
     pass

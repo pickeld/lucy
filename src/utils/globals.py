@@ -1,4 +1,4 @@
-"""Global utility functions for WhatsApp-GPT application.
+"""Global utility functions for Lucy application.
 
 Provides HTTP request helpers with retry logic for external API calls.
 """

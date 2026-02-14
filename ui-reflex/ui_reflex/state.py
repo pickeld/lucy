@@ -741,7 +741,7 @@ class AppState(rx.State):
                 json_str = _json.dumps(data, indent=2)
                 return rx.download(
                     data=json_str.encode(),
-                    filename="whatsapp-gpt-settings.json",
+                    filename="lucy-settings.json",
                 )
         except Exception as e:
             self.settings_save_message = f"❌ Export error: {str(e)}"

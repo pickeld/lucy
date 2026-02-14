@@ -1,4 +1,4 @@
-# whatsapp-gpt
+# Lucy
 
 A Flask-based integration between WhatsApp (via the WAHA API) and OpenAI's GPT models. This project allows you to pair your WhatsApp account, receive webhook events, and interact with OpenAI's GPT for chat-based automation.
 
@@ -30,7 +30,7 @@ A Flask-based integration between WhatsApp (via the WAHA API) and OpenAI's GPT m
 ## Project Structure
 
 ```
-whatsapp-gpt/
+lucy/
 ├── src/                          # Main application code
 │   ├── app.py                    # Flask app: webhooks, RAG, config & cache API endpoints
 │   ├── config.py                 # Settings class — reads from SQLite via settings_db
@@ -84,8 +84,8 @@ whatsapp-gpt/
 
 1. **Clone the repository:**
    ```sh
-   git clone https://github.com/yourusername/whatsapp-gpt.git
-   cd whatsapp-gpt
+   git clone https://github.com/pickeld/lucy.git
+   cd lucy
    ```
 
 2. **Install dependencies:**

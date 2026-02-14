@@ -2,7 +2,7 @@
 
 ## Overview
 
-Add real-time cost tracking to the WhatsApp-GPT RAG assistant, covering all LLM and embedding API calls across OpenAI and Gemini providers. The system will track per-request costs, session totals, and daily aggregates — persisted to SQLite and displayed in the Reflex UI.
+Add real-time cost tracking to the Lucy RAG assistant, covering all LLM and embedding API calls across OpenAI and Gemini providers. The system will track per-request costs, session totals, and daily aggregates — persisted to SQLite and displayed in the Reflex UI.
 
 ## Current LLM Call Points (5 Cost Centers)
 
