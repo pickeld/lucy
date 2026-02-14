@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Temporary script: delete all Paperless-NGX tags with <= X documents.
 
-Uses the /api/bulk_edit/ endpoint for true batch deletion.
+Uses the /api/bulk_edit_objects/ endpoint (same as the Paperless-NGX UI)
+with configurable batch sizes for reliable batch deletion.
 
 Usage:
     python scripts/delete_low_count_tags.py [--max-docs X] [--dry-run]
@@ -15,16 +16,19 @@ Examples:
     # Delete all tags with 0 documents
     python scripts/delete_low_count_tags.py --max-docs 0
 
-    # Delete all tags with 2 or fewer documents
-    python scripts/delete_low_count_tags.py --max-docs 2
+    # Delete all tags with 2 or fewer documents, batch size 20
+    python scripts/delete_low_count_tags.py --max-docs 2 --batch-size 20
 """
 
 import argparse
+import math
 import os
 import sys
-import math
+import time
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # ---------------------------------------------------------------------------
 # Resolve Paperless credentials
@@ -75,6 +79,23 @@ def get_credentials() -> tuple[str, str]:
     return url.rstrip("/"), token
 
 
+def build_session(token: str) -> requests.Session:
+    """Build a requests session with retry logic."""
+    session = requests.Session()
+    session.headers.update({"Authorization": f"Token {token}"})
+
+    retry = Retry(
+        total=3,
+        backoff_factor=2,
+        status_forcelist=[429, 502, 503, 504],
+        allowed_methods=["DELETE", "GET", "POST"],
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
 # ---------------------------------------------------------------------------
 # Paperless API helpers
 # ---------------------------------------------------------------------------
@@ -98,15 +119,16 @@ def fetch_all_tags(base_url: str, session: requests.Session) -> list[dict]:
     return tags
 
 
-def bulk_delete_tags(
+def batch_delete_tags(
     base_url: str,
     session: requests.Session,
     tag_ids: list[int],
-    batch_size: int = 50,
+    batch_size: int = 25,
+    delay: float = 1.0,
 ) -> tuple[int, int]:
-    """Delete tags using the /api/bulk_edit/ batch endpoint.
+    """Delete tags using POST /api/bulk_edit_objects/ (Paperless-NGX native batch).
     
-    Sends tag IDs in chunks of `batch_size` to avoid overwhelming the server.
+    Sends tag IDs in chunks to avoid server overload.
     Returns (success_count, fail_count).
     """
     total_batches = math.ceil(len(tag_ids) / batch_size)
@@ -116,11 +138,11 @@ def bulk_delete_tags(
     for i in range(0, len(tag_ids), batch_size):
         batch = tag_ids[i : i + batch_size]
         batch_num = (i // batch_size) + 1
-        print(f"  Batch {batch_num}/{total_batches}: deleting {len(batch)} tags …")
+        print(f"  Batch {batch_num}/{total_batches}: deleting {len(batch)} tags …", end=" ", flush=True)
 
         try:
             resp = session.post(
-                f"{base_url}/api/bulk_edit/",
+                f"{base_url}/api/bulk_edit_objects/",
                 json={
                     "objects": batch,
                     "object_type": "tags",
@@ -130,10 +152,23 @@ def bulk_delete_tags(
             )
             resp.raise_for_status()
             ok += len(batch)
-            print(f"    ✓ Batch {batch_num} done.")
-        except Exception as exc:
-            print(f"    ✗ Batch {batch_num} failed: {exc}")
+            print("✓")
+        except requests.exceptions.HTTPError as exc:
+            # Log the response body for debugging
+            body = ""
+            try:
+                body = exc.response.text[:200]
+            except Exception:
+                pass
+            print(f"✗ {exc.response.status_code}: {body}")
             fail += len(batch)
+        except Exception as exc:
+            print(f"✗ {exc}")
+            fail += len(batch)
+
+        # Small delay between batches to let the server breathe
+        if i + batch_size < len(tag_ids):
+            time.sleep(delay)
 
     return ok, fail
 
@@ -155,8 +190,14 @@ def main():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=50,
-        help="Number of tags to delete per API call (default: 50)",
+        default=25,
+        help="Number of tags per bulk_edit_objects call (default: 25)",
+    )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=1.0,
+        help="Seconds to wait between batches (default: 1.0)",
     )
     parser.add_argument(
         "--dry-run",
@@ -166,8 +207,7 @@ def main():
     args = parser.parse_args()
 
     base_url, token = get_credentials()
-    session = requests.Session()
-    session.headers.update({"Authorization": f"Token {token}"})
+    session = build_session(token)
 
     print(f"Connecting to {base_url} …")
     tags = fetch_all_tags(base_url, session)
@@ -195,18 +235,23 @@ def main():
         return
 
     # Confirmation
-    answer = input(f"\nDelete these {len(candidates)} tag(s) in batches of {args.batch_size}? [y/N] ").strip().lower()
+    answer = input(
+        f"\nDelete these {len(candidates)} tag(s) in batches of {args.batch_size}? [y/N] "
+    ).strip().lower()
     if answer != "y":
         print("Aborted.")
         return
 
     print(f"\nDeleting {len(candidates)} tags …\n")
-    ok, fail = bulk_delete_tags(
+    t0 = time.time()
+    ok, fail = batch_delete_tags(
         base_url, session,
         [t["id"] for t in candidates],
         batch_size=args.batch_size,
+        delay=args.delay,
     )
-    print(f"\nDone. Deleted: {ok}  Failed: {fail}")
+    elapsed = time.time() - t0
+    print(f"\nDone in {elapsed:.1f}s. Deleted: {ok}  Failed: {fail}")
 
 
 if __name__ == "__main__":
