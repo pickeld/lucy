@@ -1436,13 +1436,36 @@ class LlamaIndexRAG:
     def get_stats(self) -> Dict[str, Any]:
         """Get statistics about the vector store.
         
+        Returns total point count plus per-source breakdowns so the UI
+        can show WhatsApp messages vs documents separately.
+        
         Returns:
-            Dictionary with collection stats
+            Dictionary with collection stats including source_counts
         """
         try:
             collection_info = self.qdrant_client.get_collection(self.COLLECTION_NAME)
+            total = collection_info.points_count or 0
+
+            # Count points by source type using Qdrant scroll with filters
+            source_counts: Dict[str, int] = {}
+            for source_value in ("whatsapp", "paperless"):
+                try:
+                    count_result = self.qdrant_client.count(
+                        collection_name=self.COLLECTION_NAME,
+                        count_filter=Filter(must=[
+                            FieldCondition(key="source", match=MatchValue(value=source_value))
+                        ]),
+                        exact=True,
+                    )
+                    source_counts[source_value] = count_result.count
+                except Exception:
+                    source_counts[source_value] = 0
+
             return {
-                "total_documents": collection_info.points_count,
+                "total_documents": total,
+                "whatsapp_messages": source_counts.get("whatsapp", 0),
+                "documents": source_counts.get("paperless", 0),
+                "source_counts": source_counts,
                 "qdrant_server": f"{self.qdrant_host}:{self.qdrant_port}",
                 "collection_name": self.COLLECTION_NAME,
                 "dashboard_url": f"http://{self.qdrant_host}:{self.qdrant_port}/dashboard"

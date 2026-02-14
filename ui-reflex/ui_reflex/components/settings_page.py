@@ -239,7 +239,7 @@ def _rag_stats_section() -> rx.Component:
         rx.grid(
             rx.box(
                 rx.text(
-                    "Total Documents",
+                    "Total Vectors",
                     class_name="text-xs text-gray-400 uppercase tracking-wider",
                 ),
                 rx.text(
@@ -250,12 +250,46 @@ def _rag_stats_section() -> rx.Component:
             ),
             rx.box(
                 rx.text(
+                    "WhatsApp Messages",
+                    class_name="text-xs text-gray-400 uppercase tracking-wider",
+                ),
+                rx.flex(
+                    rx.icon("message-circle", size=18, class_name="text-green-500"),
+                    rx.text(
+                        AppState.rag_whatsapp_count,
+                        class_name="text-2xl font-semibold text-gray-800",
+                    ),
+                    align="center",
+                    gap="2",
+                    class_name="mt-1",
+                ),
+                class_name="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3",
+            ),
+            rx.box(
+                rx.text(
+                    "Documents",
+                    class_name="text-xs text-gray-400 uppercase tracking-wider",
+                ),
+                rx.flex(
+                    rx.icon("file-text", size=18, class_name="text-blue-500"),
+                    rx.text(
+                        AppState.rag_document_count,
+                        class_name="text-2xl font-semibold text-gray-800",
+                    ),
+                    align="center",
+                    gap="2",
+                    class_name="mt-1",
+                ),
+                class_name="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3",
+            ),
+            rx.box(
+                rx.text(
                     "Collection",
                     class_name="text-xs text-gray-400 uppercase tracking-wider",
                 ),
                 rx.text(
                     AppState.rag_collection_name,
-                    class_name="text-2xl font-semibold text-gray-800 mt-1",
+                    class_name="text-lg font-semibold text-gray-800 mt-1",
                 ),
                 class_name="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3",
             ),

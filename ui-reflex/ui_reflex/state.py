@@ -202,6 +202,16 @@ class AppState(rx.State):
         return str(self.rag_stats.get("total_documents", "—"))
 
     @rx.var(cache=True)
+    def rag_whatsapp_count(self) -> str:
+        """Extract WhatsApp message count from rag_stats."""
+        return str(self.rag_stats.get("whatsapp_messages", "—"))
+
+    @rx.var(cache=True)
+    def rag_document_count(self) -> str:
+        """Extract document count (Paperless etc.) from rag_stats."""
+        return str(self.rag_stats.get("documents", "—"))
+
+    @rx.var(cache=True)
     def rag_collection_name(self) -> str:
         """Extract collection name from rag_stats."""
         return str(self.rag_stats.get("collection_name", "—"))
