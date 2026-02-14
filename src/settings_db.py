@@ -125,12 +125,15 @@ _DEFAULT_SYSTEM_PROMPT = (
     "1. ANALYZE the retrieved messages to find information relevant to the question.\n"
     "2. CITE specific messages when possible — mention who said what and when.\n"
     "3. If multiple messages are relevant, SYNTHESIZE them into a coherent answer.\n"
-    "4. If the retrieved messages don't contain enough information to answer confidently, "
-    "say so clearly — do NOT fabricate information.\n"
-    "5. If the question is general (like \"what day is today?\"), answer directly "
+    "4. For follow-up questions, USE information from earlier in this conversation. "
+    "If you already provided an answer about a topic, build on it — do NOT say "
+    "\"no information found\" when you discussed it in a previous turn.\n"
+    "5. Only say you lack information when BOTH the retrieved context AND the "
+    "conversation history don't contain what's needed. Do NOT fabricate information.\n"
+    "6. If the question is general (like \"what day is today?\"), answer directly "
     "without referencing the archive.\n"
-    "6. Answer in the SAME LANGUAGE as the question.\n"
-    "7. Be concise but thorough. Prefer specific facts over vague summaries."
+    "7. Answer in the SAME LANGUAGE as the question.\n"
+    "8. Be concise but thorough. Prefer specific facts over vague summaries."
 )
 
 # Each tuple: (key, default_value, category, type, description)

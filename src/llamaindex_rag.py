@@ -1598,12 +1598,15 @@ class LlamaIndexRAG:
                 "1. ANALYZE the retrieved messages to find information relevant to the question.\n"
                 "2. CITE specific messages when possible — mention who said what and when.\n"
                 "3. If multiple messages are relevant, SYNTHESIZE them into a coherent answer.\n"
-                "4. If the retrieved messages don't contain enough information to answer confidently, "
-                "say so clearly — do NOT fabricate information.\n"
-                "5. If the question is general (like \"what day is today?\"), answer directly "
+                "4. For follow-up questions, USE information from earlier in this conversation. "
+                "If you already provided an answer about a topic, build on it — do NOT say "
+                "\"no information found\" when you discussed it in a previous turn.\n"
+                "5. Only say you lack information when BOTH the retrieved context AND the "
+                "conversation history don't contain what's needed. Do NOT fabricate information.\n"
+                "6. If the question is general (like \"what day is today?\"), answer directly "
                 "without referencing the archive.\n"
-                "6. Answer in the SAME LANGUAGE as the question.\n"
-                "7. Be concise but thorough. Prefer specific facts over vague summaries."
+                "7. Answer in the SAME LANGUAGE as the question.\n"
+                "8. Be concise but thorough. Prefer specific facts over vague summaries."
             )
         
         return prompt_template.format(
@@ -1669,16 +1672,22 @@ class LlamaIndexRAG:
         # Build system prompt with current datetime
         system_prompt = self._build_system_prompt()
         
-        # Context prompt template — handles both populated and empty context
+        # Context prompt template — handles both populated and empty context.
+        # Explicitly instructs the LLM to leverage chat history for follow-up
+        # questions, so it doesn't say "no results" when the answer was already
+        # provided in a previous turn.
         context_prompt = (
-            "Here are the relevant messages from the WhatsApp archive:\n"
+            "Here are the relevant messages from the archive:\n"
             "-----\n"
             "{context_str}\n"
             "-----\n"
-            "If no messages are shown above, inform the user that no relevant "
-            "messages were found in the archive for their query and suggest "
-            "they try different keywords or broaden their search.\n"
-            "Use the chat history and the context above to answer the user's question."
+            "IMPORTANT: Use BOTH the retrieved messages above AND the chat history "
+            "to answer the user's question. If the retrieved messages don't contain "
+            "new relevant information but you already discussed the topic in previous "
+            "turns, use that prior context to answer — do NOT say 'no results found' "
+            "when you already have the information from earlier in the conversation.\n"
+            "Only say no relevant messages were found if BOTH the retrieved context "
+            "AND the chat history lack the information needed to answer."
         )
         
         engine = CondensePlusContextChatEngine.from_defaults(
