@@ -78,7 +78,5 @@ services:
 
 volumes:
   waha_data:
-  pg_data:
-  pgadmin_data:
   redis_data:
   qdrant_data:

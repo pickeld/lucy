@@ -49,6 +49,4 @@ samples.py
 images/
 logs/
 
-# LangGraph dev cache files
-.langgraph_api/
 tmp/
