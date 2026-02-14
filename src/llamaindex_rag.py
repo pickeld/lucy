@@ -859,6 +859,21 @@ class LlamaIndexRAG:
             logger.error(f"Failed to add documents to vector store: {e}")
             return 0
     
+    # Human-readable labels for source values in retrieved context.
+    # Capitalised nicely so the LLM can cite them naturally.
+    _SOURCE_LABELS: Dict[str, str] = {
+        "whatsapp": "WhatsApp",
+        "paperless": "Paperless",
+        "telegram": "Telegram",
+        "email": "Email",
+        "slack": "Slack",
+        "discord": "Discord",
+        "sms": "SMS",
+        "manual": "Manual",
+        "web_scrape": "Web",
+        "api_import": "Import",
+    }
+
     @staticmethod
     def _extract_text_from_payload(payload: Dict[str, Any]) -> Optional[str]:
         """Extract display text from a Qdrant point payload.
@@ -866,6 +881,9 @@ class LlamaIndexRAG:
         Handles both WhatsApp messages (which have a 'message' metadata field)
         and Paperless/other documents (which store text only in LlamaIndex's
         internal '_node_content' JSON blob).
+        
+        Each entry is prefixed with its source (e.g. "WhatsApp", "Paperless")
+        so the LLM can tell the user where a piece of information came from.
         
         Priority:
         1. Reconstruct from 'message' metadata (WhatsApp-style)
@@ -883,10 +901,13 @@ class LlamaIndexRAG:
         timestamp = payload.get("timestamp", 0)
         source = payload.get("source", "")
         
+        # Resolve a human-readable source label
+        source_label = LlamaIndexRAG._SOURCE_LABELS.get(source, source.capitalize() if source else "Unknown")
+        
         # WhatsApp messages have a 'message' field in metadata
         if message:
             formatted_time = format_timestamp(str(timestamp))
-            return f"[{formatted_time}] {sender} in {chat_name}: {message}"
+            return f"[{source_label} | {formatted_time}] {sender} in {chat_name}: {message}"
         
         # Paperless/generic documents: extract text from _node_content
         node_content = payload.get("_node_content")
@@ -895,15 +916,12 @@ class LlamaIndexRAG:
                 content_dict = json.loads(node_content)
                 text = content_dict.get("text")
                 if text:
-                    # For documents, prefix with title/source info for context
-                    if source == "paperless":
-                        formatted_time = format_timestamp(str(timestamp))
-                        # Truncate very long document text for display
-                        display_text = text[:2000] if len(text) > 2000 else text
-                        if sender:
-                            return f"[{formatted_time}] {sender} in {chat_name}:\n{display_text}"
-                        return f"[{formatted_time}] Document '{chat_name}':\n{display_text}"
-                    return text
+                    formatted_time = format_timestamp(str(timestamp))
+                    # Truncate very long document text for display
+                    display_text = text[:2000] if len(text) > 2000 else text
+                    if sender and sender != "Unknown":
+                        return f"[{source_label} | {formatted_time}] {sender} in {chat_name}:\n{display_text}"
+                    return f"[{source_label} | {formatted_time}] Document '{chat_name}':\n{display_text}"
             except (json.JSONDecodeError, TypeError):
                 pass
         
