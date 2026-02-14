@@ -36,11 +36,13 @@ from llama_index.storage.chat_store.redis import RedisChatStore
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
+    Direction,
     Distance,
     FieldCondition,
     Filter,
     MatchText,
     MatchValue,
+    OrderBy,
     PayloadSchemaType,
     Range,
     TextIndexParams,
@@ -116,6 +118,12 @@ class ArchiveRetriever(BaseRetriever):
     def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         """Retrieve relevant messages/documents using hybrid search.
         
+        Runs semantic + full-text hybrid search first. If that returns no
+        results (e.g., for temporal queries like "what's the last message?"
+        where vector similarity doesn't capture recency), automatically
+        falls back to timestamp-ordered retrieval. This is fully
+        language-agnostic — no hardcoded keyword patterns needed.
+        
         Always returns at least one node so the chat engine's synthesizer
         can generate a proper response (it returns "Empty Response" on empty input).
         
@@ -132,6 +140,22 @@ class ArchiveRetriever(BaseRetriever):
             filter_sender=self._filter_sender,
             filter_days=self._filter_days,
         )
+        
+        # Fallback: if semantic + full-text search returned nothing,
+        # provide the most recent messages as context. This handles
+        # temporal/recency queries (any language) where vector similarity
+        # scores are too low, and also serves as a general safety net.
+        if not results:
+            results = self._rag.recency_search(
+                k=self._k,
+                filter_chat_name=self._filter_chat_name,
+                filter_sender=self._filter_sender,
+                filter_days=self._filter_days,
+            )
+            if results:
+                logger.info(
+                    f"Semantic search empty, falling back to {len(results)} recent messages"
+                )
         
         # Ensure at least one node so the synthesizer doesn't return "Empty Response"
         if not results:
@@ -1276,6 +1300,93 @@ class LlamaIndexRAG:
             
         except Exception as e:
             logger.error(f"Metadata search failed: {e}")
+            return []
+    
+    # =========================================================================
+    # Recency-aware retrieval (timestamp-ordered fallback)
+    # =========================================================================
+    
+    def recency_search(
+        self,
+        k: int = 10,
+        filter_chat_name: Optional[str] = None,
+        filter_sender: Optional[str] = None,
+        filter_days: Optional[int] = None,
+    ) -> List[NodeWithScore]:
+        """Retrieve the most recent messages ordered by timestamp descending.
+        
+        This method bypasses semantic search entirely and returns messages
+        sorted by recency. It's used for temporal queries like "what's the
+        last message?" where vector similarity is irrelevant.
+        
+        Uses Qdrant's ``order_by`` parameter on the ``timestamp`` field
+        (which has an integer payload index) for efficient server-side sorting.
+        
+        Args:
+            k: Number of recent messages to return
+            filter_chat_name: Optional filter by chat/group name
+            filter_sender: Optional filter by sender name
+            filter_days: Optional filter by recency in days
+            
+        Returns:
+            List of NodeWithScore ordered by timestamp (most recent first)
+        """
+        try:
+            must_conditions: List = []
+            
+            if filter_chat_name:
+                must_conditions.append(
+                    FieldCondition(key="chat_name", match=MatchValue(value=filter_chat_name))
+                )
+            
+            if filter_sender:
+                must_conditions.append(
+                    FieldCondition(key="sender", match=MatchValue(value=filter_sender))
+                )
+            
+            if filter_days is not None and filter_days > 0:
+                min_timestamp = int(datetime.now().timestamp()) - (filter_days * 24 * 60 * 60)
+                must_conditions.append(
+                    FieldCondition(key="timestamp", range=Range(gte=min_timestamp))
+                )
+            
+            # Exclude conversation chunks — we want individual messages for recency
+            must_conditions.append(
+                FieldCondition(key="timestamp", range=Range(gt=0))
+            )
+            
+            scroll_filter = Filter(must=must_conditions) if must_conditions else None
+            
+            # Use order_by to sort by timestamp descending (most recent first)
+            records, _ = self.qdrant_client.scroll(
+                collection_name=self.COLLECTION_NAME,
+                scroll_filter=scroll_filter,
+                limit=k,
+                with_payload=True,
+                with_vectors=False,
+                order_by=OrderBy(key="timestamp", direction=Direction.DESC),
+            )
+            
+            nodes = []
+            for record in records:
+                payload = record.payload or {}
+                text = self._extract_text_from_payload(payload)
+                
+                if text:
+                    node = TextNode(
+                        text=text,
+                        metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
+                        id_=str(record.id),
+                    )
+                    # Use timestamp as score so most recent messages rank highest
+                    ts = payload.get("timestamp", 0)
+                    nodes.append(NodeWithScore(node=node, score=float(ts) if ts else 0.0))
+            
+            logger.info(f"Recency search returned {len(nodes)} messages (most recent first)")
+            return nodes
+            
+        except Exception as e:
+            logger.error(f"Recency search failed: {e}")
             return []
     
     def search(
