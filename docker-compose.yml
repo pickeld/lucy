@@ -88,7 +88,7 @@ services:
       API_URL: "http://app:8765"
     ports:
       - "3001:3000"   # Reflex frontend (3000 taken by WAHA)
-      - "8001:8000"   # Reflex backend
+      - "8000:8000"   # Reflex backend (must match frontend's expected port)
     volumes:
       - ./ui-reflex/ui_reflex:/app/ui_reflex          # Hot reload Python source
       - ./ui-reflex/assets:/app/assets                  # Hot reload static assets
