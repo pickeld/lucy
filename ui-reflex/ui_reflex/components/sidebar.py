@@ -157,6 +157,11 @@ def _normal_mode(convo_id: rx.Var, convo_title: rx.Var, is_active: rx.Var) -> rx
                         "Rename",
                         on_click=AppState.start_rename(convo_id),
                     ),
+                    rx.dropdown_menu.item(
+                        rx.icon("download", size=14, class_name="mr-2"),
+                        "Export",
+                        on_click=AppState.export_chat(convo_id),
+                    ),
                     rx.dropdown_menu.separator(),
                     rx.dropdown_menu.item(
                         rx.icon("trash-2", size=14, class_name="mr-2"),

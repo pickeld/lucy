@@ -429,6 +429,28 @@ class AppState(rx.State):
         self.rename_text = ""
         await self._refresh_conversations()
 
+    async def export_chat(self, convo_id: str):
+        """Export a conversation as a Markdown file download."""
+        try:
+            data = await api_client.export_conversation(convo_id)
+            if "error" in data:
+                logger.error(f"Export chat failed: {data['error']}")
+                return
+            title = data.get("title", "chat")
+            markdown = data.get("markdown", "")
+            # Sanitize title for filename
+            safe_title = "".join(
+                c if c.isalnum() or c in (" ", "-", "_") else ""
+                for c in title
+            ).strip().replace(" ", "-")[:60] or "chat"
+            filename = f"{safe_title}.md"
+            return rx.download(
+                data=markdown.encode("utf-8"),
+                filename=filename,
+            )
+        except Exception as e:
+            logger.error(f"Export chat error: {e}")
+
     # =====================================================================
     # CHAT / QUERY
     # =====================================================================

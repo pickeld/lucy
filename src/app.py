@@ -584,6 +584,71 @@ def update_conversation_endpoint(conversation_id: str):
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
+@app.route("/conversations/<conversation_id>/export", methods=["GET"])
+def export_conversation_endpoint(conversation_id: str):
+    """Export a conversation as a Markdown file.
+
+    Returns JSON with the conversation title and Markdown-formatted content
+    suitable for client-side file download.
+    """
+    try:
+        convo = conversations_db.get_conversation(conversation_id)
+        if not convo:
+            return jsonify({"error": "Conversation not found"}), 404
+
+        title = convo.get("title", "Untitled")
+        created = convo.get("created_at", "")
+        messages = convo.get("messages", [])
+        filters = convo.get("filters", {})
+
+        # Build Markdown content
+        lines: list[str] = []
+        lines.append(f"# {title}")
+        lines.append("")
+        if created:
+            lines.append(f"**Created:** {created}")
+        if filters:
+            filter_parts = []
+            if filters.get("chat_name"):
+                filter_parts.append(f"Chat: {filters['chat_name']}")
+            if filters.get("sender"):
+                filter_parts.append(f"Sender: {filters['sender']}")
+            if filters.get("days"):
+                filter_parts.append(f"Last {filters['days']} days")
+            if filter_parts:
+                lines.append(f"**Filters:** {', '.join(filter_parts)}")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+        for msg in messages:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            timestamp = msg.get("created_at", "")
+            if role == "user":
+                lines.append(f"### 🧑 You")
+            else:
+                lines.append(f"### 🤖 Lucy")
+            if timestamp:
+                lines.append(f"*{timestamp}*")
+            lines.append("")
+            lines.append(content)
+            lines.append("")
+
+        markdown = "\n".join(lines)
+
+        return jsonify({
+            "title": title,
+            "markdown": markdown,
+            "message_count": len(messages),
+        }), 200
+
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Export conversation error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
 @app.route("/conversations/<conversation_id>", methods=["DELETE"])
 @app.route("/conversation/<conversation_id>", methods=["DELETE"])  # backwards compat
 def delete_conversation_endpoint(conversation_id: str):

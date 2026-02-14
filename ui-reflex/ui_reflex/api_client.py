@@ -98,6 +98,24 @@ async def delete_conversation(conversation_id: str) -> bool:
         return False
 
 
+async def export_conversation(conversation_id: str) -> dict[str, Any]:
+    """Export a conversation as Markdown content for download."""
+    try:
+        resp = await _get_client().get(
+            f"/conversations/{conversation_id}/export", timeout=10,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        elif resp.status_code == 404:
+            return {"error": "Conversation not found"}
+        else:
+            data = resp.json()
+            return {"error": data.get("error", f"HTTP {resp.status_code}")}
+    except Exception as e:
+        logger.error(f"Error exporting conversation {conversation_id}: {e}")
+        return {"error": str(e)}
+
+
 async def rename_conversation(conversation_id: str, title: str) -> bool:
     try:
         resp = await _get_client().put(
