@@ -568,20 +568,24 @@ def _render_setting(item: dict) -> rx.Component:
             gap="2",
             class_name="mb-1",
         ),
-        # Input — branch by setting_type
+        # Input — branch by setting_type (with special-case overrides)
         rx.cond(
-            item["setting_type"] == "bool",
-            _bool_input(item),
+            item["key"] == "paperless_sync_tags",
+            _paperless_tags_input(),
             rx.cond(
-                item["setting_type"] == "select",
-                _select_input(item),
+                item["setting_type"] == "bool",
+                _bool_input(item),
                 rx.cond(
-                    item["setting_type"] == "secret",
-                    _secret_input(item),
+                    item["setting_type"] == "select",
+                    _select_input(item),
                     rx.cond(
-                        item["key"] == "system_prompt",
-                        _textarea_input(item),
-                        _text_input(item),
+                        item["setting_type"] == "secret",
+                        _secret_input(item),
+                        rx.cond(
+                            item["key"] == "system_prompt",
+                            _textarea_input(item),
+                            _text_input(item),
+                        ),
                     ),
                 ),
             ),
@@ -726,4 +730,170 @@ def _textarea_input(item: dict) -> rx.Component:
         ),
         align="start",
         gap="2",
+    )
+
+
+# =========================================================================
+# PAPERLESS TAGS — multi-select with bubble display
+# =========================================================================
+
+
+def _paperless_tag_bubble(tag: rx.Var[dict]) -> rx.Component:
+    """Render a single selected tag as a removable bubble."""
+    return rx.flex(
+        rx.icon_button(
+            rx.icon("x", size=12),
+            on_click=AppState.remove_paperless_tag(tag["name"]),
+            variant="ghost",
+            size="1",
+            class_name="text-gray-400 hover:text-gray-600 shrink-0 p-0 h-5 w-5",
+        ),
+        rx.box(
+            rx.text(
+                tag["name"],
+                class_name="text-sm font-medium",
+            ),
+            class_name="px-3 py-1 rounded-full border",
+            style={
+                "background_color": rx.cond(
+                    tag["color"] != "",
+                    tag["color"] + "30",  # 30 = ~19% opacity hex suffix
+                    "#a6cee330",
+                ),
+                "border_color": rx.cond(
+                    tag["color"] != "",
+                    tag["color"] + "80",  # 80 = ~50% opacity
+                    "#a6cee380",
+                ),
+                "color": "#374151",
+            },
+        ),
+        align="center",
+        gap="1",
+    )
+
+
+def _paperless_tag_option(tag: rx.Var[dict]) -> rx.Component:
+    """Render a single tag option in the dropdown list."""
+    return rx.box(
+        rx.flex(
+            rx.box(
+                class_name="w-3 h-3 rounded-full shrink-0",
+                style={
+                    "background_color": rx.cond(
+                        tag["color"] != "",
+                        tag["color"],
+                        "#a6cee3",
+                    ),
+                },
+            ),
+            rx.text(
+                tag["name"],
+                class_name="text-sm text-gray-700",
+            ),
+            align="center",
+            gap="2",
+        ),
+        on_click=AppState.add_paperless_tag(tag["name"]),
+        class_name=(
+            "px-3 py-2 cursor-pointer hover:bg-gray-50 "
+            "border-b border-gray-100 last:border-b-0"
+        ),
+    )
+
+
+def _paperless_tags_input() -> rx.Component:
+    """Multi-select tag input with bubble display for paperless_sync_tags.
+
+    Shows selected tags as colored bubbles with × remove buttons.
+    A dropdown chevron fetches and shows all available tags from Paperless-NGX.
+    """
+    return rx.box(
+        rx.flex(
+            # Selected tags area (bubbles)
+            rx.box(
+                rx.cond(
+                    AppState.paperless_selected_tags.length() > 0,  # type: ignore[union-attr]
+                    rx.flex(
+                        rx.foreach(
+                            AppState.paperless_selected_tag_items,
+                            _paperless_tag_bubble,
+                        ),
+                        direction="column",
+                        gap="2",
+                        class_name="py-2 px-2",
+                    ),
+                    rx.text(
+                        "No tags selected (all documents will sync)",
+                        class_name="text-sm text-gray-400 italic py-2 px-3",
+                    ),
+                ),
+                class_name="flex-1 min-w-0",
+            ),
+            # Right side: clear all + dropdown toggle
+            rx.flex(
+                rx.cond(
+                    AppState.paperless_selected_tags.length() > 0,  # type: ignore[union-attr]
+                    rx.icon_button(
+                        rx.icon("x", size=14),
+                        on_click=AppState.clear_all_paperless_tags,
+                        variant="ghost",
+                        size="1",
+                        class_name="text-gray-400 hover:text-gray-600",
+                    ),
+                    rx.fragment(),
+                ),
+                rx.icon_button(
+                    rx.icon("chevron-down", size=16),
+                    on_click=AppState.load_paperless_tags,
+                    variant="ghost",
+                    size="1",
+                    class_name="text-gray-400 hover:text-gray-600",
+                ),
+                align="center",
+                gap="1",
+                class_name="shrink-0 pr-1",
+            ),
+            align="start",
+            justify="between",
+            class_name=(
+                "w-full bg-white border border-gray-200 rounded-lg "
+                "min-h-[42px]"
+            ),
+        ),
+        # Dropdown list of available tags
+        rx.cond(
+            AppState.paperless_tag_dropdown_open,
+            rx.box(
+                rx.cond(
+                    AppState.paperless_tags_loading,
+                    rx.flex(
+                        rx.spinner(size="2"),
+                        rx.text("Loading tags…", class_name="text-sm text-gray-400 ml-2"),
+                        align="center",
+                        class_name="px-3 py-3",
+                    ),
+                    rx.cond(
+                        AppState.paperless_unselected_tags.length() > 0,  # type: ignore[union-attr]
+                        rx.box(
+                            rx.foreach(
+                                AppState.paperless_unselected_tags,
+                                _paperless_tag_option,
+                            ),
+                            class_name="max-h-[200px] overflow-y-auto",
+                        ),
+                        rx.text(
+                            "No more tags available",
+                            class_name="text-sm text-gray-400 italic px-3 py-2",
+                        ),
+                    ),
+                ),
+                class_name=(
+                    "mt-1 bg-white border border-gray-200 rounded-lg shadow-lg "
+                    "overflow-hidden z-50"
+                ),
+            ),
+            rx.fragment(),
+        ),
+        class_name="relative w-full",
     )

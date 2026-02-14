@@ -356,6 +356,22 @@ async def test_paperless_connection() -> dict[str, Any]:
         return {"error": str(e)}
 
 
+async def fetch_paperless_tags() -> list[dict[str, Any]]:
+    """Fetch all tags from Paperless-NGX via the backend."""
+    try:
+        resp = await _get_client().get("/plugins/paperless/tags", timeout=15)
+        if resp.status_code == 200:
+            return resp.json().get("tags", [])
+        else:
+            data = resp.json()
+            logger.warning(f"Failed to fetch paperless tags: {data.get('error', '')}")
+    except httpx.ConnectError:
+        logger.warning("Cannot reach API server for paperless tags")
+    except Exception as e:
+        logger.error(f"Error fetching paperless tags: {e}")
+    return []
+
+
 async def start_paperless_sync(force: bool = False) -> dict[str, Any]:
     """Trigger Paperless-NGX document sync to RAG vector store.
 

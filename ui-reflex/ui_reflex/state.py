@@ -72,7 +72,7 @@ SETTING_LABELS: dict[str, str] = {
     "paperless_url": "Server URL",
     "paperless_token": "API Token",
     "paperless_sync_interval": "Sync Interval (seconds)",
-    "paperless_sync_tags": "Sync Tags (comma-separated)",
+    "paperless_sync_tags": "Sync Tags",
     "paperless_max_docs": "Max Documents per Sync",
 }
 
@@ -132,6 +132,12 @@ class AppState(rx.State):
     # --- Paperless sync state ---
     paperless_sync_status: str = ""   # "", "syncing", "complete", "error"
     paperless_sync_message: str = ""
+
+    # --- Paperless tags (multi-select) ---
+    paperless_available_tags: list[dict[str, str]] = []  # [{name, color}, ...]
+    paperless_selected_tags: list[str] = []  # tag names currently selected
+    paperless_tags_loading: bool = False
+    paperless_tag_dropdown_open: bool = False
 
     # --- Tab state ---
     settings_tab: str = "ai"   # Active main tab
@@ -821,6 +827,12 @@ class AppState(rx.State):
         # Clear revealed secrets so stale unmasked values don't persist
         self.revealed_secrets = []
         self.revealed_secret_values = {}
+        # Initialize paperless selected tags from saved setting
+        paperless_settings = self.all_settings.get("paperless", {})
+        tags_str = str(paperless_settings.get("paperless_sync_tags", {}).get("value", ""))
+        self.paperless_selected_tags = [
+            t.strip() for t in tags_str.split(",") if t.strip()
+        ] if tags_str else []
 
     async def save_setting(self, key: str, value: str):
         """Save a single setting."""
@@ -927,6 +939,72 @@ class AppState(rx.State):
         else:
             self.paperless_sync_status = "error"
             self.paperless_sync_message = f"❌ Unexpected response: {result}"
+
+    # ----- Paperless tags (multi-select) -----
+
+    @rx.var(cache=True)
+    def paperless_unselected_tags(self) -> list[dict[str, str]]:
+        """Available tags that are NOT yet selected — for the dropdown."""
+        selected = set(self.paperless_selected_tags)
+        return [
+            t for t in self.paperless_available_tags
+            if t.get("name", "") not in selected
+        ]
+
+    @rx.var(cache=True)
+    def paperless_selected_tag_items(self) -> list[dict[str, str]]:
+        """Selected tags with their color info for bubble rendering."""
+        tag_map = {t["name"]: t for t in self.paperless_available_tags}
+        result: list[dict[str, str]] = []
+        for name in self.paperless_selected_tags:
+            info = tag_map.get(name, {"name": name, "color": "#a6cee3"})
+            result.append({"name": info.get("name", name), "color": info.get("color", "#a6cee3")})
+        return result
+
+    async def load_paperless_tags(self):
+        """Fetch all tags from Paperless-NGX and populate the dropdown."""
+        self.paperless_tags_loading = True
+        self.paperless_tag_dropdown_open = True
+        yield
+
+        raw_tags = await api_client.fetch_paperless_tags()
+        self.paperless_available_tags = [
+            {"name": t.get("name", ""), "color": t.get("color", "#a6cee3")}
+            for t in raw_tags
+        ]
+        self.paperless_tags_loading = False
+
+    async def add_paperless_tag(self, tag_name: str):
+        """Add a tag to the selected list and save to backend."""
+        if tag_name and tag_name not in self.paperless_selected_tags:
+            new_selected = list(self.paperless_selected_tags)
+            new_selected.append(tag_name)
+            self.paperless_selected_tags = new_selected
+            # Save comma-separated list to the backend setting
+            await self.save_setting(
+                "paperless_sync_tags", ",".join(new_selected),
+            )
+
+    async def remove_paperless_tag(self, tag_name: str):
+        """Remove a tag from the selected list and save to backend."""
+        new_selected = [t for t in self.paperless_selected_tags if t != tag_name]
+        self.paperless_selected_tags = new_selected
+        await self.save_setting(
+            "paperless_sync_tags", ",".join(new_selected),
+        )
+
+    async def clear_all_paperless_tags(self):
+        """Remove all selected tags and save to backend."""
+        self.paperless_selected_tags = []
+        await self.save_setting("paperless_sync_tags", "")
+
+    def toggle_paperless_tag_dropdown(self):
+        """Toggle the tag dropdown open/closed."""
+        self.paperless_tag_dropdown_open = not self.paperless_tag_dropdown_open
+
+    def close_paperless_tag_dropdown(self):
+        """Close the tag dropdown."""
+        self.paperless_tag_dropdown_open = False
 
     async def reset_category(self, category: str):
         """Reset a settings category to defaults."""

@@ -195,6 +195,48 @@ class PaperlessPlugin(ChannelPlugin):
                     "message": "Connection failed \u2014 check URL and token",
                 }), 500
         
+        @bp.route("/tags", methods=["GET"])
+        def tags():
+            """Fetch all tags from Paperless-NGX.
+            
+            Always reads fresh settings from the database so that a
+            newly-saved token is picked up without restarting the server.
+            
+            Returns:
+                JSON list of tags: [{id, name, color, ...}, ...]
+            """
+            import settings_db
+            url = settings_db.get_setting_value("paperless_url") or ""
+            token = settings_db.get_setting_value("paperless_token") or ""
+            
+            if not token:
+                return jsonify({
+                    "error": "Paperless token not configured",
+                    "tags": [],
+                }), 400
+            if not url:
+                return jsonify({
+                    "error": "Paperless URL not configured",
+                    "tags": [],
+                }), 400
+            
+            try:
+                tags_client = PaperlessClient(url, token)
+                all_tags = tags_client.get_tags()
+                # Return only the fields needed by the UI
+                tag_list = [
+                    {
+                        "id": t.get("id"),
+                        "name": t.get("name", ""),
+                        "color": t.get("color", "#a6cee3"),
+                    }
+                    for t in all_tags
+                ]
+                return jsonify({"tags": tag_list}), 200
+            except Exception as e:
+                logger.error(f"Failed to fetch Paperless tags: {e}")
+                return jsonify({"error": str(e), "tags": []}), 500
+        
         return bp
     
     # -------------------------------------------------------------------------
