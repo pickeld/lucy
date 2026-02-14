@@ -1,31 +1,30 @@
 # Lucy
 
-A Flask-based integration between WhatsApp (via the WAHA API) and OpenAI's GPT models. This project allows you to pair your WhatsApp account, receive webhook events, and interact with OpenAI's GPT for chat-based automation.
+**Lucy** is a personal AI assistant powered by LLM models (OpenAI, Gemini) with a plugin-based architecture. It features a RAG (Retrieval-Augmented Generation) knowledge base backed by Qdrant, a Reflex web UI for chat and settings management, and extensible plugins for WhatsApp, Paperless-ngx, and more.
 
 ## Key Features
 
-### WhatsApp Integration
-- **Easy Pairing**: QR code-based WhatsApp account pairing
-- **Message Handling**: Comprehensive webhook system for all message types
-- **Group Support**: Full group chat management and automation
-- **Contact Management**: Complete contact operations and tracking
-
-### AI Capabilities
-- **OpenAI Integration**: Advanced conversation handling with GPT models
-- **DALL-E Support**: Image generation and processing capabilities
+### AI & RAG
+- **Multi-Provider LLM**: OpenAI GPT and Google Gemini support
+- **Knowledge Base**: LlamaIndex RAG with Qdrant vector store for contextual conversations
+- **Image Generation**: DALL-E and Imagen support
 - **Context Management**: Intelligent conversation memory and state tracking
-- **Template System**: Flexible response templating and formatting
+
+### Plugin System
+- **WhatsApp Plugin**: Full WhatsApp integration via WAHA API — message handling, groups, contacts
+- **Paperless Plugin**: Paperless-ngx document ingestion and search
+- **Extensible**: Easy-to-build plugin architecture for new integrations
+
+### Web UI (Reflex)
+- **Chat Interface**: Conversational RAG Q&A with previous chat history
+- **Settings Management**: Full configuration UI with import/export
+- **Cost Tracking**: Real-time LLM cost monitoring per request, session, and daily
 
 ### Technical Features
 - **Redis Backend**: Efficient caching and state management
 - **Docker Support**: Containerized deployment with Docker Compose
-- **Modular Design**: Easily extensible provider system
+- **SQLite Settings**: Database-backed configuration (seeded from `.env` on first run)
 - **Comprehensive Logging**: Detailed system logging and monitoring
-
-### Media Handling
-- **Image Generation**: DALL-E integration for image creation
-- **Media Processing**: Support for various media types via WAHA API
-- **File Sharing**: Document and media file sharing capabilities
 
 ## Project Structure
 
@@ -36,27 +35,33 @@ lucy/
 │   ├── config.py                 # Settings class — reads from SQLite via settings_db
 │   ├── settings_db.py            # SQLite-backed settings database (seeds from .env on first run)
 │   ├── llamaindex_rag.py         # LlamaIndex RAG with Qdrant + CondensePlusContextChatEngine
+│   ├── cost_meter.py             # LLM cost tracking and metering
 │   ├── models/                   # Pydantic v2 document models for RAG
 │   │   ├── base.py               # BaseRAGDocument, DocumentMetadata, SourceType
 │   │   ├── whatsapp.py           # WhatsAppMessageDocument
 │   │   ├── document.py           # FileDocument (PDF, DOCX, etc.)
 │   │   └── call_recording.py     # CallRecordingDocument
-│   ├── whatsapp/                 # WhatsApp message handling
-│   │   ├── handler.py            # Message type classes & factory function
-│   │   ├── contact.py            # Contact management with Redis caching
-│   │   └── group.py              # Group management with Redis caching
+│   ├── plugins/                  # Plugin system
+│   │   ├── base.py               # Base plugin interface
+│   │   ├── registry.py           # Plugin discovery and registration
+│   │   ├── whatsapp/             # WhatsApp integration plugin
+│   │   └── paperless/            # Paperless-ngx integration plugin
 │   └── utils/                    # Utility modules
 │       ├── exceptions.py         # Custom exception hierarchy
 │       ├── globals.py            # HTTP helpers with retry logic
 │       ├── logger.py             # Logging configuration
 │       └── redis_conn.py         # Redis connection management
-├── ui/                           # Streamlit web UI
-│   ├── app.py                    # RAG Q&A chat & search interface
-│   └── pages/
-│       └── 1_Settings.py         # Settings management page
+├── ui-reflex/                    # Reflex web UI
+│   ├── ui_reflex/
+│   │   ├── ui_reflex.py          # Main UI layout
+│   │   ├── state.py              # Application state management
+│   │   ├── api_client.py         # Backend API client
+│   │   └── components/           # UI components (chat, sidebar, settings, etc.)
+│   └── rxconfig.py               # Reflex configuration
 ├── data/                         # SQLite database (gitignored, auto-created)
 ├── plans/                        # Architecture & improvement plans
 ├── scripts/                      # Utility scripts
+├── tests/                        # End-to-end tests
 ├── docker-compose.yml            # Redis, WAHA, Qdrant, App services
 ├── Dockerfile                    # Application container
 ├── .env.example                  # First-run seed for settings database
@@ -68,11 +73,9 @@ lucy/
 
 ### Prerequisites
 
-- **Python**: 3.8 or higher
-- **Docker**: For running WAHA and Redis services
-- **Redis**: Used for caching and state management
-- **OpenAI API Key**: For GPT model access
-- **WAHA API Key**: For WhatsApp integration (obtained after setup)
+- **Python**: 3.9 or higher
+- **Docker**: For running Redis, Qdrant, and optional WAHA services
+- **OpenAI API Key** and/or **Google API Key**: For LLM access
 
 ### System Requirements
 
@@ -96,67 +99,53 @@ lucy/
 3. **Configure environment variables:**
    - Copy `.env.example` to `.env` and fill in your credentials.
 
-4. **Start WAHA (WhatsApp API) via Docker:**
+4. **Start infrastructure services:**
    ```sh
    docker-compose up -d
    ```
-
-5. **Run the Flask app:**
+   To also start the WhatsApp plugin (WAHA):
    ```sh
-   python app.py
+   docker compose --profile whatsapp up -d
    ```
 
-6. **Pair WhatsApp:**
-   - Visit `http://localhost:8765/pair` in your browser and scan the QR code with your WhatsApp app.
+5. **Run the application:**
+   ```sh
+   PYTHONPATH=src python src/app.py
+   ```
 
-## Usage
-### Basic Usage
-- Incoming WhatsApp messages are automatically processed via the `/webhook` endpoint
-- Messages are intelligently handled based on type (text, media, group, etc.)
-- Responses are generated using OpenAI's GPT models and custom templates
-- Support for both individual chats and group conversations
-
-### Advanced Features
-- Contact management via dedicated API endpoints
-- Group creation and management capabilities
-- Template-based response system
-- Redis-backed state management
-- Extensible provider system for AI services
-
+6. **Launch the Reflex UI** (optional):
+   ```sh
+   cd ui-reflex && reflex run
+   ```
 
 ## Configuration
 
 ### Environment Configuration
-
-The project uses environment variables for configuration, managed via a `.env` file. Required configurations include:
-
-#### Core Settings
 
 The `.env` file is used **only on first startup** to seed the SQLite settings database. After that, all configuration is managed through the Settings UI page or the `PUT /config` API endpoint.
 
 ```env
 # See .env.example for all available settings
 OPENAI_API_KEY=your-openai-api-key
+GOOGLE_API_KEY=your-google-api-key
 WAHA_API_KEY=your-waha-api-key
 REDIS_HOST=localhost
 QDRANT_HOST=localhost
 ```
 
-See `.env.example` for a complete list of available configuration options. Make sure to:
-1. Copy `.env.example` to `.env`
-2. Update the values according to your setup
-3. Never commit your `.env` file to version control
+See `.env.example` for a complete list of available configuration options.
+
 ## Development
 
 ### Development Setup
 
 1. **Create a virtual environment:**
    ```sh
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   python -m venv .venv
+   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
    ```
 
-2. **Install development dependencies:**
+2. **Install dependencies:**
    ```sh
    pip install -r requirements.txt
    ```
@@ -171,34 +160,10 @@ See `.env.example` for a complete list of available configuration options. Make 
    PYTHONPATH=src python src/app.py
    ```
 
-
-## Project Overview
-
-This project integrates WhatsApp messaging with OpenAI's GPT models using Flask. It enables automated responses and webhook handling for WhatsApp messages. Key components include:
-
-### Core Components
-- **WAHA API**: Provides WhatsApp integration via a robust API layer
-- **OpenAI GPT**: Handles AI-driven responses and conversation management
-- **Flask**: Manages the application and webhook endpoints
-- **Redis**: Efficient data caching and state management
-
-### Features
-- **Contact Management**: Complete WhatsApp contact operations and user tracking
-- **Group Support**: Comprehensive WhatsApp group management capabilities
-- **Template System**: Flexible message templates and response formatting
-- **Memory Agent**: Contextual memory management for enhanced conversations
-- **Provider Integration**: Modular design for AI service providers (DALL-E, etc.)
-
-### Planned Features
-- **Semantic Memory**: Integration with vector databases for advanced context management
-- **Ollama Support**: Local LLM integration capabilities
-- **Gemini Support**: Google's Gemini AI model integration
-- **TTS and STT**: Text-to-speech and speech-to-text functionalities
-
 ## License
 
 MIT License
 
 ---
 
-**Note:** This project is for educational and prototyping purposes. Use responsibly and comply with WhatsApp and OpenAI.
+**Note:** This project is for educational and prototyping purposes. Use responsibly and comply with all applicable API terms of service.
