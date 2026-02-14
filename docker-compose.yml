@@ -56,6 +56,12 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      # Override localhost values from .env with Docker service names
+      REDIS_HOST: redis
+      QDRANT_HOST: qdrant
+      WAHA_BASE_URL: "http://waha:3000"
+      WEBHOOK_URL: "http://app:8765/webhook"
     ports:
       - "8765:8765"
     volumes:
@@ -65,8 +71,6 @@ services:
     depends_on:
       redis:
         condition: service_started
-      waha:
-        condition: service_started
       qdrant:
         condition: service_started
     healthcheck:
@@ -75,6 +79,23 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  ui:
+    build: ./ui-reflex
+    container_name: lucy-ui
+    restart: unless-stopped
+    environment:
+      API_URL: "http://app:8765"
+    ports:
+      - "3001:3000"   # Reflex frontend (3000 taken by WAHA)
+      - "8001:8000"   # Reflex backend
+    volumes:
+      - ./ui-reflex/ui_reflex:/app/ui_reflex          # Hot reload Python source
+      - ./ui-reflex/assets:/app/assets                  # Hot reload static assets
+      - ./ui-reflex/rxconfig.py:/app/rxconfig.py        # Config changes
+    depends_on:
+      app:
+        condition: service_healthy
 
 volumes:
   waha_data:

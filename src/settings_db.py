@@ -41,6 +41,12 @@ def _resolve_db_path() -> str:
             db_dir.mkdir(parents=True, exist_ok=True)
             return str(db_dir / "settings.db")
     
+    # Docker container: /app/data is the standard volume mount path
+    docker_data = Path("/app/data")
+    if docker_data.exists() or Path("/app/src").exists():
+        docker_data.mkdir(parents=True, exist_ok=True)
+        return str(docker_data / "settings.db")
+    
     # Fallback: create data/ next to this file
     db_dir = current / "data"
     db_dir.mkdir(parents=True, exist_ok=True)
@@ -324,8 +330,21 @@ def _seed_from_env(conn: sqlite3.Connection) -> None:
 # CRUD operations
 # ---------------------------------------------------------------------------
 
+# Infrastructure keys where environment variables should always win.
+# This allows Docker to override hosts/ports via docker-compose `environment:`
+# while local dev uses .env values — without touching SQLite.
+_ENV_OVERRIDE_KEYS = frozenset({
+    "redis_host", "redis_port", "qdrant_host", "qdrant_port",
+    "waha_base_url", "webhook_url",
+})
+
+
 def get_setting_value(key: str) -> Optional[str]:
     """Get a single setting value by key.
+    
+    For infrastructure settings (hosts, ports, URLs), environment variables
+    take precedence over SQLite. This allows Docker and local dev to coexist
+    with the same SQLite database.
     
     Args:
         key: The setting key (e.g., 'openai_model')
@@ -333,6 +352,14 @@ def get_setting_value(key: str) -> Optional[str]:
     Returns:
         The setting value as string, or None if not found
     """
+    # For infrastructure keys, check env var first
+    if key in _ENV_OVERRIDE_KEYS:
+        env_key = ENV_KEY_MAP.get(key)
+        if env_key:
+            env_value = os.environ.get(env_key)
+            if env_value is not None and env_value.strip():
+                return env_value.strip()
+    
     conn = _get_connection()
     try:
         row = conn.execute(
