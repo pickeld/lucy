@@ -115,14 +115,19 @@ class ArchiveRetriever(BaseRetriever):
         self._filter_sender = filter_sender
         self._filter_days = filter_days
     
+    # Number of recent messages to always include alongside semantic results.
+    # Ensures the LLM has temporal awareness of the latest messages.
+    RECENCY_SUPPLEMENT_COUNT = 5
+    
     def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         """Retrieve relevant messages/documents using hybrid search.
         
-        Runs semantic + full-text hybrid search first. Then expands context
-        by fetching surrounding messages from the same chats, so replies
-        and nearby messages are included even if they don't match the query
-        semantically. If search returns no results, falls back to
-        timestamp-ordered retrieval (language-agnostic recency fallback).
+        Runs semantic + full-text hybrid search first. Then:
+        1. Expands context by fetching surrounding messages from the same chats
+        2. Supplements with the most recent messages for temporal awareness
+        
+        If search returns no results, falls back to timestamp-ordered
+        retrieval (language-agnostic recency fallback).
         
         Always returns at least one node so the chat engine's synthesizer
         can generate a proper response (it returns "Empty Response" on empty input).
@@ -146,20 +151,29 @@ class ArchiveRetriever(BaseRetriever):
         if results:
             results = self._rag.expand_context(results, max_total=self._k * 2)
         
-        # Fallback: if semantic + full-text search returned nothing,
-        # provide the most recent messages as context. This handles
-        # temporal/recency queries (any language) where vector similarity
-        # scores are too low, and also serves as a general safety net.
-        if not results:
-            results = self._rag.recency_search(
-                k=self._k,
-                filter_chat_name=self._filter_chat_name,
-                filter_sender=self._filter_sender,
-                filter_days=self._filter_days,
-            )
+        # Always supplement with recent messages so the LLM has temporal
+        # awareness (knows what the actual latest messages are). This
+        # ensures queries like "what's the last message?" get the correct
+        # answer even when semantic search returns older matches.
+        recent = self._rag.recency_search(
+            k=self.RECENCY_SUPPLEMENT_COUNT,
+            filter_chat_name=self._filter_chat_name,
+            filter_sender=self._filter_sender,
+            filter_days=self._filter_days,
+        )
+        if recent:
             if results:
+                # Merge: deduplicate by node ID, keeping originals first
+                existing_ids = {nws.node.id_ for nws in results if nws.node}
+                for nws in recent:
+                    if nws.node and nws.node.id_ not in existing_ids:
+                        existing_ids.add(nws.node.id_)
+                        results.append(nws)
+            else:
+                # No semantic results — use recent messages as primary context
+                results = recent
                 logger.info(
-                    f"Semantic search empty, falling back to {len(results)} recent messages"
+                    f"Semantic search empty, using {len(results)} recent messages"
                 )
         
         # Ensure at least one node so the synthesizer doesn't return "Empty Response"
