@@ -450,6 +450,49 @@ def rag_reset():
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
+@app.route("/rag/delete-by-source", methods=["POST"])
+def rag_delete_by_source():
+    """Delete all RAG vectors matching a specific source type.
+    
+    Allows selective cleanup — e.g., delete only WhatsApp messages
+    or only Paperless documents without dropping the entire collection.
+    
+    Body: {"source": "whatsapp"|"paperless", "confirm": true}
+    """
+    try:
+        data = request.json or {}
+        source_value = data.get("source")
+        
+        if not source_value:
+            return jsonify({"error": "Missing 'source' in request body"}), 400
+        
+        if not data.get("confirm", False):
+            # Dry run: show how many would be deleted
+            stats = rag.get_stats()
+            source_counts = stats.get("source_counts", {})
+            count = source_counts.get(source_value, 0)
+            return jsonify({
+                "status": "dry_run",
+                "source": source_value,
+                "would_delete": count,
+                "message": f"Would delete {count} vectors with source='{source_value}'. "
+                           f"Pass {{\"confirm\": true}} to proceed.",
+            }), 200
+        
+        deleted = rag.delete_by_source(source_value)
+        return jsonify({
+            "status": "ok",
+            "source": source_value,
+            "deleted": deleted,
+            "message": f"Deleted {deleted} vectors with source='{source_value}'.",
+        }), 200
+        
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"RAG delete-by-source error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
 # =============================================================================
 # CONVERSATION MANAGEMENT ENDPOINTS
 # =============================================================================

@@ -1474,6 +1474,52 @@ class LlamaIndexRAG:
             logger.error(f"Failed to get RAG stats: {e}")
             return {"error": str(e)}
     
+    def delete_by_source(self, source_value: str) -> int:
+        """Delete all points matching a specific source value.
+        
+        Uses Qdrant's delete with filter to remove points where
+        source == source_value. This allows selective cleanup
+        (e.g., delete only WhatsApp messages or only Paperless documents)
+        without dropping the entire collection.
+        
+        Args:
+            source_value: The source field value to match (e.g., "whatsapp", "paperless")
+            
+        Returns:
+            Number of points deleted
+        """
+        try:
+            # Count before delete
+            count_before = self.qdrant_client.count(
+                collection_name=self.COLLECTION_NAME,
+                count_filter=Filter(must=[
+                    FieldCondition(key="source", match=MatchValue(value=source_value))
+                ]),
+                exact=True,
+            ).count
+
+            if count_before == 0:
+                logger.info(f"No points with source='{source_value}' to delete")
+                return 0
+
+            # Delete by filter
+            self.qdrant_client.delete(
+                collection_name=self.COLLECTION_NAME,
+                points_selector=Filter(must=[
+                    FieldCondition(key="source", match=MatchValue(value=source_value))
+                ]),
+            )
+
+            # Invalidate caches since data changed
+            self.invalidate_list_caches()
+
+            logger.info(f"Deleted {count_before} points with source='{source_value}'")
+            return count_before
+
+        except Exception as e:
+            logger.error(f"Failed to delete points by source '{source_value}': {e}")
+            return 0
+
     def reset_collection(self) -> bool:
         """Drop and recreate the Qdrant collection with fresh configuration.
         
