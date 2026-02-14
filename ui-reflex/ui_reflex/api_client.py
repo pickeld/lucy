@@ -20,8 +20,28 @@ _client: httpx.AsyncClient | None = None
 def _get_client() -> httpx.AsyncClient:
     global _client
     if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(base_url=API_URL, timeout=300)
+        _client = httpx.AsyncClient(
+            base_url=API_URL,
+            timeout=300,
+            limits=httpx.Limits(
+                max_keepalive_connections=5,
+                max_connections=10,
+                keepalive_expiry=30,  # recycle idle connections after 30s
+            ),
+        )
     return _client
+
+
+def _reset_client() -> None:
+    """Close and discard the current client so the next call creates a fresh one."""
+    global _client
+    if _client is not None and not _client.is_closed:
+        try:
+            import asyncio
+            asyncio.get_event_loop().create_task(_client.aclose())
+        except Exception:
+            pass
+    _client = None
 
 
 # =========================================================================
@@ -33,8 +53,12 @@ async def check_health() -> dict[str, Any]:
         resp = await _get_client().get("/health", timeout=5)
         if resp.status_code in (200, 503):
             return resp.json()
-    except Exception:
-        pass
+    except (httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadError) as e:
+        logger.warning(f"Health check connection error, resetting client: {e}")
+        _reset_client()
+    except Exception as e:
+        logger.warning(f"Health check error: {e}")
+        _reset_client()
     return {"status": "unreachable", "dependencies": {}}
 
 
@@ -47,10 +71,12 @@ async def fetch_conversations(limit: int = 50) -> list[dict[str, Any]]:
         resp = await _get_client().get("/conversations", params={"limit": limit})
         if resp.status_code == 200:
             return resp.json().get("conversations", [])
-    except httpx.ConnectError:
-        logger.warning("Connection error fetching conversations")
+    except (httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadError):
+        logger.warning("Connection error fetching conversations — resetting client")
+        _reset_client()
     except Exception as e:
         logger.error(f"Error fetching conversations: {e}")
+        _reset_client()
     return []
 
 

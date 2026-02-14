@@ -22,7 +22,7 @@ def cost_dashboard() -> rx.Component:
         ),
         # Summary cards row
         rx.flex(
-            _metric_card("Session", AppState.session_cost_display or "$0.00", "activity"),
+            _metric_card("Session", rx.cond(AppState.session_cost_display != "", AppState.session_cost_display, "$0.00"), "activity"),
             _metric_card("7-Day Total", AppState.cost_today_display, "calendar"),
             gap="4",
             wrap="wrap",
@@ -77,7 +77,7 @@ def cost_dashboard() -> rx.Component:
             rx.button(
                 rx.icon("refresh-cw", size=14),
                 rx.text("Refresh", class_name="ml-1"),
-                on_click=AppState._load_cost_data,
+                on_click=AppState.refresh_cost_data,
                 variant="outline",
                 size="1",
                 class_name="text-xs",

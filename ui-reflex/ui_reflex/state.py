@@ -544,6 +544,10 @@ class AppState(rx.State):
         session_data = await api_client.get_cost_session(n=20)
         self.session_cost = session_data.get("session_total_usd", 0.0)
 
+    async def refresh_cost_data(self):
+        """Public wrapper for _load_cost_data — usable as an on_click handler."""
+        await self._load_cost_data()
+
     @rx.var(cache=True)
     def session_cost_display(self) -> str:
         """Formatted session cost for display."""
