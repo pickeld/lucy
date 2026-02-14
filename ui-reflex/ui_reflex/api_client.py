@@ -403,3 +403,106 @@ async def start_paperless_sync(force: bool = False) -> dict[str, Any]:
     except Exception as e:
         logger.error(f"Error starting Paperless sync: {e}")
         return {"error": str(e)}
+
+
+# =========================================================================
+# PLUGINS — GMAIL
+# =========================================================================
+
+async def gmail_get_auth_url() -> dict[str, Any]:
+    """Get Gmail OAuth2 authorization URL."""
+    try:
+        resp = await _get_client().get("/plugins/gmail/auth/url", timeout=10)
+        data = resp.json()
+        if resp.status_code == 200:
+            return data
+        else:
+            msg = data.get("message") or data.get("error") or "Failed to generate auth URL"
+            return {"error": msg}
+    except httpx.ConnectError:
+        return {"error": "Cannot reach API server"}
+    except Exception as e:
+        logger.error(f"Error getting Gmail auth URL: {e}")
+        return {"error": str(e)}
+
+
+async def gmail_submit_auth_code(code: str) -> dict[str, Any]:
+    """Submit Gmail OAuth2 authorization code for token exchange."""
+    try:
+        resp = await _get_client().post(
+            "/plugins/gmail/auth/callback",
+            json={"code": code},
+            timeout=30,
+        )
+        data = resp.json()
+        if resp.status_code == 200:
+            return data
+        else:
+            msg = data.get("message") or data.get("error") or "Authorization failed"
+            return {"error": msg}
+    except httpx.ConnectError:
+        return {"error": "Cannot reach API server"}
+    except Exception as e:
+        logger.error(f"Error submitting Gmail auth code: {e}")
+        return {"error": str(e)}
+
+
+async def gmail_test_connection() -> dict[str, Any]:
+    """Test Gmail connection with current credentials."""
+    try:
+        resp = await _get_client().get("/plugins/gmail/test", timeout=15)
+        data = resp.json()
+        if resp.status_code == 200:
+            return data
+        else:
+            msg = data.get("message") or data.get("error") or "Connection failed"
+            return {"error": msg}
+    except httpx.ConnectError:
+        return {"error": "Cannot reach API server"}
+    except Exception as e:
+        logger.error(f"Error testing Gmail connection: {e}")
+        return {"error": str(e)}
+
+
+async def fetch_gmail_folders() -> list[dict[str, Any]]:
+    """Fetch all Gmail labels/folders via the backend."""
+    try:
+        resp = await _get_client().get("/plugins/gmail/folders", timeout=30)
+        if resp.status_code == 200:
+            return resp.json().get("folders", [])
+        else:
+            data = resp.json()
+            logger.warning(f"Failed to fetch Gmail folders: {data.get('error', '')}")
+    except httpx.ConnectError:
+        logger.warning("Cannot reach API server for Gmail folders")
+    except httpx.ReadTimeout:
+        logger.warning("Timeout fetching Gmail folders")
+    except Exception as e:
+        logger.error(f"Error fetching Gmail folders: {e}")
+    return []
+
+
+async def start_gmail_sync(force: bool = False) -> dict[str, Any]:
+    """Trigger Gmail email sync to RAG vector store.
+
+    Args:
+        force: If True, skip processed-label exclusion and dedup checks.
+    """
+    try:
+        params = {"force": "true"} if force else {}
+        resp = await _get_client().post(
+            "/plugins/gmail/sync", params=params, timeout=300,
+        )
+        data = resp.json()
+        if resp.status_code == 200:
+            return data
+        else:
+            msg = data.get("error") or f"HTTP {resp.status_code}"
+            return {"error": msg}
+    except httpx.ConnectError:
+        return {"error": "Cannot reach API server"}
+    except httpx.ReadTimeout:
+        return {"error": "Sync timed out — it may still be running in the background"}
+    except Exception as e:
+        logger.error(f"Error starting Gmail sync: {e}")
+        return {"error": str(e)}

@@ -884,6 +884,7 @@ class LlamaIndexRAG:
     _SOURCE_LABELS: Dict[str, str] = {
         "whatsapp": "WhatsApp",
         "paperless": "Paperless",
+        "gmail": "Gmail",
         "telegram": "Telegram",
         "email": "Email",
         "slack": "Slack",
@@ -1939,7 +1940,7 @@ class LlamaIndexRAG:
 
             # Count points by source type using Qdrant scroll with filters
             source_counts: Dict[str, int] = {}
-            for source_value in ("whatsapp", "paperless"):
+            for source_value in ("whatsapp", "paperless", "gmail"):
                 try:
                     count_result = self.qdrant_client.count(
                         collection_name=self.COLLECTION_NAME,
@@ -1956,6 +1957,7 @@ class LlamaIndexRAG:
                 "total_documents": total,
                 "whatsapp_messages": source_counts.get("whatsapp", 0),
                 "documents": source_counts.get("paperless", 0),
+                "gmail_emails": source_counts.get("gmail", 0),
                 "source_counts": source_counts,
                 "qdrant_server": f"{self.qdrant_host}:{self.qdrant_port}",
                 "collection_name": self.COLLECTION_NAME,

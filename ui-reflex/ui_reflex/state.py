@@ -74,6 +74,15 @@ SETTING_LABELS: dict[str, str] = {
     "paperless_sync_interval": "Sync Interval (seconds)",
     "paperless_sync_tags": "Sync Tags",
     "paperless_max_docs": "Max Documents per Sync",
+    # Gmail plugin
+    "gmail_client_id": "OAuth2 Client ID",
+    "gmail_client_secret": "OAuth2 Client Secret",
+    "gmail_refresh_token": "OAuth2 Refresh Token",
+    "gmail_sync_folders": "Sync Folders",
+    "gmail_sync_interval": "Sync Interval (seconds)",
+    "gmail_max_emails": "Max Emails per Sync",
+    "gmail_processed_label": "Processed Label",
+    "gmail_include_attachments": "Include Attachments",
 }
 
 
@@ -138,6 +147,26 @@ class AppState(rx.State):
     paperless_selected_tags: list[str] = []  # tag names currently selected
     paperless_tags_loading: bool = False
     paperless_tag_dropdown_open: bool = False
+
+    # --- Gmail auth state ---
+    gmail_auth_url: str = ""
+    gmail_auth_status: str = ""   # "", "pending", "success", "error"
+    gmail_auth_message: str = ""
+    gmail_auth_code_input: str = ""
+
+    # --- Gmail test state ---
+    gmail_test_status: str = ""   # "", "testing", "success", "error"
+    gmail_test_message: str = ""
+
+    # --- Gmail sync state ---
+    gmail_sync_status: str = ""   # "", "syncing", "complete", "error"
+    gmail_sync_message: str = ""
+
+    # --- Gmail folders (multi-select) ---
+    gmail_available_folders: list[dict[str, str]] = []  # [{id, name, type}, ...]
+    gmail_selected_folders: list[str] = []  # folder display names
+    gmail_folders_loading: bool = False
+    gmail_folder_dropdown_open: bool = False
 
     # --- Tab state ---
     settings_tab: str = "ai"   # Active main tab
@@ -846,6 +875,12 @@ class AppState(rx.State):
         self.paperless_selected_tags = [
             t.strip() for t in tags_str.split(",") if t.strip()
         ] if tags_str else []
+        # Initialize gmail selected folders from saved setting
+        gmail_settings = self.all_settings.get("gmail", {})
+        folders_str = str(gmail_settings.get("gmail_sync_folders", {}).get("value", ""))
+        self.gmail_selected_folders = [
+            f.strip() for f in folders_str.split(",") if f.strip()
+        ] if folders_str else []
 
     async def save_setting(self, key: str, value: str):
         """Save a single setting."""
@@ -1018,6 +1053,182 @@ class AppState(rx.State):
     def close_paperless_tag_dropdown(self):
         """Close the tag dropdown."""
         self.paperless_tag_dropdown_open = False
+
+    # ----- Gmail auth -----
+
+    def set_gmail_auth_code_input(self, value: str):
+        """Set the Gmail auth code input text."""
+        self.gmail_auth_code_input = value
+
+    async def gmail_start_auth(self):
+        """Request a Gmail OAuth2 authorization URL from the backend."""
+        self.gmail_auth_status = "pending"
+        self.gmail_auth_message = "Generating authorization URL…"
+        self.gmail_auth_url = ""
+        yield
+
+        result = await api_client.gmail_get_auth_url()
+        if "error" in result:
+            self.gmail_auth_status = "error"
+            self.gmail_auth_message = f"❌ {result['error']}"
+        elif result.get("auth_url"):
+            self.gmail_auth_status = "pending"
+            self.gmail_auth_url = result["auth_url"]
+            self.gmail_auth_message = (
+                "Open the URL below in your browser, sign in, "
+                "approve the permissions, then paste the authorization code."
+            )
+        else:
+            self.gmail_auth_status = "error"
+            self.gmail_auth_message = "❌ Unexpected response"
+
+    async def gmail_submit_auth_code(self):
+        """Submit the OAuth2 authorization code to the backend."""
+        code = self.gmail_auth_code_input.strip()
+        if not code:
+            self.gmail_auth_message = "❌ Please enter the authorization code"
+            return
+
+        self.gmail_auth_status = "pending"
+        self.gmail_auth_message = "⏳ Exchanging code for tokens…"
+        yield
+
+        result = await api_client.gmail_submit_auth_code(code)
+        if "error" in result:
+            self.gmail_auth_status = "error"
+            self.gmail_auth_message = f"❌ {result['error']}"
+        elif result.get("status") == "authorized":
+            self.gmail_auth_status = "success"
+            self.gmail_auth_message = "✅ Gmail authorized successfully!"
+            self.gmail_auth_url = ""
+            self.gmail_auth_code_input = ""
+            # Refresh settings to reflect the new token
+            await self._load_settings()
+        else:
+            self.gmail_auth_status = "error"
+            self.gmail_auth_message = f"❌ Unexpected response: {result}"
+
+    # ----- Gmail test -----
+
+    async def gmail_test_connection(self):
+        """Test Gmail connection."""
+        self.gmail_test_status = "testing"
+        self.gmail_test_message = "Testing connection…"
+        yield
+
+        result = await api_client.gmail_test_connection()
+        if "error" in result:
+            self.gmail_test_status = "error"
+            self.gmail_test_message = f"❌ {result['error']}"
+        elif result.get("status") == "connected":
+            email = result.get("email", "")
+            total = result.get("total_messages", 0)
+            self.gmail_test_status = "success"
+            self.gmail_test_message = f"✅ Connected as {email} ({total:,} messages)"
+        else:
+            self.gmail_test_status = "error"
+            self.gmail_test_message = "❌ Unexpected response"
+
+    # ----- Gmail sync -----
+
+    async def start_gmail_sync(self):
+        """Trigger Gmail email sync to RAG."""
+        self.gmail_sync_status = "syncing"
+        self.gmail_sync_message = "⏳ Syncing emails…"
+        yield
+
+        result = await api_client.start_gmail_sync()
+        if "error" in result:
+            self.gmail_sync_status = "error"
+            self.gmail_sync_message = f"❌ {result['error']}"
+        elif result.get("status") == "complete":
+            synced = result.get("synced", 0)
+            labeled = result.get("labeled", 0)
+            skipped = result.get("skipped", 0)
+            errors = result.get("errors", 0)
+            attachments = result.get("attachments", 0)
+            self.gmail_sync_status = "complete"
+            self.gmail_sync_message = (
+                f"✅ Sync complete — {synced} emails indexed, "
+                f"{attachments} attachments, {labeled} labeled, "
+                f"{skipped} skipped, {errors} errors"
+            )
+            # Refresh RAG stats
+            self.rag_stats = await api_client.get_rag_stats()
+        elif result.get("status") == "already_running":
+            self.gmail_sync_status = "syncing"
+            self.gmail_sync_message = "⏳ Sync already in progress"
+        else:
+            self.gmail_sync_status = "error"
+            self.gmail_sync_message = f"❌ Unexpected response: {result}"
+
+    # ----- Gmail folders (multi-select) -----
+
+    @rx.var(cache=True)
+    def gmail_unselected_folders(self) -> list[dict[str, str]]:
+        """Available folders that are NOT yet selected — for the dropdown."""
+        selected = set(self.gmail_selected_folders)
+        return [
+            f for f in self.gmail_available_folders
+            if f.get("name", "") not in selected
+        ]
+
+    @rx.var(cache=True)
+    def gmail_selected_folder_items(self) -> list[dict[str, str]]:
+        """Selected folders with their info for bubble rendering."""
+        folder_map = {f["name"]: f for f in self.gmail_available_folders}
+        result: list[dict[str, str]] = []
+        for name in self.gmail_selected_folders:
+            info = folder_map.get(name, {"name": name, "id": name, "type": "user"})
+            result.append({
+                "name": info.get("name", name),
+                "type": info.get("type", "user"),
+            })
+        return result
+
+    async def load_gmail_folders(self):
+        """Fetch all labels from Gmail and populate the dropdown."""
+        self.gmail_folders_loading = True
+        self.gmail_folder_dropdown_open = True
+        yield
+
+        raw_folders = await api_client.fetch_gmail_folders()
+        self.gmail_available_folders = [
+            {"name": f.get("name", ""), "id": f.get("id", ""), "type": f.get("type", "user")}
+            for f in raw_folders
+        ]
+        self.gmail_folders_loading = False
+
+    async def add_gmail_folder(self, folder_name: str):
+        """Add a folder to the selected list and save to backend."""
+        if folder_name and folder_name not in self.gmail_selected_folders:
+            new_selected = list(self.gmail_selected_folders)
+            new_selected.append(folder_name)
+            self.gmail_selected_folders = new_selected
+            await self.save_setting(
+                "gmail_sync_folders", ",".join(new_selected),
+            )
+
+    async def remove_gmail_folder(self, folder_name: str):
+        """Remove a folder from the selected list and save to backend."""
+        new_selected = [f for f in self.gmail_selected_folders if f != folder_name]
+        self.gmail_selected_folders = new_selected
+        await self.save_setting(
+            "gmail_sync_folders", ",".join(new_selected),
+        )
+
+    async def clear_all_gmail_folders(self):
+        """Remove all selected folders and save to backend."""
+        self.gmail_selected_folders = []
+        await self.save_setting("gmail_sync_folders", "")
+
+    def toggle_gmail_folder_dropdown(self):
+        """Toggle the folder dropdown open/closed."""
+        self.gmail_folder_dropdown_open = not self.gmail_folder_dropdown_open
+
+    def close_gmail_folder_dropdown(self):
+        """Close the folder dropdown."""
+        self.gmail_folder_dropdown_open = False
 
     async def reset_category(self, category: str):
         """Reset a settings category to defaults."""

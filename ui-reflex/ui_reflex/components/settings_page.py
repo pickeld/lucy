@@ -418,6 +418,12 @@ def _plugins_tab() -> rx.Component:
                         _paperless_actions(),
                         rx.fragment(),
                     ),
+                    # Gmail actions
+                    rx.cond(
+                        AppState.active_plugin_tab_value == "gmail",
+                        _gmail_actions(),
+                        rx.fragment(),
+                    ),
                 ),
             ),
             rx.text(
@@ -573,18 +579,22 @@ def _render_setting(item: dict) -> rx.Component:
             item["key"] == "paperless_sync_tags",
             _paperless_tags_input(),
             rx.cond(
-                item["setting_type"] == "bool",
-                _bool_input(item),
+                item["key"] == "gmail_sync_folders",
+                _gmail_folders_input(),
                 rx.cond(
-                    item["setting_type"] == "select",
-                    _select_input(item),
+                    item["setting_type"] == "bool",
+                    _bool_input(item),
                     rx.cond(
-                        item["setting_type"] == "secret",
-                        _secret_input(item),
+                        item["setting_type"] == "select",
+                        _select_input(item),
                         rx.cond(
-                            item["key"] == "system_prompt",
-                            _textarea_input(item),
-                            _text_input(item),
+                            item["setting_type"] == "secret",
+                            _secret_input(item),
+                            rx.cond(
+                                item["key"] == "system_prompt",
+                                _textarea_input(item),
+                                _text_input(item),
+                            ),
                         ),
                     ),
                 ),
@@ -883,6 +893,283 @@ def _paperless_tags_input() -> rx.Component:
                         ),
                         rx.text(
                             "No more tags available",
+                            class_name="text-sm text-gray-400 italic px-3 py-2",
+                        ),
+                    ),
+                ),
+                class_name=(
+                    "mt-1 bg-white border border-gray-200 rounded-lg shadow-lg "
+                    "overflow-hidden z-50"
+                ),
+            ),
+            rx.fragment(),
+        ),
+        class_name="relative w-full",
+    )
+
+
+# =========================================================================
+# GMAIL ACTIONS — auth, test, sync
+# =========================================================================
+
+
+def _gmail_actions() -> rx.Component:
+    """Gmail authorization, test connection, and sync buttons."""
+    return rx.box(
+        # Auth section
+        rx.flex(
+            rx.button(
+                rx.icon("key-round", size=14, class_name="mr-1"),
+                "Authorize Gmail",
+                on_click=AppState.gmail_start_auth,
+                loading=AppState.gmail_auth_status == "pending",
+                size="2",
+                class_name="bg-blue-500 text-white hover:bg-blue-600",
+            ),
+            rx.button(
+                rx.icon("wifi", size=14, class_name="mr-1"),
+                "Test Connection",
+                on_click=AppState.gmail_test_connection,
+                loading=AppState.gmail_test_status == "testing",
+                size="2",
+                class_name="bg-blue-500 text-white hover:bg-blue-600",
+            ),
+            rx.button(
+                rx.icon("refresh-cw", size=14, class_name="mr-1"),
+                "Start Sync",
+                on_click=AppState.start_gmail_sync,
+                loading=AppState.gmail_sync_status == "syncing",
+                size="2",
+                class_name="bg-green-500 text-white hover:bg-green-600",
+            ),
+            gap="3",
+            align="center",
+            wrap="wrap",
+        ),
+        # Auth URL display (when authorization is pending)
+        rx.cond(
+            AppState.gmail_auth_url != "",
+            rx.box(
+                rx.text(
+                    "Open this URL in your browser to authorize:",
+                    class_name="text-sm text-gray-600 mb-2",
+                ),
+                rx.box(
+                    rx.text(
+                        AppState.gmail_auth_url,
+                        class_name="text-xs text-blue-600 break-all",
+                    ),
+                    class_name="bg-gray-50 border border-gray-200 rounded p-2 mb-3",
+                ),
+                rx.text(
+                    "After approving, paste the authorization code below:",
+                    class_name="text-sm text-gray-600 mb-2",
+                ),
+                rx.flex(
+                    rx.el.input(
+                        type="text",
+                        placeholder="Paste authorization code here…",
+                        on_change=AppState.set_gmail_auth_code_input,
+                        class_name=(
+                            "flex-1 bg-white border border-gray-200 rounded-lg "
+                            "px-3 py-2 text-sm text-gray-700 "
+                            "outline-none focus:border-accent"
+                        ),
+                    ),
+                    rx.button(
+                        rx.icon("check", size=14, class_name="mr-1"),
+                        "Submit Code",
+                        on_click=AppState.gmail_submit_auth_code,
+                        size="2",
+                        class_name="bg-green-500 text-white hover:bg-green-600 shrink-0",
+                    ),
+                    gap="2",
+                    align="center",
+                ),
+                class_name="mt-3",
+            ),
+            rx.fragment(),
+        ),
+        # Auth status message
+        rx.cond(
+            AppState.gmail_auth_message != "",
+            rx.text(
+                AppState.gmail_auth_message,
+                class_name="text-sm mt-2",
+            ),
+            rx.fragment(),
+        ),
+        # Test status message
+        rx.cond(
+            AppState.gmail_test_message != "",
+            rx.text(
+                AppState.gmail_test_message,
+                class_name="text-sm mt-2",
+            ),
+            rx.fragment(),
+        ),
+        # Sync status message
+        rx.cond(
+            AppState.gmail_sync_message != "",
+            rx.text(
+                AppState.gmail_sync_message,
+                class_name="text-sm mt-2",
+            ),
+            rx.fragment(),
+        ),
+        class_name="mt-4 pt-4 border-t border-gray-200",
+    )
+
+
+# =========================================================================
+# GMAIL FOLDERS — multi-select with bubble display
+# =========================================================================
+
+
+def _gmail_folder_bubble(folder: rx.Var[dict]) -> rx.Component:
+    """Render a single selected folder as a removable bubble."""
+    return rx.box(
+        rx.flex(
+            rx.icon(
+                "x",
+                size=14,
+                class_name="shrink-0 cursor-pointer opacity-60 hover:opacity-100",
+                on_click=AppState.remove_gmail_folder(folder["name"]),
+            ),
+            rx.text(
+                folder["name"],
+                class_name="text-sm font-medium",
+            ),
+            align="center",
+            gap="1.5",
+        ),
+        class_name="px-3 py-1 rounded-full border inline-flex",
+        style={
+            "background_color": rx.cond(
+                folder["type"] == "system",
+                "#dbeafe",   # Light blue for system folders
+                "#f3e8ff",   # Light purple for user labels
+            ),
+            "border_color": rx.cond(
+                folder["type"] == "system",
+                "#93c5fd",
+                "#c4b5fd",
+            ),
+            "color": "#374151",
+        },
+    )
+
+
+def _gmail_folder_option(folder: rx.Var[dict]) -> rx.Component:
+    """Render a single folder option in the dropdown list."""
+    return rx.box(
+        rx.flex(
+            rx.icon(
+                rx.cond(
+                    folder["type"] == "system",
+                    "folder",
+                    "tag",
+                ),
+                size=14,
+                class_name="text-gray-400 shrink-0",
+            ),
+            rx.text(
+                folder["name"],
+                class_name="text-sm text-gray-700",
+            ),
+            align="center",
+            gap="2",
+        ),
+        on_click=AppState.add_gmail_folder(folder["name"]),
+        class_name=(
+            "px-3 py-2 cursor-pointer hover:bg-gray-50 "
+            "border-b border-gray-100 last:border-b-0"
+        ),
+    )
+
+
+def _gmail_folders_input() -> rx.Component:
+    """Multi-select folder input with bubble display for gmail_sync_folders.
+
+    Shows selected folders as colored bubbles with × remove buttons.
+    A dropdown chevron fetches and shows all available Gmail labels.
+    """
+    return rx.box(
+        rx.flex(
+            # Selected folders area (bubbles)
+            rx.box(
+                rx.cond(
+                    AppState.gmail_selected_folders.length() > 0,  # type: ignore[union-attr]
+                    rx.flex(
+                        rx.foreach(
+                            AppState.gmail_selected_folder_items,
+                            _gmail_folder_bubble,
+                        ),
+                        direction="column",
+                        gap="2",
+                        class_name="py-2 px-2",
+                    ),
+                    rx.text(
+                        "No folders selected (defaults to INBOX)",
+                        class_name="text-sm text-gray-400 italic py-2 px-3",
+                    ),
+                ),
+                class_name="flex-1 min-w-0",
+            ),
+            # Right side: clear all + dropdown toggle
+            rx.flex(
+                rx.cond(
+                    AppState.gmail_selected_folders.length() > 0,  # type: ignore[union-attr]
+                    rx.icon_button(
+                        rx.icon("x", size=14),
+                        on_click=AppState.clear_all_gmail_folders,
+                        variant="ghost",
+                        size="1",
+                        class_name="text-gray-400 hover:text-gray-600",
+                    ),
+                    rx.fragment(),
+                ),
+                rx.icon_button(
+                    rx.icon("chevron-down", size=16),
+                    on_click=AppState.load_gmail_folders,
+                    variant="ghost",
+                    size="1",
+                    class_name="text-gray-400 hover:text-gray-600",
+                ),
+                align="center",
+                gap="1",
+                class_name="shrink-0 pr-1",
+            ),
+            align="start",
+            justify="between",
+            class_name=(
+                "w-full bg-white border border-gray-200 rounded-lg "
+                "min-h-[42px]"
+            ),
+        ),
+        # Dropdown list of available folders
+        rx.cond(
+            AppState.gmail_folder_dropdown_open,
+            rx.box(
+                rx.cond(
+                    AppState.gmail_folders_loading,
+                    rx.flex(
+                        rx.spinner(size="2"),
+                        rx.text("Loading folders…", class_name="text-sm text-gray-400 ml-2"),
+                        align="center",
+                        class_name="px-3 py-3",
+                    ),
+                    rx.cond(
+                        AppState.gmail_unselected_folders.length() > 0,  # type: ignore[union-attr]
+                        rx.box(
+                            rx.foreach(
+                                AppState.gmail_unselected_folders,
+                                _gmail_folder_option,
+                            ),
+                            class_name="max-h-[200px] overflow-y-auto",
+                        ),
+                        rx.text(
+                            "No more folders available",
                             class_name="text-sm text-gray-400 italic px-3 py-2",
                         ),
                     ),
