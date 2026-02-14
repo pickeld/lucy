@@ -18,6 +18,64 @@ from .utils.time_utils import group_conversations_by_time
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Human-readable display labels for settings keys
+# ---------------------------------------------------------------------------
+
+SETTING_LABELS: dict[str, str] = {
+    # LLM / AI
+    "llm_provider": "Provider",
+    "openai_model": "Model",
+    "openai_temperature": "Temperature",
+    "gemini_model": "Model",
+    "gemini_temperature": "Temperature",
+    "image_provider": "Provider",
+    "imagen_model": "Imagen Model",
+    "dalle_model": "DALL-E Model",
+    "system_prompt": "System Prompt",
+    # Secrets
+    "openai_api_key": "OpenAI API Key",
+    "google_api_key": "Google API Key",
+    "waha_api_key": "WAHA API Key",
+    # RAG
+    "rag_collection_name": "Collection Name",
+    "rag_min_score": "Minimum Similarity Score",
+    "rag_max_context_tokens": "Max Context Tokens",
+    "rag_default_k": "Documents to Retrieve",
+    "rag_context_window_seconds": "Context Time Window (seconds)",
+    "embedding_model": "Embedding Model",
+    "rag_vector_size": "Vector Dimensions",
+    "rag_rrf_k": "RRF Smoothing Constant",
+    "rag_fulltext_score_sender": "Sender Match Score",
+    "rag_fulltext_score_chat_name": "Chat Name Match Score",
+    "rag_fulltext_score_message": "Message Content Score",
+    # Infrastructure / Connections
+    "redis_host": "Redis Host",
+    "redis_port": "Redis Port",
+    "qdrant_host": "Qdrant Host",
+    "qdrant_port": "Qdrant Port",
+    "waha_base_url": "WAHA Server URL",
+    "webhook_url": "Webhook URL",
+    "ui_api_url": "UI API URL",
+    # App
+    "log_level": "Log Level",
+    "timezone": "Timezone",
+    "redis_ttl": "Cache TTL (seconds)",
+    "session_ttl_minutes": "Session Timeout (minutes)",
+    "session_max_history": "Max History Turns",
+    "cost_tracking_enabled": "Cost Tracking",
+    # WhatsApp plugin
+    "chat_prefix": "Chat Trigger Prefix",
+    "dalle_prefix": "Image Generation Prefix",
+    "waha_session_name": "Session Name",
+    # Paperless plugin
+    "paperless_url": "Server URL",
+    "paperless_token": "API Token",
+    "paperless_sync_interval": "Sync Interval (seconds)",
+    "paperless_sync_tags": "Sync Tags (comma-separated)",
+    "paperless_max_docs": "Max Documents per Sync",
+}
+
 
 class AppState(rx.State):
     """Root application state."""
@@ -76,7 +134,7 @@ class AppState(rx.State):
     paperless_sync_message: str = ""
 
     # --- Tab state ---
-    settings_tab: str = "llm"  # Active main tab
+    settings_tab: str = "ai"   # Active main tab
     plugin_tab: str = ""       # Active plugin sub-tab (empty = first plugin)
 
     # --- RAG stats ---
@@ -263,6 +321,7 @@ class AppState(rx.State):
         Each dict has: key, label, value, setting_type, description, category, options.
         The ``options`` field is a ``|``-separated string of valid choices for
         select-type settings (empty for non-select types).
+        Uses SETTING_LABELS for human-readable display names.
         """
         settings = self.all_settings.get(category, {})
         opts = self.config_meta.get("select_options", {})
@@ -271,13 +330,39 @@ class AppState(rx.State):
             options_list = opts.get(key, [])
             result.append({
                 "key": key,
-                "label": key.replace("_", " ").title(),
+                "label": SETTING_LABELS.get(key, key.replace("_", " ").title()),
                 "value": str(info.get("value", "")),
                 "setting_type": info.get("type", "text"),
                 "description": info.get("description", ""),
                 "category": category,
                 "options": "|".join(options_list) if options_list else "",
             })
+        return result
+
+    def _pick_settings(
+        self, keys: list[tuple[str, str]],
+    ) -> list[dict[str, str]]:
+        """Pick specific settings by (category, key) pairs, returned in order.
+
+        Allows pulling settings from multiple backend categories into a single
+        UI section.  Uses SETTING_LABELS for human-readable display names.
+        """
+        opts = self.config_meta.get("select_options", {})
+        result: list[dict[str, str]] = []
+        for category, key in keys:
+            cat_settings = self.all_settings.get(category, {})
+            info = cat_settings.get(key)
+            if info:
+                options_list = opts.get(key, [])
+                result.append({
+                    "key": key,
+                    "label": SETTING_LABELS.get(key, key.replace("_", " ").title()),
+                    "value": str(info.get("value", "")),
+                    "setting_type": info.get("type", "text"),
+                    "description": info.get("description", ""),
+                    "category": category,
+                    "options": "|".join(options_list) if options_list else "",
+                })
         return result
 
     @rx.var(cache=True)
@@ -346,6 +431,83 @@ class AppState(rx.State):
             return self.plugin_tab
         cats = self.plugin_categories
         return cats[0] if cats else ""
+
+    # ----- Reorganized settings for the new tabbed UI -----
+
+    @rx.var(cache=True)
+    def ai_chat_settings(self) -> list[dict[str, str]]:
+        """Chat provider settings filtered by current provider selection."""
+        provider = self.current_llm_provider
+        keys: list[tuple[str, str]] = [("llm", "llm_provider")]
+        if provider == "openai":
+            keys += [("llm", "openai_model"), ("llm", "openai_temperature")]
+        elif provider == "gemini":
+            keys += [("llm", "gemini_model"), ("llm", "gemini_temperature")]
+        return self._pick_settings(keys)
+
+    @rx.var(cache=True)
+    def ai_image_settings(self) -> list[dict[str, str]]:
+        """Image provider settings filtered by current provider selection."""
+        img_provider = self.current_image_provider
+        keys: list[tuple[str, str]] = [("llm", "image_provider")]
+        if img_provider == "openai":
+            keys.append(("whatsapp", "dalle_model"))
+        elif img_provider == "google":
+            keys.append(("llm", "imagen_model"))
+        return self._pick_settings(keys)
+
+    @rx.var(cache=True)
+    def system_prompt_setting(self) -> list[dict[str, str]]:
+        """Just the system_prompt setting for its own card."""
+        return self._pick_settings([("llm", "system_prompt")])
+
+    @rx.var(cache=True)
+    def rag_retrieval_settings(self) -> list[dict[str, str]]:
+        """Core RAG retrieval settings."""
+        return self._pick_settings([
+            ("rag", "rag_collection_name"),
+            ("rag", "embedding_model"),
+            ("rag", "rag_vector_size"),
+            ("rag", "rag_default_k"),
+            ("rag", "rag_max_context_tokens"),
+            ("rag", "rag_context_window_seconds"),
+            ("rag", "rag_min_score"),
+        ])
+
+    @rx.var(cache=True)
+    def rag_scoring_settings(self) -> list[dict[str, str]]:
+        """Advanced RAG scoring / ranking settings."""
+        return self._pick_settings([
+            ("rag", "rag_rrf_k"),
+            ("rag", "rag_fulltext_score_sender"),
+            ("rag", "rag_fulltext_score_chat_name"),
+            ("rag", "rag_fulltext_score_message"),
+        ])
+
+    @rx.var(cache=True)
+    def connections_settings_list(self) -> list[dict[str, str]]:
+        """Infrastructure / connection settings for the System tab."""
+        return self._pick_settings([
+            ("infrastructure", "redis_host"),
+            ("infrastructure", "redis_port"),
+            ("infrastructure", "qdrant_host"),
+            ("infrastructure", "qdrant_port"),
+            ("infrastructure", "waha_base_url"),
+            ("infrastructure", "webhook_url"),
+            ("app", "ui_api_url"),
+        ])
+
+    @rx.var(cache=True)
+    def application_settings_list(self) -> list[dict[str, str]]:
+        """Application behaviour settings for the System tab."""
+        return self._pick_settings([
+            ("app", "log_level"),
+            ("app", "timezone"),
+            ("app", "redis_ttl"),
+            ("app", "session_ttl_minutes"),
+            ("app", "session_max_history"),
+            ("app", "cost_tracking_enabled"),
+        ])
 
     # =====================================================================
     # LIFECYCLE EVENTS

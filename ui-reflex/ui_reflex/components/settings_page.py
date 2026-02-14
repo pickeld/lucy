@@ -1,8 +1,8 @@
-"""Settings page — tabbed configuration management.
+"""Settings page — redesigned tabbed configuration management.
 
-Replaces the flat scrollable list with a modern tabbed interface.
-Six main tabs: LLM, Keys, RAG, Plugins, Infra, App.
-Nested plugin sub-tabs for per-plugin configuration.
+Six tabs: AI & Models, API Keys, Knowledge Base, Plugins, System, Costs.
+Each tab uses card-based sections with clear visual grouping.
+Human-readable labels via SETTING_LABELS in state.py.
 """
 
 import reflex as rx
@@ -16,12 +16,12 @@ from ..state import AppState
 
 
 def settings_page() -> rx.Component:
-    """Full settings page with tabbed interface."""
+    """Full settings page with redesigned tabbed interface."""
     return rx.box(
         rx.flex(
-            # Header with back button + Export/Import
+            # Compact header: back + title + health badge + export
             _header(),
-            # Status message
+            # Status message (save confirmation)
             rx.cond(
                 AppState.settings_save_message != "",
                 rx.box(
@@ -33,29 +33,25 @@ def settings_page() -> rx.Component:
                 ),
                 rx.fragment(),
             ),
-            # Health overview
-            _health_section(),
-            # Main tabbed interface
+            # Main tabbed interface — 6 tabs
             rx.tabs.root(
                 rx.tabs.list(
-                    rx.tabs.trigger("🤖 LLM", value="llm"),
-                    rx.tabs.trigger("🔑 Keys", value="keys"),
-                    rx.tabs.trigger("🔍 RAG", value="rag"),
+                    rx.tabs.trigger("🤖 AI & Models", value="ai"),
+                    rx.tabs.trigger("🔑 API Keys", value="keys"),
+                    rx.tabs.trigger("📚 Knowledge Base", value="kb"),
                     rx.tabs.trigger("🔌 Plugins", value="plugins"),
-                    rx.tabs.trigger("🏗️ Infra", value="infra"),
-                    rx.tabs.trigger("🔧 App", value="app"),
+                    rx.tabs.trigger("⚙️ System", value="system"),
                     rx.tabs.trigger("💰 Costs", value="costs"),
                     size="2",
                 ),
-                rx.tabs.content(_llm_tab(), value="llm", class_name="pt-4"),
+                rx.tabs.content(_ai_tab(), value="ai", class_name="pt-4"),
                 rx.tabs.content(_keys_tab(), value="keys", class_name="pt-4"),
-                rx.tabs.content(_rag_tab(), value="rag", class_name="pt-4"),
+                rx.tabs.content(_kb_tab(), value="kb", class_name="pt-4"),
                 rx.tabs.content(_plugins_tab(), value="plugins", class_name="pt-4"),
-                rx.tabs.content(_infra_tab(), value="infra", class_name="pt-4"),
-                rx.tabs.content(_app_tab(), value="app", class_name="pt-4"),
+                rx.tabs.content(_system_tab(), value="system", class_name="pt-4"),
                 rx.tabs.content(_costs_tab(), value="costs", class_name="pt-4"),
-                default_value="llm",
-                class_name="mt-4",
+                default_value="ai",
+                class_name="mt-2",
             ),
             direction="column",
             class_name="max-w-[820px] mx-auto w-full px-4 py-6",
@@ -65,13 +61,14 @@ def settings_page() -> rx.Component:
 
 
 # =========================================================================
-# HEADER
+# HEADER (compact — health badge inline)
 # =========================================================================
 
 
 def _header() -> rx.Component:
-    """Header with back button, title, and Export/Import buttons."""
+    """Compact header: back button + title + health badge + export."""
     return rx.flex(
+        # Left: back + title
         rx.flex(
             rx.link(
                 rx.icon_button(
@@ -85,7 +82,28 @@ def _header() -> rx.Component:
             align="center",
             gap="3",
         ),
+        # Right: health badge + export/import
         rx.flex(
+            # Inline health badge
+            rx.box(
+                rx.flex(
+                    rx.box(
+                        class_name=rx.cond(
+                            AppState.api_status == "up",
+                            "health-badge-dot bg-status-green",
+                            rx.cond(
+                                AppState.api_status == "degraded",
+                                "health-badge-dot bg-status-yellow",
+                                "health-badge-dot bg-status-red",
+                            ),
+                        ),
+                    ),
+                    rx.text(AppState.health_label),
+                    align="center",
+                    gap="1.5",
+                ),
+                class_name="health-badge",
+            ),
             rx.button(
                 rx.icon("download", size=14),
                 "Export",
@@ -117,184 +135,190 @@ def _header() -> rx.Component:
         ),
         justify="between",
         align="center",
-        class_name="mb-2",
+        class_name="mb-4",
     )
 
 
 # =========================================================================
-# HEALTH SECTION (unchanged from original)
+# SECTION CARD — shared wrapper for visual grouping
 # =========================================================================
 
 
-def _health_section() -> rx.Component:
-    """System health dashboard."""
-    return rx.box(
+def _section_card(
+    title: str,
+    icon: str,
+    *children: rx.Component,
+    reset_category: str = "",
+) -> rx.Component:
+    """Wrap settings in a visually distinct card with icon + title header."""
+    header_items = [
         rx.flex(
-            rx.icon("activity", size=18, class_name="text-gray-500"),
-            rx.heading("System Health", size="4", class_name="text-gray-700"),
+            rx.icon(icon, size=16, class_name="text-gray-500"),
+            rx.text(title),
             align="center",
             gap="2",
-            class_name="mb-3",
         ),
+    ]
+    if reset_category:
+        header_items.append(
+            rx.button(
+                rx.icon("rotate-ccw", size=12, class_name="mr-1"),
+                "Reset",
+                on_click=AppState.reset_category(reset_category),
+                variant="ghost",
+                size="1",
+                class_name="text-gray-400 hover:text-gray-600 text-xs",
+            ),
+        )
+    return rx.box(
         rx.box(
             rx.flex(
-                rx.box(
-                    class_name=rx.cond(
-                        AppState.api_status == "up",
-                        "w-3 h-3 rounded-full bg-status-green",
-                        rx.cond(
-                            AppState.api_status == "degraded",
-                            "w-3 h-3 rounded-full bg-status-yellow",
-                            "w-3 h-3 rounded-full bg-status-red",
-                        ),
-                    ),
-                ),
-                rx.text(
-                    AppState.health_label,
-                    class_name="font-medium text-sm text-gray-700",
-                ),
+                *header_items,
+                justify="between",
                 align="center",
-                gap="2",
             ),
-            class_name="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3",
+            class_name="settings-card-header",
         ),
-        class_name="mb-6 pb-6 border-b border-gray-100",
+        *children,
+        class_name="settings-card",
     )
 
 
 # =========================================================================
-# TAB CONTENT: LLM
+# TAB: AI & MODELS
 # =========================================================================
 
 
-def _llm_tab() -> rx.Component:
-    """LLM configuration tab — providers, models, system prompt."""
+def _ai_tab() -> rx.Component:
+    """AI & Models tab — chat provider, image generation, system prompt."""
     return rx.flex(
-        _tab_header("🤖 LLM Configuration", "llm"),
-        rx.text(
-            "Configure your LLM and image generation providers. "
-            "Only settings for the selected provider are shown.",
-            class_name="text-sm text-gray-400 mb-4",
+        # Chat Provider section
+        _section_card(
+            "Chat Provider", "message-square",
+            rx.text(
+                "Select your LLM provider and configure model settings.",
+                class_name="text-xs text-gray-400 mb-3",
+            ),
+            rx.foreach(
+                AppState.ai_chat_settings,
+                _render_setting,
+            ),
+            reset_category="llm",
         ),
-        rx.foreach(
-            AppState.llm_settings_list,
-            _render_setting,
+        # Image Generation section
+        _section_card(
+            "Image Generation", "image",
+            rx.text(
+                "Configure the image generation provider for visual responses.",
+                class_name="text-xs text-gray-400 mb-3",
+            ),
+            rx.foreach(
+                AppState.ai_image_settings,
+                _render_setting,
+            ),
+        ),
+        # System Prompt section
+        _section_card(
+            "System Prompt", "file-text",
+            rx.text(
+                "The system prompt sent with every LLM request. "
+                "Supports {current_datetime} and {hebrew_date} placeholders.",
+                class_name="text-xs text-gray-400 mb-3",
+            ),
+            rx.foreach(
+                AppState.system_prompt_setting,
+                _render_setting,
+            ),
         ),
         direction="column",
     )
 
 
 # =========================================================================
-# TAB CONTENT: KEYS
+# TAB: API KEYS
 # =========================================================================
 
 
 def _keys_tab() -> rx.Component:
-    """API Keys & Secrets tab."""
+    """API Keys tab — all secrets in one card."""
     return rx.flex(
-        _tab_header("🔑 API Keys & Secrets", "secrets"),
-        rx.text(
-            "API keys are stored encrypted. Leave blank to keep the current value.",
-            class_name="text-sm text-gray-400 mb-4",
-        ),
-        rx.foreach(
-            AppState.secrets_settings_list,
-            _render_setting,
+        _section_card(
+            "API Keys & Secrets", "key",
+            rx.text(
+                "API keys are stored encrypted. Leave blank to keep the current value.",
+                class_name="text-xs text-gray-400 mb-3",
+            ),
+            rx.foreach(
+                AppState.secrets_settings_list,
+                _render_setting,
+            ),
+            reset_category="secrets",
         ),
         direction="column",
     )
 
 
 # =========================================================================
-# TAB CONTENT: RAG
+# TAB: KNOWLEDGE BASE
 # =========================================================================
 
 
-def _rag_tab() -> rx.Component:
-    """RAG configuration tab — stats + settings."""
+def _kb_tab() -> rx.Component:
+    """Knowledge Base tab — RAG stats + retrieval settings + scoring."""
     return rx.flex(
-        _tab_header("🔍 RAG Configuration", "rag"),
-        # RAG Statistics section
+        # Stats dashboard
         _rag_stats_section(),
-        # RAG settings
-        rx.foreach(
-            AppState.rag_settings_list,
-            _render_setting,
+        # Retrieval Settings
+        _section_card(
+            "Retrieval Settings", "search",
+            rx.text(
+                "Configure how documents are retrieved from the vector store.",
+                class_name="text-xs text-gray-400 mb-3",
+            ),
+            rx.foreach(
+                AppState.rag_retrieval_settings,
+                _render_setting,
+            ),
+            reset_category="rag",
+        ),
+        # Scoring & Ranking (advanced)
+        _section_card(
+            "Scoring & Ranking", "sliders-horizontal",
+            rx.text(
+                "Advanced scoring parameters for search result ranking. "
+                "Most users won't need to change these.",
+                class_name="text-xs text-gray-400 mb-3",
+            ),
+            rx.foreach(
+                AppState.rag_scoring_settings,
+                _render_setting,
+            ),
         ),
         direction="column",
     )
 
 
 def _rag_stats_section() -> rx.Component:
-    """RAG vector store statistics — real data from rag_stats."""
+    """RAG vector store statistics card."""
     return rx.box(
-        rx.flex(
-            rx.icon("bar-chart-3", size=16, class_name="text-gray-500"),
-            rx.text(
-                "Vector Store Statistics",
-                class_name="text-sm font-medium text-gray-600",
+        rx.box(
+            rx.flex(
+                rx.flex(
+                    rx.icon("bar-chart-3", size=16, class_name="text-gray-500"),
+                    rx.text("Vector Store Statistics"),
+                    align="center",
+                    gap="2",
+                ),
+                justify="between",
+                align="center",
             ),
-            align="center",
-            gap="2",
-            class_name="mb-3",
+            class_name="settings-card-header",
         ),
         rx.grid(
-            rx.box(
-                rx.text(
-                    "Total Vectors",
-                    class_name="text-xs text-gray-400 uppercase tracking-wider",
-                ),
-                rx.text(
-                    AppState.rag_total_docs,
-                    class_name="text-2xl font-semibold text-gray-800 mt-1",
-                ),
-                class_name="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3",
-            ),
-            rx.box(
-                rx.text(
-                    "WhatsApp Messages",
-                    class_name="text-xs text-gray-400 uppercase tracking-wider",
-                ),
-                rx.flex(
-                    rx.icon("message-circle", size=18, class_name="text-green-500"),
-                    rx.text(
-                        AppState.rag_whatsapp_count,
-                        class_name="text-2xl font-semibold text-gray-800",
-                    ),
-                    align="center",
-                    gap="2",
-                    class_name="mt-1",
-                ),
-                class_name="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3",
-            ),
-            rx.box(
-                rx.text(
-                    "Documents",
-                    class_name="text-xs text-gray-400 uppercase tracking-wider",
-                ),
-                rx.flex(
-                    rx.icon("file-text", size=18, class_name="text-blue-500"),
-                    rx.text(
-                        AppState.rag_document_count,
-                        class_name="text-2xl font-semibold text-gray-800",
-                    ),
-                    align="center",
-                    gap="2",
-                    class_name="mt-1",
-                ),
-                class_name="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3",
-            ),
-            rx.box(
-                rx.text(
-                    "Collection",
-                    class_name="text-xs text-gray-400 uppercase tracking-wider",
-                ),
-                rx.text(
-                    AppState.rag_collection_name,
-                    class_name="text-lg font-semibold text-gray-800 mt-1",
-                ),
-                class_name="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3",
-            ),
+            _stat_tile("Total Vectors", AppState.rag_total_docs, None),
+            _stat_tile("WhatsApp Messages", AppState.rag_whatsapp_count, "message-circle"),
+            _stat_tile("Documents", AppState.rag_document_count, "file-text"),
+            _stat_tile("Collection", AppState.rag_collection_name, None),
             columns="2",
             gap="3",
         ),
@@ -309,105 +333,89 @@ def _rag_stats_section() -> rx.Component:
                 ),
                 href=AppState.rag_dashboard_url,
                 is_external=True,
-                class_name="text-accent mt-2 inline-flex",
+                class_name="text-accent mt-3 inline-flex",
             ),
             rx.fragment(),
         ),
-        class_name="mb-6 pb-4 border-b border-gray-100",
+        class_name="settings-card",
+    )
+
+
+def _stat_tile(
+    label: str, value: rx.Var, icon_name: str | None,
+) -> rx.Component:
+    """Small stat tile for the RAG stats grid."""
+    value_row = (
+        rx.flex(
+            rx.icon(icon_name, size=18, class_name="text-accent"),  # type: ignore[arg-type]
+            rx.text(value, class_name="text-2xl font-semibold text-gray-800"),
+            align="center",
+            gap="2",
+            class_name="mt-1",
+        )
+        if icon_name
+        else rx.text(
+            value,
+            class_name="text-2xl font-semibold text-gray-800 mt-1",
+        )
+    )
+    return rx.box(
+        rx.text(
+            label,
+            class_name="text-xs text-gray-400 uppercase tracking-wider",
+        ),
+        value_row,
+        class_name="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3",
     )
 
 
 # =========================================================================
-# TAB CONTENT: PLUGINS
+# TAB: PLUGINS
 # =========================================================================
 
 
 def _plugins_tab() -> rx.Component:
-    """Plugins tab — toggles + per-plugin sub-tabs."""
+    """Plugins tab — toggles + per-plugin accordion-style config."""
     return rx.flex(
-        _tab_header("🔌 Plugins", "plugins"),
         # Plugin enable/disable toggles
         rx.cond(
             AppState.plugins_toggle_list.length() > 0,  # type: ignore[union-attr]
-            rx.box(
-                rx.text(
-                    "Enable / Disable",
-                    class_name="text-sm font-medium text-gray-600 mb-2",
-                ),
+            _section_card(
+                "Enable / Disable Plugins", "power",
                 rx.foreach(
                     AppState.plugins_toggle_list,
                     _render_setting,
                 ),
-                class_name="mb-4 pb-4 border-b border-gray-100",
             ),
             rx.fragment(),
         ),
-        # Plugin sub-tabs (per-plugin configuration)
+        # Per-plugin configuration
         rx.cond(
             AppState.plugin_categories.length() > 0,  # type: ignore[union-attr]
             rx.box(
-                rx.text(
-                    "Plugin Configuration",
-                    class_name="text-sm font-medium text-gray-600 mb-3",
-                ),
-                # Sub-tab buttons
+                # Plugin selector pills
                 rx.flex(
                     rx.foreach(
                         AppState.plugin_categories,
-                        _plugin_tab_button,
+                        _plugin_pill,
                     ),
                     gap="2",
-                    class_name="mb-4",
+                    class_name="mb-3",
                     wrap="wrap",
                 ),
-                # Active plugin settings
-                rx.foreach(
-                    AppState.active_plugin_settings,
-                    _render_setting,
-                ),
-                # Paperless actions (test connection + sync)
-                rx.cond(
-                    AppState.active_plugin_tab_value == "paperless",
-                    rx.box(
-                        rx.flex(
-                            rx.button(
-                                rx.icon("wifi", size=14, class_name="mr-1"),
-                                "Test Connection",
-                                on_click=AppState.test_paperless_connection,
-                                loading=AppState.paperless_test_status == "testing",
-                                size="2",
-                                class_name="bg-blue-500 text-white hover:bg-blue-600",
-                            ),
-                            rx.button(
-                                rx.icon("refresh-cw", size=14, class_name="mr-1"),
-                                "Start Sync",
-                                on_click=AppState.start_paperless_sync,
-                                loading=AppState.paperless_sync_status == "syncing",
-                                size="2",
-                                class_name="bg-green-500 text-white hover:bg-green-600",
-                            ),
-                            gap="3",
-                            align="center",
-                        ),
-                        rx.cond(
-                            AppState.paperless_test_message != "",
-                            rx.text(
-                                AppState.paperless_test_message,
-                                class_name="text-sm mt-2",
-                            ),
-                            rx.fragment(),
-                        ),
-                        rx.cond(
-                            AppState.paperless_sync_message != "",
-                            rx.text(
-                                AppState.paperless_sync_message,
-                                class_name="text-sm mt-2",
-                            ),
-                            rx.fragment(),
-                        ),
-                        class_name="mt-4 pt-4 border-t border-gray-200",
+                # Active plugin settings in a card
+                _section_card(
+                    "Plugin Configuration", "settings",
+                    rx.foreach(
+                        AppState.active_plugin_settings,
+                        _render_setting,
                     ),
-                    rx.fragment(),
+                    # Paperless actions
+                    rx.cond(
+                        AppState.active_plugin_tab_value == "paperless",
+                        _paperless_actions(),
+                        rx.fragment(),
+                    ),
                 ),
             ),
             rx.text(
@@ -419,8 +427,8 @@ def _plugins_tab() -> rx.Component:
     )
 
 
-def _plugin_tab_button(cat: rx.Var[str]) -> rx.Component:
-    """Render a plugin sub-tab button."""
+def _plugin_pill(cat: rx.Var[str]) -> rx.Component:
+    """Render a plugin selector pill button."""
     return rx.button(
         cat.upper(),  # type: ignore[union-attr]
         on_click=AppState.set_plugin_tab(cat),  # type: ignore[attr-defined]
@@ -430,74 +438,98 @@ def _plugin_tab_button(cat: rx.Var[str]) -> rx.Component:
             "outline",
         ),
         size="1",
-        class_name="capitalize",
+        class_name="capitalize rounded-full",
+    )
+
+
+def _paperless_actions() -> rx.Component:
+    """Paperless-NGX test connection and sync buttons."""
+    return rx.box(
+        rx.flex(
+            rx.button(
+                rx.icon("wifi", size=14, class_name="mr-1"),
+                "Test Connection",
+                on_click=AppState.test_paperless_connection,
+                loading=AppState.paperless_test_status == "testing",
+                size="2",
+                class_name="bg-blue-500 text-white hover:bg-blue-600",
+            ),
+            rx.button(
+                rx.icon("refresh-cw", size=14, class_name="mr-1"),
+                "Start Sync",
+                on_click=AppState.start_paperless_sync,
+                loading=AppState.paperless_sync_status == "syncing",
+                size="2",
+                class_name="bg-green-500 text-white hover:bg-green-600",
+            ),
+            gap="3",
+            align="center",
+        ),
+        rx.cond(
+            AppState.paperless_test_message != "",
+            rx.text(
+                AppState.paperless_test_message,
+                class_name="text-sm mt-2",
+            ),
+            rx.fragment(),
+        ),
+        rx.cond(
+            AppState.paperless_sync_message != "",
+            rx.text(
+                AppState.paperless_sync_message,
+                class_name="text-sm mt-2",
+            ),
+            rx.fragment(),
+        ),
+        class_name="mt-4 pt-4 border-t border-gray-200",
     )
 
 
 # =========================================================================
-# TAB CONTENT: INFRASTRUCTURE
+# TAB: SYSTEM (merged Infrastructure + App)
 # =========================================================================
 
 
-def _infra_tab() -> rx.Component:
-    """Infrastructure configuration tab."""
+def _system_tab() -> rx.Component:
+    """System tab — connections + application settings."""
     return rx.flex(
-        _tab_header("🏗️ Infrastructure", "infrastructure"),
         rx.text(
-            "Server addresses and connection settings. "
-            "Changes may require a restart to take effect.",
-            class_name="text-sm text-gray-400 mb-4",
+            "Server addresses and application behaviour. "
+            "Connection changes may require a restart.",
+            class_name="text-sm text-gray-400 mb-3",
         ),
-        rx.foreach(
-            AppState.infra_settings_list,
-            _render_setting,
+        # Connections section
+        _section_card(
+            "Connections", "server",
+            rx.foreach(
+                AppState.connections_settings_list,
+                _render_setting,
+            ),
+            reset_category="infrastructure",
         ),
-        direction="column",
-    )
-
-
-# =========================================================================
-# TAB CONTENT: APP
-# =========================================================================
-
-
-def _app_tab() -> rx.Component:
-    """App configuration tab."""
-    return rx.flex(
-        _tab_header("🔧 App Configuration", "app"),
-        rx.foreach(
-            AppState.app_settings_list,
-            _render_setting,
+        # Application section
+        _section_card(
+            "Application", "cog",
+            rx.foreach(
+                AppState.application_settings_list,
+                _render_setting,
+            ),
+            reset_category="app",
         ),
         direction="column",
     )
 
 
 # =========================================================================
-# SHARED: TAB HEADER WITH RESET BUTTON
+# TAB: COSTS
 # =========================================================================
 
 
-def _tab_header(title: str, category: str) -> rx.Component:
-    """Tab section header with reset button."""
-    return rx.flex(
-        rx.heading(
-            title,
-            size="4",
-            class_name="text-gray-700",
-        ),
-        rx.button(
-            rx.icon("rotate-ccw", size=12, class_name="mr-1"),
-            "Reset to Defaults",
-            on_click=AppState.reset_category(category),
-            variant="ghost",
-            size="1",
-            class_name="text-gray-400 hover:text-gray-600",
-        ),
-        justify="between",
-        align="center",
-        class_name="mb-3 pb-2 border-b border-gray-200",
-    )
+def _costs_tab() -> rx.Component:
+    """Cost tracking dashboard tab."""
+    from .cost_display import cost_dashboard
+
+    return cost_dashboard()
 
 
 # =========================================================================
@@ -552,7 +584,7 @@ def _render_setting(item: dict) -> rx.Component:
                 ),
             ),
         ),
-        class_name="py-2",
+        class_name="settings-field",
     )
 
 
@@ -597,16 +629,11 @@ def _select_input(item: dict) -> rx.Component:
 
 
 def _secret_input(item: dict) -> rx.Component:
-    """Password input for secret values with eye toggle and save button.
-
-    Hidden by default — shows a masked value (e.g. ``sk-a...xyz``).
-    Clicking the eye toggle fetches and reveals the actual value.
-    """
+    """Password input for secret values with eye toggle and save button."""
     is_revealed = AppState.revealed_secrets.contains(item["key"])
     has_value = item["value"] != ""
 
     return rx.flex(
-        # Revealed state: editable text input with unmasked value from API
         rx.cond(
             is_revealed,
             rx.el.input(
@@ -616,8 +643,6 @@ def _secret_input(item: dict) -> rx.Component:
                 on_change=AppState.set_pending_change(item["key"]),  # type: ignore[arg-type]
                 class_name=_INPUT_CLASS + " flex-1",
             ),
-            # Hidden state: show masked value (e.g. "sk-a...xyz") as read-only display,
-            # with a separate editable field for entering new values
             rx.el.input(
                 type="password",
                 placeholder=rx.cond(has_value, item["value"], "Enter new value…"),
@@ -700,14 +725,3 @@ def _textarea_input(item: dict) -> rx.Component:
         align="start",
         gap="2",
     )
-
-
-# =========================================================================
-# COSTS TAB
-# =========================================================================
-
-
-def _costs_tab() -> rx.Component:
-    """Cost tracking dashboard tab."""
-    from .cost_display import cost_dashboard
-    return cost_dashboard()
