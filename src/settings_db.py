@@ -156,6 +156,7 @@ DEFAULT_SETTINGS: List[Tuple[str, str, str, str, str]] = [
     ("rag_min_score", "0.2", "rag", "float", "Minimum similarity score threshold (0.0-1.0)"),
     ("rag_max_context_tokens", "3000", "rag", "int", "Max tokens for RAG context window"),
     ("rag_default_k", "10", "rag", "int", "Default number of context documents"),
+    ("rag_context_window_seconds", "1800", "rag", "int", "Time window (seconds) around matched messages for context expansion (default: 1800 = 30 min)"),
     ("embedding_model", "text-embedding-3-large", "rag", "text", "OpenAI embedding model (text-embedding-3-large recommended for Hebrew+English)"),
     ("rag_vector_size", "1024", "rag", "int", "Embedding vector dimensions (1024 recommended for text-embedding-3-large)"),
     ("rag_rrf_k", "60", "rag", "int", "Reciprocal Rank Fusion smoothing constant"),

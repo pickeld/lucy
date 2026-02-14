@@ -118,11 +118,11 @@ class ArchiveRetriever(BaseRetriever):
     def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         """Retrieve relevant messages/documents using hybrid search.
         
-        Runs semantic + full-text hybrid search first. If that returns no
-        results (e.g., for temporal queries like "what's the last message?"
-        where vector similarity doesn't capture recency), automatically
-        falls back to timestamp-ordered retrieval. This is fully
-        language-agnostic — no hardcoded keyword patterns needed.
+        Runs semantic + full-text hybrid search first. Then expands context
+        by fetching surrounding messages from the same chats, so replies
+        and nearby messages are included even if they don't match the query
+        semantically. If search returns no results, falls back to
+        timestamp-ordered retrieval (language-agnostic recency fallback).
         
         Always returns at least one node so the chat engine's synthesizer
         can generate a proper response (it returns "Empty Response" on empty input).
@@ -140,6 +140,11 @@ class ArchiveRetriever(BaseRetriever):
             filter_sender=self._filter_sender,
             filter_days=self._filter_days,
         )
+        
+        # Context expansion: fetch surrounding messages from the same chats
+        # so that replies and nearby messages are included as context.
+        if results:
+            results = self._rag.expand_context(results, max_total=self._k * 2)
         
         # Fallback: if semantic + full-text search returned nothing,
         # provide the most recent messages as context. This handles
@@ -1388,6 +1393,122 @@ class LlamaIndexRAG:
         except Exception as e:
             logger.error(f"Recency search failed: {e}")
             return []
+    
+    # =========================================================================
+    # Context expansion (fetch surrounding messages from same chats)
+    # =========================================================================
+    
+    # Time window (seconds) around matched messages to fetch for context.
+    # 30 minutes before and after covers typical conversation flow.
+    CONTEXT_WINDOW_SECONDS = int(settings.get("rag_context_window_seconds", "1800"))
+    
+    def expand_context(
+        self,
+        results: List[NodeWithScore],
+        max_total: int = 20,
+    ) -> List[NodeWithScore]:
+        """Expand search results by fetching surrounding messages from the same chats.
+        
+        For each unique chat found in the search results, fetches messages
+        within a time window around the matched messages. This ensures that
+        replies and nearby messages are included as context even if they
+        don't match the query semantically.
+        
+        For example, if the search finds "Are you taking Mario?" sent to Ori,
+        this will also fetch Ori's reply "Thanks 🙏 won't happen again" from
+        the same chat within the time window.
+        
+        Args:
+            results: Original search results to expand
+            max_total: Maximum total nodes to return (original + expanded)
+            
+        Returns:
+            Merged list of original results + surrounding context, deduplicated
+        """
+        if not results:
+            return results
+        
+        try:
+            # Collect unique (chat_name, timestamp) pairs from results
+            chat_windows: Dict[str, List[int]] = {}  # chat_name -> [timestamps]
+            existing_ids: set = set()
+            
+            for nws in results:
+                node = nws.node
+                if not node:
+                    continue
+                existing_ids.add(node.id_)
+                metadata = getattr(node, "metadata", {})
+                chat_name = metadata.get("chat_name")
+                timestamp = metadata.get("timestamp")
+                if chat_name and timestamp and isinstance(timestamp, (int, float)):
+                    chat_windows.setdefault(chat_name, []).append(int(timestamp))
+            
+            if not chat_windows:
+                return results
+            
+            # For each chat, fetch messages in a time window around the matches
+            expanded_nodes: List[NodeWithScore] = []
+            budget = max_total - len(results)  # How many more nodes we can add
+            
+            if budget <= 0:
+                return results
+            
+            per_chat_limit = max(3, budget // len(chat_windows))
+            
+            for chat_name, timestamps in chat_windows.items():
+                min_ts = min(timestamps) - self.CONTEXT_WINDOW_SECONDS
+                max_ts = max(timestamps) + self.CONTEXT_WINDOW_SECONDS
+                
+                must_conditions = [
+                    FieldCondition(key="chat_name", match=MatchValue(value=chat_name)),
+                    FieldCondition(key="timestamp", range=Range(gte=min_ts, lte=max_ts)),
+                ]
+                
+                try:
+                    records, _ = self.qdrant_client.scroll(
+                        collection_name=self.COLLECTION_NAME,
+                        scroll_filter=Filter(must=must_conditions),
+                        limit=per_chat_limit,
+                        with_payload=True,
+                        with_vectors=False,
+                        order_by=OrderBy(key="timestamp", direction=Direction.DESC),
+                    )
+                    
+                    for record in records:
+                        record_id = str(record.id)
+                        if record_id in existing_ids:
+                            continue  # Skip duplicates
+                        existing_ids.add(record_id)
+                        
+                        payload = record.payload or {}
+                        text = self._extract_text_from_payload(payload)
+                        if text:
+                            node = TextNode(
+                                text=text,
+                                metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
+                                id_=record_id,
+                            )
+                            # Score slightly below original results so they rank after
+                            expanded_nodes.append(NodeWithScore(node=node, score=0.5))
+                            
+                except Exception as e:
+                    logger.debug(f"Context expansion for chat '{chat_name}' failed: {e}")
+                    continue
+            
+            if expanded_nodes:
+                logger.info(
+                    f"Context expansion added {len(expanded_nodes)} surrounding messages "
+                    f"from {len(chat_windows)} chat(s)"
+                )
+                # Merge: original results first, then expanded context
+                results = results + expanded_nodes
+            
+            return results[:max_total]
+            
+        except Exception as e:
+            logger.debug(f"Context expansion failed (non-critical): {e}")
+            return results
     
     def search(
         self,
