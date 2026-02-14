@@ -402,6 +402,10 @@ class DocumentSyncer:
         try:
             logger.info("Starting Paperless document sync...")
             
+            # Pre-fetch correspondent id→name mapping for sender resolution
+            correspondents = self.client.get_correspondents()
+            logger.info(f"Loaded {len(correspondents)} correspondents from Paperless")
+            
             # Ensure the processed tag exists and get its ID
             processed_tag_id = self._ensure_processed_tag(processed_tag_name)
             
@@ -504,22 +508,16 @@ class DocumentSyncer:
                             skipped += 1
                             continue
                         
-                        # Resolve correspondent name: Paperless API
-                        # provides 'correspondent_name' (auto-resolved)
-                        # in recent versions; fall back to document type
-                        # or "Paperless" if not available.
-                        correspondent = (
-                            doc.get("correspondent_name")
-                            or doc.get("document_type_name")
-                            or "Paperless"
-                        )
+                        # Resolve correspondent name from pre-fetched mapping
+                        correspondent_id = doc.get("correspondent")
+                        sender = correspondents.get(correspondent_id, "") if correspondent_id else ""
                         
                         base_metadata = {
                             "source": "paperless",
                             "source_id": source_id,
                             "content_type": "document",
                             "chat_name": title,
-                            "sender": correspondent,
+                            "sender": sender,
                             "timestamp": int(time.time()),
                             "tags": ",".join(
                                 str(t) for t in doc.get("tags", [])

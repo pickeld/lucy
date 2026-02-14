@@ -721,13 +721,12 @@ def _format_sources(sources: list[dict]) -> str:
         score = src.get("score")
         score_str = f" — {score:.0%}" if score else ""
 
-        # Build the source header: show sender only if meaningful
-        if sender and sender not in ("Unknown", ""):
+        if sender:
             header = f"**{i + 1}. {sender}** in _{chat_name}_{score_str}"
         elif chat_name:
             header = f"**{i + 1}.** _{chat_name}_{score_str}"
         else:
-            header = f"**{i + 1}.** _Unknown source_{score_str}"
+            header = f"**{i + 1}.** _Source_{score_str}"
 
         lines.append(header)
         if content:
