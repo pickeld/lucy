@@ -872,6 +872,96 @@ class LlamaIndexRAG:
     FULLTEXT_SCORE_CHAT_NAME = float(settings.get("rag_fulltext_score_chat_name", "0.85"))
     FULLTEXT_SCORE_MESSAGE = float(settings.get("rag_fulltext_score_message", "0.75"))
     
+    # Common Hebrew prefixes (prepositions, conjunctions, articles)
+    # that are attached to words: ה (the), ב (in), ל (to), מ (from),
+    # ש (that), כ (like), ו (and).  Stripping these helps match
+    # inflected forms against stored text.
+    _HEBREW_PREFIXES = "הבלמשכו"
+    
+    @staticmethod
+    def _expand_hebrew_tokens(tokens: List[str]) -> List[str]:
+        """Expand Hebrew tokens by stripping prefixes and verb patterns.
+        
+        Hebrew is a morphologically rich language where prefixes (ה, ב, ל, מ, ש, כ, ו)
+        attach directly to words, and verb conjugations change the word form significantly.
+        For example:
+        - "התגרשתי" (I got divorced) → root "גרש" → also matches "גירושין" (divorce)
+        - "שהתגרשתי" → strip ש prefix → "התגרשתי" → root "גרש"
+        
+        This method generates additional search tokens from Hebrew morphological
+        variants to improve full-text search recall without requiring a full
+        Hebrew NLP library.
+        
+        Args:
+            tokens: Original query tokens
+            
+        Returns:
+            Expanded list of tokens (originals + morphological variants)
+        """
+        import re as _re
+        expanded: List[str] = []
+        seen: set = set()
+        
+        for token in tokens:
+            low = token.lower()
+            if low in seen:
+                continue
+            seen.add(low)
+            expanded.append(token)
+            
+            # Only expand Hebrew tokens (contain Hebrew characters)
+            if not _re.search(r'[\u0590-\u05FF]', token):
+                continue
+            
+            # Strip common Hebrew prefixes (one or two prefix letters)
+            word = token
+            for _ in range(2):  # Strip up to 2 prefix letters
+                if len(word) > 3 and word[0] in LlamaIndexRAG._HEBREW_PREFIXES:
+                    stripped = word[1:]
+                    if stripped.lower() not in seen and len(stripped) >= 3:
+                        seen.add(stripped.lower())
+                        expanded.append(stripped)
+                    word = stripped
+                else:
+                    break
+            
+            # Hebrew Hitpael verb pattern: הת + root (e.g., התגרשתי → גרש)
+            # Strip הת prefix and common suffixes (תי, נו, תם, תן, ת, ה, ו, י)
+            if len(token) >= 5 and token[:2] == "הת":
+                base = token[2:]
+                # Strip verb conjugation suffixes
+                for suffix in ["תי", "נו", "תם", "תן", "ת", "ה", "ו", "י"]:
+                    if len(base) > 3 and base.endswith(suffix):
+                        root = base[:-len(suffix)]
+                        if len(root) >= 2 and root.lower() not in seen:
+                            seen.add(root.lower())
+                            expanded.append(root)
+                        break
+                # Also add the base without הת prefix
+                if base.lower() not in seen and len(base) >= 3:
+                    seen.add(base.lower())
+                    expanded.append(base)
+            
+            # Hebrew Piel/Pual patterns with י/ו infix: e.g., גירושין → גרש
+            # Try removing common Hebrew noun suffixes (ין, ים, ות, ה)
+            for suffix in ["ושין", "ושים", "ין", "ים", "ות", "ה"]:
+                if len(token) > len(suffix) + 2 and token.endswith(suffix):
+                    stem = token[:-len(suffix)]
+                    if len(stem) >= 2 and stem.lower() not in seen:
+                        seen.add(stem.lower())
+                        expanded.append(stem)
+            
+            # Strip common verb suffixes from the original token
+            for suffix in ["תי", "נו", "תם", "תן", "ת", "ה"]:
+                if len(token) > len(suffix) + 2 and token.endswith(suffix):
+                    stem = token[:-len(suffix)]
+                    if len(stem) >= 3 and stem.lower() not in seen:
+                        seen.add(stem.lower())
+                        expanded.append(stem)
+                    break
+        
+        return expanded
+    
     @staticmethod
     def _tokenize_query(query: str) -> List[str]:
         """Tokenize a query into words for full-text search.
@@ -882,11 +972,15 @@ class LlamaIndexRAG:
         simply produce more candidates without hurting precision (RRF
         ranking takes care of relevance).
         
+        For Hebrew tokens, also generates morphological variants by
+        stripping prefixes and verb conjugation patterns to improve
+        recall across different word forms.
+        
         Args:
             query: The search query string
             
         Returns:
-            Deduplicated list of tokens (≥ 3 chars)
+            Deduplicated list of tokens (≥ 3 chars) with Hebrew expansions
         """
         import re as _re
         tokens = _re.findall(r"[\w]{3,}", query, _re.UNICODE)
@@ -898,7 +992,10 @@ class LlamaIndexRAG:
             if low not in seen:
                 seen.add(low)
                 unique.append(t)
-        return unique
+        
+        # Expand Hebrew tokens with morphological variants
+        expanded = LlamaIndexRAG._expand_hebrew_tokens(unique)
+        return expanded
     
     def _fulltext_search_by_field(
         self,
@@ -1258,14 +1355,18 @@ class LlamaIndexRAG:
             qdrant_filters = Filter(must=must_conditions) if must_conditions else None
             
             # Use direct Qdrant search to avoid LlamaIndex TextNode validation issues
-            # with documents that have None text values
+            # with documents that have None text values.
+            # Fetch more candidates (k * 2) to compensate for score-threshold filtering,
+            # especially for morphologically rich languages like Hebrew where semantic
+            # similarity may be lower for inflected query forms.
             query_embedding = Settings.embed_model.get_query_embedding(query)
+            vector_fetch_limit = k * 2
             
             search_results = self.qdrant_client.query_points(
                 collection_name=self.COLLECTION_NAME,
                 query=query_embedding,
                 query_filter=qdrant_filters,
-                limit=k,
+                limit=vector_fetch_limit,
                 with_payload=True
             ).points
             
