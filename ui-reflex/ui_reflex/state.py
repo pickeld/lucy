@@ -99,6 +99,14 @@ class AppState(rx.State):
     # --- Filters ---
     active_filters: dict[str, str] = {}
 
+    # --- Advanced search filters ---
+    selected_sources: list[str] = []       # e.g. ["whatsapp", "gmail"]
+    filter_date_from: str = ""             # ISO date string, e.g. "2026-01-01"
+    filter_date_to: str = ""               # ISO date string, e.g. "2026-02-15"
+    selected_content_types: list[str] = [] # e.g. ["text", "document"]
+    sort_order: str = "relevance"          # "relevance" or "newest"
+    show_search_toolbar: bool = False      # Toggle for the search toolbar
+
     # --- UI state ---
     is_loading: bool = False
     sidebar_search: str = ""
@@ -199,6 +207,48 @@ class AppState(rx.State):
         """Set the active plugin sub-tab."""
         self.plugin_tab = value
 
+    def set_filter_date_from(self, value: str):
+        """Set the date-from filter."""
+        self.filter_date_from = value
+
+    def set_filter_date_to(self, value: str):
+        """Set the date-to filter."""
+        self.filter_date_to = value
+
+    def set_sort_order(self, value: str):
+        """Set sort order ('relevance' or 'newest')."""
+        self.sort_order = value
+
+    def toggle_search_toolbar(self):
+        """Toggle the search toolbar visibility."""
+        self.show_search_toolbar = not self.show_search_toolbar
+
+    def toggle_source(self, source: str):
+        """Toggle a source in/out of the selected sources list."""
+        new = list(self.selected_sources)
+        if source in new:
+            new.remove(source)
+        else:
+            new.append(source)
+        self.selected_sources = new
+
+    def toggle_content_type(self, ct: str):
+        """Toggle a content type in/out of the selected content types list."""
+        new = list(self.selected_content_types)
+        if ct in new:
+            new.remove(ct)
+        else:
+            new.append(ct)
+        self.selected_content_types = new
+
+    def clear_advanced_filters(self):
+        """Reset all advanced search filters to defaults."""
+        self.selected_sources = []
+        self.filter_date_from = ""
+        self.filter_date_to = ""
+        self.selected_content_types = []
+        self.sort_order = "relevance"
+
     # =====================================================================
     # COMPUTED VARS
     # =====================================================================
@@ -210,7 +260,14 @@ class AppState(rx.State):
 
     @rx.var(cache=True)
     def has_filters(self) -> bool:
-        return len(self.active_filters) > 0
+        return (
+            len(self.active_filters) > 0
+            or bool(self.selected_sources)
+            or bool(self.filter_date_from)
+            or bool(self.filter_date_to)
+            or bool(self.selected_content_types)
+            or self.sort_order != "relevance"
+        )
 
     @rx.var(cache=True)
     def filter_chips(self) -> list[dict[str, str]]:
@@ -234,7 +291,68 @@ class AppState(rx.State):
                 "icon": "📅",
                 "label": f"Last {self.active_filters['days']}d",
             })
+        # Advanced filter chips
+        if self.selected_sources:
+            chips.append({
+                "key": "sources",
+                "icon": "📦",
+                "label": ", ".join(s.title() for s in self.selected_sources),
+            })
+        if self.filter_date_from or self.filter_date_to:
+            date_label = ""
+            if self.filter_date_from and self.filter_date_to:
+                date_label = f"{self.filter_date_from} – {self.filter_date_to}"
+            elif self.filter_date_from:
+                date_label = f"From {self.filter_date_from}"
+            else:
+                date_label = f"Until {self.filter_date_to}"
+            chips.append({
+                "key": "date_range",
+                "icon": "📅",
+                "label": date_label,
+            })
+        if self.selected_content_types:
+            chips.append({
+                "key": "content_types",
+                "icon": "📄",
+                "label": ", ".join(ct.title() for ct in self.selected_content_types),
+            })
+        if self.sort_order == "newest":
+            chips.append({
+                "key": "sort_order",
+                "icon": "🕐",
+                "label": "Newest First",
+            })
         return chips
+
+    @rx.var(cache=True)
+    def has_advanced_filters(self) -> bool:
+        """Whether any advanced filters are active."""
+        return bool(
+            self.selected_sources
+            or self.filter_date_from
+            or self.filter_date_to
+            or self.selected_content_types
+            or self.sort_order != "relevance"
+        )
+
+    @rx.var(cache=True)
+    def available_sources(self) -> list[dict[str, str]]:
+        """Available data sources from plugins for the source filter.
+
+        Returns a list of dicts with 'name', 'label', 'icon', 'active' keys.
+        """
+        plugins = self.plugins_data.get("plugins", {})
+        selected = set(self.selected_sources)
+        result: list[dict[str, str]] = []
+        for name, info in plugins.items():
+            result.append({
+                "name": name,
+                "label": info.get("label", name.title()),
+                "icon": info.get("icon", "📦"),
+                "active": "true" if name in selected else "false",
+            })
+        return result
 
     @rx.var(cache=True)
     def sidebar_items(self) -> list[dict[str, str]]:
@@ -576,6 +694,9 @@ class AppState(rx.State):
         """Called when the page loads — fetch initial data."""
         await self._refresh_conversations()
         await self._check_health()
+        # Load plugin data so available_sources is populated for the search toolbar
+        if not self.plugins_data:
+            self.plugins_data = await api_client.fetch_plugins()
 
     async def on_settings_load(self):
         """Called when settings page loads."""
@@ -602,6 +723,12 @@ class AppState(rx.State):
         self.active_filters = {}
         self.input_text = ""
         self.renaming_id = ""
+        # Reset advanced filters
+        self.selected_sources = []
+        self.filter_date_from = ""
+        self.filter_date_to = ""
+        self.selected_content_types = []
+        self.sort_order = "relevance"
 
     async def load_conversation(self, convo_id: str):
         """Load a conversation by ID."""
@@ -628,6 +755,15 @@ class AppState(rx.State):
             self.active_filters = loaded.get("filters", {})
             self.renaming_id = ""
             self.input_text = ""
+            # Restore advanced filters from persisted conversation filters
+            conv_filters = loaded.get("filters", {})
+            sources_str = conv_filters.get("sources", "")
+            self.selected_sources = [s.strip() for s in sources_str.split(",") if s.strip()] if sources_str else []
+            self.filter_date_from = conv_filters.get("date_from", "")
+            self.filter_date_to = conv_filters.get("date_to", "")
+            ct_str = conv_filters.get("content_types", "")
+            self.selected_content_types = [c.strip() for c in ct_str.split(",") if c.strip()] if ct_str else []
+            self.sort_order = conv_filters.get("sort_order", "relevance")
             # Navigate to chat view when conversation is selected
             return rx.redirect("/")
 
@@ -710,6 +846,11 @@ class AppState(rx.State):
             filter_chat_name=filters.get("chat_name"),
             filter_sender=filters.get("sender"),
             filter_days=int(filters["days"]) if filters.get("days") else None,
+            filter_sources=self.selected_sources or None,
+            filter_date_from=self.filter_date_from or None,
+            filter_date_to=self.filter_date_to or None,
+            filter_content_types=self.selected_content_types or None,
+            sort_order=self.sort_order,
         )
 
         self.is_loading = False
@@ -762,14 +903,31 @@ class AppState(rx.State):
     # =====================================================================
 
     def remove_filter(self, key: str):
-        """Remove a single filter by key."""
-        new_filters = dict(self.active_filters)
-        new_filters.pop(key, None)
-        self.active_filters = new_filters
+        """Remove a single filter by key — handles both classic and advanced filters."""
+        # Advanced filter keys
+        if key == "sources":
+            self.selected_sources = []
+        elif key == "date_range":
+            self.filter_date_from = ""
+            self.filter_date_to = ""
+        elif key == "content_types":
+            self.selected_content_types = []
+        elif key == "sort_order":
+            self.sort_order = "relevance"
+        else:
+            # Classic filters stored in active_filters dict
+            new_filters = dict(self.active_filters)
+            new_filters.pop(key, None)
+            self.active_filters = new_filters
 
     def clear_filters(self):
-        """Clear all active filters."""
+        """Clear all active filters (classic and advanced)."""
         self.active_filters = {}
+        self.selected_sources = []
+        self.filter_date_from = ""
+        self.filter_date_to = ""
+        self.selected_content_types = []
+        self.sort_order = "relevance"
 
     def set_filter(self, key: str, value: str):
         """Set a single filter."""

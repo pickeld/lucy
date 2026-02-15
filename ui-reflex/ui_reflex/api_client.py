@@ -138,6 +138,11 @@ async def rag_query(
     filter_chat_name: str | None = None,
     filter_sender: str | None = None,
     filter_days: int | None = None,
+    filter_sources: list[str] | None = None,
+    filter_date_from: str | None = None,
+    filter_date_to: str | None = None,
+    filter_content_types: list[str] | None = None,
+    sort_order: str | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {"question": question, "k": k}
     if conversation_id:
@@ -148,6 +153,16 @@ async def rag_query(
         payload["filter_sender"] = filter_sender
     if filter_days is not None:
         payload["filter_days"] = filter_days
+    if filter_sources:
+        payload["filter_sources"] = filter_sources
+    if filter_date_from:
+        payload["filter_date_from"] = filter_date_from
+    if filter_date_to:
+        payload["filter_date_to"] = filter_date_to
+    if filter_content_types:
+        payload["filter_content_types"] = filter_content_types
+    if sort_order and sort_order != "relevance":
+        payload["sort_order"] = sort_order
 
     try:
         resp = await _get_client().post("/rag/query", json=payload)

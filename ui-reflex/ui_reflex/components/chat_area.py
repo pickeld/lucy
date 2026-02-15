@@ -8,6 +8,7 @@ import reflex as rx
 from ..state import AppState
 from .empty_state import empty_state
 from .message_bubble import message_bubble, typing_indicator
+from .search_toolbar import search_toolbar
 
 
 def chat_area() -> rx.Component:
@@ -105,9 +106,10 @@ def _filter_chip(chip: dict) -> rx.Component:
 # =========================================================================
 
 def _chat_input_bar() -> rx.Component:
-    """Auto-growing textarea with send button.
+    """Auto-growing textarea with send button and filter toggle.
 
     Enter submits the form; Shift+Enter inserts a newline.
+    The filter (tune) icon toggles the search toolbar.
     """
     # Client-side JS: intercept Enter (without Shift) in the textarea
     # and click the submit button to trigger Reflex's on_submit handler.
@@ -132,8 +134,30 @@ def _chat_input_bar() -> rx.Component:
     """
     return rx.box(
         rx.script(_enter_to_submit_js),
+        # Search toolbar (collapsible)
+        search_toolbar(),
         rx.el.form(
             rx.flex(
+                # Filter toggle button
+                rx.icon_button(
+                    rx.icon(
+                        "sliders-horizontal",
+                        size=18,
+                        class_name=rx.cond(
+                            AppState.has_advanced_filters,
+                            "text-accent",
+                            "text-gray-400",
+                        ),
+                    ),
+                    on_click=AppState.toggle_search_toolbar,
+                    size="2",
+                    variant="ghost",
+                    class_name=(
+                        "shrink-0 cursor-pointer rounded-lg "
+                        "hover:bg-gray-100 transition-colors"
+                    ),
+                    type="button",
+                ),
                 rx.el.textarea(
                     value=AppState.input_text,
                     on_change=AppState.set_input_text,

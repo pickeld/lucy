@@ -97,6 +97,11 @@ class ArchiveRetriever(BaseRetriever):
         filter_chat_name: Optional[str] = None,
         filter_sender: Optional[str] = None,
         filter_days: Optional[int] = None,
+        filter_sources: Optional[List[str]] = None,
+        filter_date_from: Optional[str] = None,
+        filter_date_to: Optional[str] = None,
+        filter_content_types: Optional[List[str]] = None,
+        sort_order: str = "relevance",
         **kwargs: Any,
     ):
         """Initialize the archive retriever.
@@ -107,6 +112,11 @@ class ArchiveRetriever(BaseRetriever):
             filter_chat_name: Optional filter by chat/group name
             filter_sender: Optional filter by sender name
             filter_days: Optional filter by recency in days
+            filter_sources: Optional list of source values (e.g. ["whatsapp", "gmail"])
+            filter_date_from: Optional ISO date string for start of date range
+            filter_date_to: Optional ISO date string for end of date range
+            filter_content_types: Optional list of content type values (e.g. ["text", "document"])
+            sort_order: "relevance" (default) or "newest" for chronological
         """
         super().__init__(**kwargs)
         self._rag = rag
@@ -114,6 +124,11 @@ class ArchiveRetriever(BaseRetriever):
         self._filter_chat_name = filter_chat_name
         self._filter_sender = filter_sender
         self._filter_days = filter_days
+        self._filter_sources = filter_sources
+        self._filter_date_from = filter_date_from
+        self._filter_date_to = filter_date_to
+        self._filter_content_types = filter_content_types
+        self._sort_order = sort_order
     
     # Number of recent messages to always include alongside semantic results.
     # Ensures the LLM has temporal awareness of the latest messages.
@@ -138,12 +153,35 @@ class ArchiveRetriever(BaseRetriever):
         Returns:
             List of NodeWithScore from hybrid search (never empty)
         """
-        results = self._rag.search(
-            query=query_bundle.query_str,
-            k=self._k,
+        # Common filter kwargs shared across search/recency calls
+        _fkw = dict(
             filter_chat_name=self._filter_chat_name,
             filter_sender=self._filter_sender,
             filter_days=self._filter_days,
+            filter_sources=self._filter_sources,
+            filter_date_from=self._filter_date_from,
+            filter_date_to=self._filter_date_to,
+            filter_content_types=self._filter_content_types,
+        )
+        
+        # If sort_order is "newest", skip semantic search — just use recency
+        if self._sort_order == "newest":
+            results = self._rag.recency_search(k=self._k, **_fkw)
+            # Still expand document chunks for completeness
+            if results:
+                results = self._rag.expand_document_chunks(results, max_total=self._k * 3)
+            if not results:
+                placeholder = TextNode(
+                    text="[No relevant messages found in the archive for this query]",
+                    metadata={"source": "system", "note": "no_results"},
+                )
+                results = [NodeWithScore(node=placeholder, score=0.0)]
+            return results
+        
+        results = self._rag.search(
+            query=query_bundle.query_str,
+            k=self._k,
+            **_fkw,
         )
         
         # Context expansion: fetch surrounding messages from the same chats
@@ -163,9 +201,7 @@ class ArchiveRetriever(BaseRetriever):
         # answer even when semantic search returns older matches.
         recent = self._rag.recency_search(
             k=self.RECENCY_SUPPLEMENT_COUNT,
-            filter_chat_name=self._filter_chat_name,
-            filter_sender=self._filter_sender,
-            filter_days=self._filter_days,
+            **_fkw,
         )
         if recent:
             if results:
@@ -1199,12 +1235,108 @@ class LlamaIndexRAG:
             logger.debug(f"Full-text search on '{field_name}' failed: {e}")
             return []
     
+    def _build_filter_conditions(
+        self,
+        filter_chat_name: Optional[str] = None,
+        filter_sender: Optional[str] = None,
+        filter_days: Optional[int] = None,
+        filter_sources: Optional[List[str]] = None,
+        filter_date_from: Optional[str] = None,
+        filter_date_to: Optional[str] = None,
+        filter_content_types: Optional[List[str]] = None,
+    ) -> List:
+        """Build a list of Qdrant ``must`` filter conditions from common params.
+        
+        Centralises the filter-building logic used by search(), _fulltext_search(),
+        recency_search(), and _metadata_search() so new filter types only need
+        to be added in one place.
+        
+        Args:
+            filter_chat_name: Filter by exact chat/group name
+            filter_sender: Filter by exact sender name
+            filter_days: Filter by recency in days (alternative to date range)
+            filter_sources: Filter by source values (OR logic — any of the listed sources)
+            filter_date_from: ISO date string for start of date range (inclusive)
+            filter_date_to: ISO date string for end of date range (inclusive, end-of-day)
+            filter_content_types: Filter by content type values (OR logic)
+            
+        Returns:
+            List of Qdrant filter conditions (for ``Filter(must=...)``)
+        """
+        from datetime import timedelta
+        
+        must_conditions: List = []
+        
+        if filter_chat_name:
+            must_conditions.append(
+                FieldCondition(key="chat_name", match=MatchValue(value=filter_chat_name))
+            )
+        
+        if filter_sender:
+            must_conditions.append(
+                FieldCondition(key="sender", match=MatchValue(value=filter_sender))
+            )
+        
+        # Date range takes precedence over filter_days when both are provided
+        if filter_date_from or filter_date_to:
+            if filter_date_from:
+                try:
+                    ts_from = int(datetime.fromisoformat(filter_date_from).timestamp())
+                    must_conditions.append(
+                        FieldCondition(key="timestamp", range=Range(gte=ts_from))
+                    )
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid filter_date_from: {filter_date_from}")
+            if filter_date_to:
+                try:
+                    # Add 1 day to include the full end date
+                    dt_to = datetime.fromisoformat(filter_date_to) + timedelta(days=1)
+                    ts_to = int(dt_to.timestamp())
+                    must_conditions.append(
+                        FieldCondition(key="timestamp", range=Range(lte=ts_to))
+                    )
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid filter_date_to: {filter_date_to}")
+        elif filter_days is not None and filter_days > 0:
+            min_timestamp = int(datetime.now().timestamp()) - (filter_days * 24 * 60 * 60)
+            must_conditions.append(
+                FieldCondition(key="timestamp", range=Range(gte=min_timestamp))
+            )
+        
+        # Source filter (OR logic: match ANY of the listed sources)
+        if filter_sources:
+            source_conditions = [
+                FieldCondition(key="source", match=MatchValue(value=s))
+                for s in filter_sources
+            ]
+            if len(source_conditions) == 1:
+                must_conditions.append(source_conditions[0])
+            else:
+                must_conditions.append(Filter(should=source_conditions))
+        
+        # Content type filter (OR logic: match ANY of the listed types)
+        if filter_content_types:
+            ct_conditions = [
+                FieldCondition(key="content_type", match=MatchValue(value=ct))
+                for ct in filter_content_types
+            ]
+            if len(ct_conditions) == 1:
+                must_conditions.append(ct_conditions[0])
+            else:
+                must_conditions.append(Filter(should=ct_conditions))
+        
+        return must_conditions
+    
     def _fulltext_search(
         self,
         query: str,
         k: int = 10,
         filter_chat_name: Optional[str] = None,
-        filter_days: Optional[int] = None
+        filter_days: Optional[int] = None,
+        filter_sources: Optional[List[str]] = None,
+        filter_date_from: Optional[str] = None,
+        filter_date_to: Optional[str] = None,
+        filter_content_types: Optional[List[str]] = None,
     ) -> List[NodeWithScore]:
         """Perform field-aware full-text search on metadata fields.
         
@@ -1224,6 +1356,10 @@ class LlamaIndexRAG:
             k: Max results to return
             filter_chat_name: Optional chat filter
             filter_days: Optional time filter
+            filter_sources: Optional source filter
+            filter_date_from: Optional ISO date string for start of range
+            filter_date_to: Optional ISO date string for end of range
+            filter_content_types: Optional content type filter
             
         Returns:
             List of matching NodeWithScore objects with field-aware scores
@@ -1238,18 +1374,14 @@ class LlamaIndexRAG:
             logger.debug(f"Fulltext tokens: {tokens} (from: {query[:60]})")
             
             # Build common filter conditions (AND logic)
-            must_conditions: List = []
-            
-            if filter_chat_name:
-                must_conditions.append(
-                    FieldCondition(key="chat_name", match=MatchValue(value=filter_chat_name))
-                )
-            
-            if filter_days is not None and filter_days > 0:
-                min_timestamp = int(datetime.now().timestamp()) - (filter_days * 24 * 60 * 60)
-                must_conditions.append(
-                    FieldCondition(key="timestamp", range=Range(gte=min_timestamp))
-                )
+            must_conditions = self._build_filter_conditions(
+                filter_chat_name=filter_chat_name,
+                filter_days=filter_days,
+                filter_sources=filter_sources,
+                filter_date_from=filter_date_from,
+                filter_date_to=filter_date_to,
+                filter_content_types=filter_content_types,
+            )
             
             # Extract numeric tokens (≥5 digits) for dedicated numbers field search
             import re as _re_local
@@ -1356,7 +1488,11 @@ class LlamaIndexRAG:
         k: int = 20,
         filter_chat_name: Optional[str] = None,
         filter_sender: Optional[str] = None,
-        filter_days: Optional[int] = None
+        filter_days: Optional[int] = None,
+        filter_sources: Optional[List[str]] = None,
+        filter_date_from: Optional[str] = None,
+        filter_date_to: Optional[str] = None,
+        filter_content_types: Optional[List[str]] = None,
     ) -> List[NodeWithScore]:
         """Search by metadata filters only, without vector similarity.
         
@@ -1369,28 +1505,24 @@ class LlamaIndexRAG:
             filter_chat_name: Filter by chat/group name
             filter_sender: Filter by sender name
             filter_days: Filter by number of days
+            filter_sources: Optional source filter
+            filter_date_from: Optional ISO date string for start of range
+            filter_date_to: Optional ISO date string for end of range
+            filter_content_types: Optional content type filter
             
         Returns:
             List of NodeWithScore objects (score=1.0 for all, sorted by timestamp)
         """
         try:
-            must_conditions = []
-            
-            if filter_chat_name:
-                must_conditions.append(
-                    FieldCondition(key="chat_name", match=MatchValue(value=filter_chat_name))
-                )
-            
-            if filter_sender:
-                must_conditions.append(
-                    FieldCondition(key="sender", match=MatchValue(value=filter_sender))
-                )
-            
-            if filter_days is not None and filter_days > 0:
-                min_timestamp = int(datetime.now().timestamp()) - (filter_days * 24 * 60 * 60)
-                must_conditions.append(
-                    FieldCondition(key="timestamp", range=Range(gte=min_timestamp))
-                )
+            must_conditions = self._build_filter_conditions(
+                filter_chat_name=filter_chat_name,
+                filter_sender=filter_sender,
+                filter_days=filter_days,
+                filter_sources=filter_sources,
+                filter_date_from=filter_date_from,
+                filter_date_to=filter_date_to,
+                filter_content_types=filter_content_types,
+            )
             
             if not must_conditions:
                 logger.debug("Metadata search called with no filters, skipping")
@@ -1434,6 +1566,10 @@ class LlamaIndexRAG:
         filter_chat_name: Optional[str] = None,
         filter_sender: Optional[str] = None,
         filter_days: Optional[int] = None,
+        filter_sources: Optional[List[str]] = None,
+        filter_date_from: Optional[str] = None,
+        filter_date_to: Optional[str] = None,
+        filter_content_types: Optional[List[str]] = None,
     ) -> List[NodeWithScore]:
         """Retrieve the most recent messages ordered by timestamp descending.
         
@@ -1449,28 +1585,24 @@ class LlamaIndexRAG:
             filter_chat_name: Optional filter by chat/group name
             filter_sender: Optional filter by sender name
             filter_days: Optional filter by recency in days
+            filter_sources: Optional source filter
+            filter_date_from: Optional ISO date string for start of range
+            filter_date_to: Optional ISO date string for end of range
+            filter_content_types: Optional content type filter
             
         Returns:
             List of NodeWithScore ordered by timestamp (most recent first)
         """
         try:
-            must_conditions: List = []
-            
-            if filter_chat_name:
-                must_conditions.append(
-                    FieldCondition(key="chat_name", match=MatchValue(value=filter_chat_name))
-                )
-            
-            if filter_sender:
-                must_conditions.append(
-                    FieldCondition(key="sender", match=MatchValue(value=filter_sender))
-                )
-            
-            if filter_days is not None and filter_days > 0:
-                min_timestamp = int(datetime.now().timestamp()) - (filter_days * 24 * 60 * 60)
-                must_conditions.append(
-                    FieldCondition(key="timestamp", range=Range(gte=min_timestamp))
-                )
+            must_conditions = self._build_filter_conditions(
+                filter_chat_name=filter_chat_name,
+                filter_sender=filter_sender,
+                filter_days=filter_days,
+                filter_sources=filter_sources,
+                filter_date_from=filter_date_from,
+                filter_date_to=filter_date_to,
+                filter_content_types=filter_content_types,
+            )
             
             # Exclude conversation chunks — we want individual messages for recency
             must_conditions.append(
@@ -1752,6 +1884,10 @@ class LlamaIndexRAG:
         filter_chat_name: Optional[str] = None,
         filter_sender: Optional[str] = None,
         filter_days: Optional[int] = None,
+        filter_sources: Optional[List[str]] = None,
+        filter_date_from: Optional[str] = None,
+        filter_date_to: Optional[str] = None,
+        filter_content_types: Optional[List[str]] = None,
         include_metadata_search: bool = True,
         metadata_only: bool = False
     ) -> List[NodeWithScore]:
@@ -1775,6 +1911,10 @@ class LlamaIndexRAG:
             filter_chat_name: Optional filter by chat/group name
             filter_sender: Optional filter by sender name
             filter_days: Optional filter by number of days
+            filter_sources: Optional source filter (list of source values)
+            filter_date_from: Optional ISO date string for start of range
+            filter_date_to: Optional ISO date string for end of range
+            filter_content_types: Optional content type filter
             include_metadata_search: Include full-text search on metadata fields
             metadata_only: Skip vector search, use only metadata filters
             
@@ -1782,42 +1922,22 @@ class LlamaIndexRAG:
             List of NodeWithScore objects with metadata
         """
         try:
+            _fkw = dict(
+                filter_chat_name=filter_chat_name,
+                filter_sender=filter_sender,
+                filter_days=filter_days,
+                filter_sources=filter_sources,
+                filter_date_from=filter_date_from,
+                filter_date_to=filter_date_to,
+                filter_content_types=filter_content_types,
+            )
+            
             # Metadata-only search: skip vector search entirely
             if metadata_only:
-                return self._metadata_search(
-                    k=k,
-                    filter_chat_name=filter_chat_name,
-                    filter_sender=filter_sender,
-                    filter_days=filter_days
-                )
+                return self._metadata_search(k=k, **_fkw)
             
             # Build Qdrant filter conditions
-            must_conditions = []
-            
-            if filter_chat_name:
-                must_conditions.append(
-                    FieldCondition(
-                        key="chat_name",
-                        match=MatchValue(value=filter_chat_name)
-                    )
-                )
-            
-            if filter_sender:
-                must_conditions.append(
-                    FieldCondition(
-                        key="sender",
-                        match=MatchValue(value=filter_sender)
-                    )
-                )
-            
-            if filter_days is not None and filter_days > 0:
-                min_timestamp = int(datetime.now().timestamp()) - (filter_days * 24 * 60 * 60)
-                must_conditions.append(
-                    FieldCondition(
-                        key="timestamp",
-                        range=Range(gte=min_timestamp)
-                    )
-                )
+            must_conditions = self._build_filter_conditions(**_fkw)
             
             qdrant_filters = Filter(must=must_conditions) if must_conditions else None
             
@@ -1875,7 +1995,11 @@ class LlamaIndexRAG:
                     query=query,
                     k=k,
                     filter_chat_name=filter_chat_name,
-                    filter_days=filter_days
+                    filter_days=filter_days,
+                    filter_sources=filter_sources,
+                    filter_date_from=filter_date_from,
+                    filter_date_to=filter_date_to,
+                    filter_content_types=filter_content_types,
                 )
                 
                 # Merge using Reciprocal Rank Fusion for fair ranking
@@ -1976,6 +2100,11 @@ class LlamaIndexRAG:
         filter_chat_name: Optional[str] = None,
         filter_sender: Optional[str] = None,
         filter_days: Optional[int] = None,
+        filter_sources: Optional[List[str]] = None,
+        filter_date_from: Optional[str] = None,
+        filter_date_to: Optional[str] = None,
+        filter_content_types: Optional[List[str]] = None,
+        sort_order: str = "relevance",
         k: int = 10,
     ) -> CondensePlusContextChatEngine:
         """Create a chat engine with memory and filters for a conversation.
@@ -1991,6 +2120,11 @@ class LlamaIndexRAG:
             filter_chat_name: Optional filter by chat/group name
             filter_sender: Optional filter by sender name
             filter_days: Optional filter by recency in days
+            filter_sources: Optional list of source values to filter by
+            filter_date_from: Optional ISO date string for start of range
+            filter_date_to: Optional ISO date string for end of range
+            filter_content_types: Optional list of content type values
+            sort_order: "relevance" (default) or "newest"
             k: Number of context documents to retrieve
             
         Returns:
@@ -2023,6 +2157,11 @@ class LlamaIndexRAG:
             filter_chat_name=filter_chat_name,
             filter_sender=filter_sender,
             filter_days=filter_days,
+            filter_sources=filter_sources,
+            filter_date_from=filter_date_from,
+            filter_date_to=filter_date_to,
+            filter_content_types=filter_content_types,
+            sort_order=sort_order,
         )
         
         # Build system prompt with current datetime

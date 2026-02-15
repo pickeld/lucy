@@ -214,6 +214,38 @@ def rag_query():
             else:
                 filters.pop("days", None)
         
+        # New filters: sources, date range, content types, sort order
+        if data.get("filter_sources") is not None:
+            if data["filter_sources"]:
+                # Store as comma-separated string in Redis hash
+                filters["sources"] = ",".join(data["filter_sources"])
+            else:
+                filters.pop("sources", None)
+        
+        if data.get("filter_date_from") is not None:
+            if data["filter_date_from"]:
+                filters["date_from"] = data["filter_date_from"]
+            else:
+                filters.pop("date_from", None)
+        
+        if data.get("filter_date_to") is not None:
+            if data["filter_date_to"]:
+                filters["date_to"] = data["filter_date_to"]
+            else:
+                filters.pop("date_to", None)
+        
+        if data.get("filter_content_types") is not None:
+            if data["filter_content_types"]:
+                filters["content_types"] = ",".join(data["filter_content_types"])
+            else:
+                filters.pop("content_types", None)
+        
+        if data.get("sort_order") is not None:
+            if data["sort_order"] and data["sort_order"] != "relevance":
+                filters["sort_order"] = data["sort_order"]
+            else:
+                filters.pop("sort_order", None)
+        
         set_conversation_filters(conversation_id, filters)
         
         # Conversation persistence
@@ -236,12 +268,21 @@ def rag_query():
             max_messages=int(settings.session_max_history) * 2,
         )
         
+        # Parse list filters from comma-separated strings
+        sources_list = [s.strip() for s in filters["sources"].split(",")] if filters.get("sources") else None
+        content_types_list = [c.strip() for c in filters["content_types"].split(",")] if filters.get("content_types") else None
+        
         # Create chat engine with filters and conversation memory
         chat_engine = rag.create_chat_engine(
             conversation_id=conversation_id,
             filter_chat_name=filters.get("chat_name"),
             filter_sender=filters.get("sender"),
             filter_days=int(filters["days"]) if filters.get("days") else None,
+            filter_sources=sources_list,
+            filter_date_from=filters.get("date_from"),
+            filter_date_to=filters.get("date_to"),
+            filter_content_types=content_types_list,
+            sort_order=filters.get("sort_order", "relevance"),
             k=k,
         )
         
