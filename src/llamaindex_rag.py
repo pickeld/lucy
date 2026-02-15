@@ -616,7 +616,6 @@ class LlamaIndexRAG:
     CHUNK_BUFFER_TTL = int(settings.get("rag_chunk_buffer_ttl", "120"))
     CHUNK_MAX_MESSAGES = int(settings.get("rag_chunk_max_messages", "5"))
     CHUNK_OVERLAP_MESSAGES = int(settings.get("rag_chunk_overlap_messages", "1"))
-    MIN_SOLO_EMBED_CHARS = int(settings.get("rag_min_solo_embed_chars", "80"))
     
     def _buffer_message_for_chunking(
         self,
@@ -686,9 +685,9 @@ class LlamaIndexRAG:
             # Get all messages from the buffer
             raw_messages = redis.lrange(buffer_key, 0, -1)
             
-            if not raw_messages or len(raw_messages) < 2:
+            if not raw_messages:
                 redis.delete(buffer_key)
-                return False  # Need at least 2 messages for a meaningful chunk
+                return False  # Nothing to flush
             
             # Keep the last N messages as overlap for the next chunk.
             # This ensures context continuity between consecutive chunks.
@@ -819,18 +818,13 @@ class LlamaIndexRAG:
             # Convert to LlamaIndex TextNode with standardized schema
             node = doc.to_llama_index_node()
             
-            # Only embed messages individually if they carry enough semantic
-            # meaning on their own.  Short messages (e.g. "ok", "thanks", "yes")
-            # produce poor standalone embeddings and are better captured as part
-            # of a conversation chunk.  This saves ~20-40% of WhatsApp embedding
-            # costs since most chat messages are short.
-            if len(message) >= self.MIN_SOLO_EMBED_CHARS:
-                self.index.insert_nodes([node])
-            else:
-                logger.debug(
-                    f"Skipping solo embed for short message ({len(message)} chars < "
-                    f"{self.MIN_SOLO_EMBED_CHARS}): {message[:40]}..."
-                )
+            # Always embed every message individually.  The per-message
+            # embedding cost is negligible (~$0.000005 with text-embedding-3-large)
+            # and skipping short messages risks losing semantically important
+            # content — especially in Hebrew where a 60-char message can carry
+            # 10+ meaningful words.  Conversation chunking still provides
+            # additional context-rich embeddings on top of individual ones.
+            self.index.insert_nodes([node])
             
             # Buffer for conversation chunking (creates context-rich chunks)
             self._buffer_message_for_chunking(
@@ -1172,11 +1166,15 @@ class LlamaIndexRAG:
     def _tokenize_query(query: str) -> List[str]:
         """Tokenize a query into words for full-text search.
         
-        Language-agnostic: splits on word boundaries and keeps tokens
-        ≥ 3 characters.  No hardcoded stop-word lists — Qdrant's
-        ``should`` (OR) filter handles the matching, so common words
-        simply produce more candidates without hurting precision (RRF
-        ranking takes care of relevance).
+        Splits on word boundaries and keeps tokens ≥ 2 characters for
+        Hebrew (which has many meaningful 2-char words like בן, בת, אב,
+        אם, שם, גן) and ≥ 3 characters for Latin/other scripts.  This
+        aligns with Qdrant's text index ``min_token_len=2`` configuration.
+        
+        No hardcoded stop-word lists — Qdrant's ``should`` (OR) filter
+        handles the matching, so common words simply produce more
+        candidates without hurting precision (RRF ranking takes care of
+        relevance).
         
         For Hebrew tokens, also generates morphological variants by
         stripping prefixes and verb conjugation patterns to improve
@@ -1186,7 +1184,7 @@ class LlamaIndexRAG:
             query: The search query string
             
         Returns:
-            Deduplicated list of tokens (≥ 3 chars) with Hebrew expansions
+            Deduplicated list of tokens with Hebrew expansions
         """
         import re as _re
         import unicodedata as _ud
@@ -1196,7 +1194,17 @@ class LlamaIndexRAG:
         clean_query = "".join(
             ch for ch in query if _ud.category(ch) != "Cf"
         )
-        tokens = _re.findall(r"[\w]{3,}", clean_query, _re.UNICODE)
+        # Capture tokens ≥ 2 chars, then keep 2-char tokens only when they
+        # contain Hebrew characters.  Hebrew has many critical 2-char words
+        # (בן=son, בת=daughter, אב=father, אם=mother, שם=name, גן=garden)
+        # that must reach Qdrant's fulltext index (which already uses
+        # min_token_len=2).  Non-Hebrew 2-char tokens (is, to, in, …) are
+        # filtered out to avoid noise.
+        _HE_RE = _re.compile(r'[\u0590-\u05FF]')
+        tokens = [
+            t for t in _re.findall(r"[\w]{2,}", clean_query, _re.UNICODE)
+            if len(t) >= 3 or _HE_RE.search(t)
+        ]
         # Deduplicate while preserving order
         seen: set = set()
         unique: List[str] = []
@@ -1381,11 +1389,11 @@ class LlamaIndexRAG:
     ) -> List[NodeWithScore]:
         """Perform field-aware full-text search on metadata fields.
         
-        Tokenizes the query into words (≥ 3 chars) and searches each
-        metadata field using Qdrant ``should`` (OR) conditions — a
-        document matches if it contains **any** of the query tokens in
-        the searched field.  This is language-agnostic and requires no
-        hardcoded stop-word lists.
+        Tokenizes the query into words (≥ 2 chars for Hebrew, ≥ 3 chars
+        otherwise) and searches each metadata field using Qdrant ``should``
+        (OR) conditions — a document matches if it contains **any** of the
+        query tokens in the searched field.  This is language-agnostic and
+        requires no hardcoded stop-word lists.
         
         Runs one query per field (sender, chat_name, message) with
         different scores to prioritize sender matches over message
@@ -2234,70 +2242,64 @@ class LlamaIndexRAG:
             "AND the chat history lack the information needed to answer."
         )
         
-        # Custom condense prompt for bilingual (Hebrew/English) follow-ups.
-        # The default English-only prompt struggles with Hebrew referential
-        # patterns like "ושל בן פיקל?" (and Ben Pickel's?), dropping context.
+        # Custom condense prompt for bilingual (Hebrew/English) query rewriting.
+        # Handles TWO cases:
+        # 1. Follow-up questions: incorporates chat history context
+        # 2. First messages (no history): rewrites short/ambiguous queries into
+        #    explicit, search-friendly form so the retriever can find relevant
+        #    documents.  E.g. "בן כמה בן פיקל?" → more explicit query about
+        #    the age/birth date of Pikel's son.
         condense_prompt = (
             "Given the following conversation between a user and an assistant, "
-            "and a follow-up message from the user, rewrite the follow-up into "
-            "a standalone question that captures ALL relevant context from the "
-            "conversation history.\n\n"
+            "and a new message from the user, rewrite it into a standalone "
+            "search query that a knowledge-base retriever can use to find the "
+            "most relevant documents.\n\n"
             "IMPORTANT RULES:\n"
-            "- If the follow-up references something from a previous turn "
+            "- If the message references something from a previous turn "
             "(like 'and his?', 'what about her?', 'ושל X?', 'מה לגבי Y?'), "
             "you MUST include the full context in the standalone question.\n"
-            "- Preserve the language of the follow-up (Hebrew stays Hebrew, "
+            "- Preserve the language of the message (Hebrew stays Hebrew, "
             "English stays English).\n"
             "- Include names, IDs, topics, and other specifics from the chat "
             "history that are needed to understand the standalone question.\n"
-            "- If the follow-up asks about a different person/entity but the "
-            "same topic, include the topic in the rewritten question.\n\n"
+            "- If the message asks about a different person/entity but the "
+            "same topic, include the topic in the rewritten question.\n"
+            "- If there is NO chat history, rewrite the query to be MORE "
+            "EXPLICIT and DETAILED for search. Expand shorthand, resolve "
+            "ambiguity, and add related terms the user is implicitly asking "
+            "about.\n"
+            "- NEVER answer the question — only rewrite it.\n\n"
             "Examples:\n"
             "- Chat: 'What is David's ID?' → 'His ID is 038041612'\n"
             "  Follow-up: 'And Mia's?' → 'What is Mia's ID number?'\n"
             "- Chat: 'מה התעודת זהות של דוד?' → 'תעודת הזהות של דוד היא 038041612'\n"
             "  Follow-up: 'ושל בן?' → 'מה מספר תעודת הזהות של בן?'\n"
             "- Chat: 'מה התעודת זהות של דוד?' → '038041612'\n"
-            "  Follow-up: 'מה תאריך הלידה שלו?' → 'מה תאריך הלידה של דוד פיקל?'\n\n"
+            "  Follow-up: 'מה תאריך הלידה שלו?' → 'מה תאריך הלידה של דוד פיקל?'\n"
+            "- No history. Message: 'בן כמה בן פיקל?'\n"
+            "  → 'מה הגיל או תאריך הלידה של הבן של פיקל?'\n"
+            "- No history. Message: 'How old is David?'\n"
+            "  → 'What is the age or birth date of David?'\n\n"
             "Chat History:\n{chat_history}\n\n"
             "Follow Up Message: {question}\n"
             "Standalone Question:"
         )
         
-        # Optimisation: for the first message in a conversation (empty history),
-        # use ContextChatEngine which skips the condense step entirely.
-        # This saves one LLM call (~$0.002-0.01) per new conversation since
-        # the condense step for a first message just returns the original query.
-        has_history = False
-        try:
-            chat_history = memory.get_all()
-            has_history = bool(chat_history)
-        except Exception:
-            pass  # If we can't check, default to the full engine
-        
         verbose = settings.get("log_level", "INFO") == "DEBUG"
         
-        if has_history:
-            engine = CondensePlusContextChatEngine.from_defaults(
-                retriever=retriever,
-                memory=memory,
-                llm=Settings.llm,
-                system_prompt=system_prompt,
-                context_prompt=context_prompt,
-                condense_prompt=condense_prompt,
-                verbose=verbose,
-            )
-        else:
-            # First message: skip the condense LLM call
-            engine = ContextChatEngine.from_defaults(
-                retriever=retriever,
-                memory=memory,
-                llm=Settings.llm,
-                system_prompt=system_prompt,
-                context_prompt=context_prompt,
-                verbose=verbose,
-            )
-            logger.debug("Using ContextChatEngine (no history, skipping condense)")
+        # Always use CondensePlusContextChatEngine — the condense step
+        # rewrites queries into more explicit, search-friendly form even
+        # for first messages (no history), improving retrieval for short
+        # or ambiguous Hebrew queries.
+        engine = CondensePlusContextChatEngine.from_defaults(
+            retriever=retriever,
+            memory=memory,
+            llm=Settings.llm,
+            system_prompt=system_prompt,
+            context_prompt=context_prompt,
+            condense_prompt=condense_prompt,
+            verbose=verbose,
+        )
         
         logger.debug(f"Created chat engine for conversation {conversation_id}")
         return engine

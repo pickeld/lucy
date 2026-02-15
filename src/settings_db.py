@@ -164,7 +164,10 @@ DEFAULT_SETTINGS: List[Tuple[str, str, str, str, str]] = [
     ("rag_fulltext_score_chat_name", "0.85", "rag", "float", "Full-text search score for chat name field matches (0.0-1.0)"),
     ("rag_fulltext_score_message", "0.75", "rag", "float", "Full-text search score for message content matches (0.0-1.0)"),
     ("rag_morphology_prefixes", "\u05d4\u05d1\u05dc\u05de\u05e9\u05db\u05d5", "rag", "text", "Single-letter prefixes to strip during fulltext tokenization (e.g. Hebrew הבלמשכו). Leave empty to disable."),
-    ("rag_min_solo_embed_chars", "80", "rag", "int", "Minimum message length (chars) to embed individually. Shorter messages are only embedded as conversation chunks, saving embedding costs."),
+    # rag_min_solo_embed_chars removed — all messages are now always embedded
+    # individually.  The per-message cost is negligible (~$0.000005) and the
+    # previous threshold (80 chars) silently dropped semantically rich Hebrew
+    # messages from the RAG index entirely.
     ("rag_chunk_max_messages", "5", "rag", "int", "Max messages per conversation chunk before flushing"),
     ("rag_chunk_buffer_ttl", "120", "rag", "int", "Conversation chunk buffer TTL in seconds"),
     ("rag_chunk_overlap_messages", "1", "rag", "int", "Number of messages to keep as overlap between consecutive conversation chunks"),
