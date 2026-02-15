@@ -1029,8 +1029,11 @@ class LlamaIndexRAG:
         and Paperless/other documents (which store text only in LlamaIndex's
         internal '_node_content' JSON blob).
         
-        Each entry is prefixed with its source (e.g. "WhatsApp", "Paperless")
-        so the LLM can tell the user where a piece of information came from.
+        Each entry is formatted as::
+        
+            Source | date | item text
+        
+        so the LLM can clearly identify the source, date, and content.
         
         Priority:
         1. Reconstruct from 'message' metadata (WhatsApp-style)
@@ -1064,8 +1067,8 @@ class LlamaIndexRAG:
                     if text:
                         formatted_time = format_timestamp(str(timestamp))
                         if sender and sender != "Unknown":
-                            return f"[{source_label} | {formatted_time}] {sender} in {chat_name}:\n{text}"
-                        return f"[{source_label} | {formatted_time}] Document '{chat_name}':\n{text}"
+                            return f"{source_label} | {formatted_time} | {sender} in {chat_name}:\n{text}"
+                        return f"{source_label} | {formatted_time} | Document '{chat_name}':\n{text}"
                 except (json.JSONDecodeError, TypeError):
                     pass
             # Fall through to 'message' field if _node_content unavailable
@@ -1073,7 +1076,7 @@ class LlamaIndexRAG:
         # WhatsApp messages (and Paperless fallback) use the 'message' metadata field
         if message:
             formatted_time = format_timestamp(str(timestamp))
-            return f"[{source_label} | {formatted_time}] {sender} in {chat_name}: {message}"
+            return f"{source_label} | {formatted_time} | {sender} in {chat_name}: {message}"
         
         # Generic documents without 'message': extract text from _node_content
         node_content = payload.get("_node_content")
@@ -1084,8 +1087,8 @@ class LlamaIndexRAG:
                 if text:
                     formatted_time = format_timestamp(str(timestamp))
                     if sender and sender != "Unknown":
-                        return f"[{source_label} | {formatted_time}] {sender} in {chat_name}:\n{text}"
-                    return f"[{source_label} | {formatted_time}] Document '{chat_name}':\n{text}"
+                        return f"{source_label} | {formatted_time} | {sender} in {chat_name}:\n{text}"
+                    return f"{source_label} | {formatted_time} | Document '{chat_name}':\n{text}"
             except (json.JSONDecodeError, TypeError):
                 pass
         
