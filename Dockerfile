@@ -19,6 +19,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src/ /app/src/
 COPY .env.example .env
 
+# Create data directories for media and event files
+RUN mkdir -p /app/data/images /app/data/events
+
 # Set the Python path to include the src directory
 ENV PYTHONPATH=/app/src
 ENV PYTHONUNBUFFERED=1

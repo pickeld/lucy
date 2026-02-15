@@ -2300,6 +2300,40 @@ class LlamaIndexRAG:
         except Exception as e:
             logger.debug(f"Failed to inject contacts into system prompt (non-fatal): {e}")
         
+        # Append calendar event creation instructions.
+        # When the user asks to create a meeting/event/reminder, the LLM outputs
+        # a structured [CREATE_EVENT] block that the RichResponseProcessor will
+        # parse into a downloadable .ics file.
+        prompt += (
+            "\n\nCALENDAR EVENT CREATION:\n"
+            "When the user asks you to create a calendar event, meeting, appointment, "
+            "or reminder, you MUST include a structured event block in your response "
+            "using this EXACT format:\n\n"
+            "[CREATE_EVENT]\n"
+            "title: <event title>\n"
+            "start: <YYYY-MM-DDTHH:MM>\n"
+            "end: <YYYY-MM-DDTHH:MM>\n"
+            "location: <location, optional>\n"
+            "description: <description, optional>\n"
+            "[/CREATE_EVENT]\n\n"
+            "Rules for calendar events:\n"
+            "- Use ISO 8601 format for dates (YYYY-MM-DDTHH:MM)\n"
+            "- If no end time is specified, omit the 'end' line (default: 1 hour)\n"
+            "- If no location is specified, omit the 'location' line\n"
+            "- Calculate the actual date from relative expressions like 'tomorrow', "
+            "'next Tuesday', 'in 3 days' using the current date/time above\n"
+            "- The event block will be automatically converted to an ICS file for download\n"
+            "- ALSO write a brief human-readable confirmation message outside the block\n"
+            "- Example: User says 'צור לי פגישה עם דוד מחר ב-10 בבוקר'\n"
+            "  Response: 'יצרתי לך אירוע ביומן:\n"
+            "  📅 פגישה עם דוד — מחר ב-10:00\n\n"
+            "  [CREATE_EVENT]\n"
+            "  title: פגישה עם דוד\n"
+            "  start: 2026-02-16T10:00\n"
+            "  end: 2026-02-16T11:00\n"
+            "  [/CREATE_EVENT]'"
+        )
+        
         return prompt
     
     def create_chat_engine(

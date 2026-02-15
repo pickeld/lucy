@@ -9,12 +9,16 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import os
 from typing import Any
 
 import reflex as rx
 
 from . import api_client
 from .utils.time_utils import group_conversations_by_time
+
+# API base URL for constructing full media URLs
+_API_URL = os.environ.get("API_URL", "http://localhost:8765")
 
 logger = logging.getLogger(__name__)
 
@@ -745,12 +749,9 @@ class AppState(rx.State):
                         sources_md = _format_sources(src_list) if src_list else ""
                     except (json.JSONDecodeError, TypeError):
                         pass
-                msgs.append({
-                    "role": m["role"],
-                    "content": m["content"],
-                    "sources": sources_md,
-                    "cost": "",
-                })
+                msg = _empty_msg(m["role"], m["content"])
+                msg["sources"] = sources_md
+                msgs.append(msg)
             self.messages = msgs
             self.active_filters = loaded.get("filters", {})
             self.renaming_id = ""
@@ -848,7 +849,7 @@ class AppState(rx.State):
             return
 
         # Add user message immediately
-        self.messages.append({"role": "user", "content": question, "sources": "", "cost": ""})
+        self.messages.append(_empty_msg("user", question))
         self.input_text = ""
         self.is_loading = True
         yield  # Update UI
@@ -872,12 +873,7 @@ class AppState(rx.State):
         self.is_loading = False
 
         if "error" in data:
-            self.messages.append({
-                "role": "assistant",
-                "content": f"❌ {data['error']}",
-                "sources": "",
-                "cost": "",
-            })
+            self.messages.append(_empty_msg("assistant", f"❌ {data['error']}"))
         else:
             raw_answer = data.get("answer", "No answer received")
             answer = _parse_answer(raw_answer)
@@ -898,12 +894,15 @@ class AppState(rx.State):
             sources = data.get("sources", [])
             sources_md = _format_sources(sources) if sources else ""
 
-            self.messages.append({
-                "role": "assistant",
-                "content": answer,
-                "sources": sources_md,
-                "cost": cost_str,
-            })
+            # Flatten rich content into message-level fields for Reflex rendering
+            rich_content = data.get("rich_content", [])
+            rich_fields = _flatten_rich_content(rich_content)
+
+            msg = _empty_msg("assistant", answer)
+            msg["sources"] = sources_md
+            msg["cost"] = cost_str
+            msg.update(rich_fields)
+            self.messages.append(msg)
 
         # Refresh sidebar conversations
         await self._refresh_conversations()
@@ -1459,6 +1458,81 @@ class AppState(rx.State):
 # =========================================================================
 # HELPERS
 # =========================================================================
+
+# All rich content field keys — used to create empty message dicts
+_RICH_FIELDS = (
+    "image_urls", "image_captions",
+    "ics_url", "ics_title",
+    "button_prompt", "button_options",
+)
+
+
+def _empty_msg(role: str, content: str) -> dict[str, str]:
+    """Create a message dict with all required fields initialized to empty."""
+    msg: dict[str, str] = {
+        "role": role,
+        "content": content,
+        "sources": "",
+        "cost": "",
+        "rich_content": "",
+    }
+    for field in _RICH_FIELDS:
+        msg[field] = ""
+    return msg
+
+
+def _flatten_rich_content(rich_content: list[dict]) -> dict[str, str]:
+    """Flatten a list of rich content blocks into message-level string fields.
+
+    Converts structured rich content blocks into pipe-separated string fields
+    that Reflex can consume directly in component templates.
+
+    Returns dict with keys: image_urls, image_captions, ics_url, ics_title,
+    button_prompt, button_options.
+    """
+    result: dict[str, str] = {field: "" for field in _RICH_FIELDS}
+
+    if not rich_content:
+        return result
+
+    image_urls: list[str] = []
+    image_captions: list[str] = []
+
+    for block in rich_content:
+        block_type = block.get("type", "")
+
+        if block_type == "image":
+            url = block.get("url", "")
+            if url:
+                # Prefix with API URL so the browser can reach the backend
+                image_urls.append(f"{_API_URL}{url}")
+                image_captions.append(block.get("caption", ""))
+
+        elif block_type == "ics_event":
+            # Take the first event only
+            if not result["ics_url"]:
+                url = block.get("download_url", "")
+                result["ics_url"] = f"{_API_URL}{url}" if url else ""
+                result["ics_title"] = block.get("title", "Calendar Event")
+
+        elif block_type == "buttons":
+            options = block.get("options", [])
+            if options:
+                result["button_prompt"] = block.get("prompt", "")
+                result["button_options"] = "|".join(
+                    opt.get("label", opt.get("value", ""))
+                    for opt in options
+                )
+
+    if image_urls:
+        result["image_urls"] = "|".join(image_urls)
+        result["image_captions"] = "|".join(image_captions)
+
+    # Also keep the raw JSON for any future use
+    result["rich_content"] = json.dumps(rich_content)
+
+    return result
+
 
 def _parse_answer(raw_answer: Any) -> str:
     """Parse potentially JSON-wrapped answer into a plain string."""

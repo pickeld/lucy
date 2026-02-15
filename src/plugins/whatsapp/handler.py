@@ -50,7 +50,9 @@ contact_manager = ContactManager()
 group_manager = GroupManager()
 
 
-# make dir for media storage
+# make dir for media storage (persistent + debug)
+MEDIA_IMAGES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "images")
+os.makedirs(MEDIA_IMAGES_DIR, exist_ok=True)
 if not os.path.exists("tmp/images"):
     os.makedirs("tmp/images")
 
@@ -326,7 +328,7 @@ class MediaMessageBase(WhatsappMSG):
         if inline_data:
             logger.debug("Using inline base64 media data from webhook payload")
             self.media_base64 = inline_data
-            self._save_media_debug(payload)
+            self._save_media(payload)
             return
         
         # Strategy 2: Media URL from webhook payload (rewrite host for Docker)
@@ -369,7 +371,7 @@ class MediaMessageBase(WhatsappMSG):
             )
             response.raise_for_status()
             self.media_base64 = base64.standard_b64encode(response.content).decode("utf-8")
-            self._save_media_debug(payload)
+            self._save_media(payload)
         except Exception as e:
             logger.error(f"Failed to download media from {self.media_url}: {e}")
             self.has_media = False
@@ -442,7 +444,7 @@ class MediaMessageBase(WhatsappMSG):
                         f"Downloaded media via API ({len(self.media_base64)} chars base64) "
                         f"from {api_url}"
                     )
-                    self._save_media_debug(payload)
+                    self._save_media(payload)
                     return
                 else:
                     logger.debug(f"Empty response from {api_url}, trying next")
@@ -459,18 +461,37 @@ class MediaMessageBase(WhatsappMSG):
         )
         self.has_media = False
     
-    def _save_media_debug(self, payload: Dict[str, Any]) -> None:
-        """Save media to disk when in DEBUG log level."""
-        if settings.log_level == "DEBUG" and self.media_type and self.media_base64:
-            try:
-                extension = self.media_type.split("/")[-1].split(";")[0]
-                filename = f"tmp/images/media_{payload.get('id')}.{extension}"
-                with open(filename, "wb") as f:
+    def _save_media(self, payload: Dict[str, Any]) -> None:
+        """Persist media to data/images/ for serving inline in responses.
+        
+        Always saves images (not just in DEBUG mode) so they can be
+        displayed inline when Lucy references them in answers.
+        Also saves to tmp/images/ in DEBUG mode for backwards compat.
+        """
+        if not self.media_type or not self.media_base64:
+            return
+        
+        try:
+            extension = self.media_type.split("/")[-1].split(";")[0]
+            msg_id = payload.get('id', 'unknown')
+            
+            # Always save to persistent data/images/ directory
+            persistent_filename = f"media_{msg_id}.{extension}"
+            persistent_path = os.path.join(MEDIA_IMAGES_DIR, persistent_filename)
+            with open(persistent_path, "wb") as f:
+                f.write(base64.b64decode(self.media_base64))
+            
+            # Store relative path for Qdrant metadata
+            self.saved_path = f"data/images/{persistent_filename}"
+            logger.debug(f"Saved media to {persistent_path}")
+            
+            # Also save to tmp/images/ in DEBUG mode for backwards compat
+            if settings.log_level == "DEBUG":
+                debug_filename = f"tmp/images/media_{msg_id}.{extension}"
+                with open(debug_filename, "wb") as f:
                     f.write(base64.b64decode(self.media_base64))
-                logger.debug(f"Saved media to {filename}")
-                self.saved_path = filename
-            except Exception as e:
-                logger.debug(f"Failed to save media debug file: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to save media file: {e}")
     
     def _media_json(self) -> Optional[Dict[str, Any]]:
         """Generate media-specific JSON structure.
@@ -520,7 +541,8 @@ class MediaMessageBase(WhatsappMSG):
             timestamp=str(self.timestamp) if self.timestamp else "0",
             has_media=self.has_media,
             media_type=self.media_type,
-            media_url=self.media_url
+            media_url=self.media_url,
+            media_path=self.saved_path,
         )
 
 

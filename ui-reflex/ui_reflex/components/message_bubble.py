@@ -2,9 +2,15 @@
 
 Sources are stored as a separate 'sources' field in the message dict
 and rendered as a collapsible section (collapsed by default).
+
+Rich content blocks (images, ICS events, disambiguation buttons) are
+stored as flattened string fields in the message dict and rendered
+below the main answer text.
 """
 
 import reflex as rx
+
+from ..state import AppState
 
 
 def message_bubble(msg: dict) -> rx.Component:
@@ -44,6 +50,8 @@ def _assistant_bubble(msg: dict) -> rx.Component:
     """Assistant message — white background, brain avatar.
 
     Sources (if any) are rendered as a collapsible section below the answer.
+    Rich content (images, ICS events, buttons) are rendered between the
+    answer and the sources.
     A cost badge is shown when per-query cost data is available.
     """
     return rx.flex(
@@ -55,12 +63,30 @@ def _assistant_bubble(msg: dict) -> rx.Component:
                 "justify-center shrink-0 mt-0.5"
             ),
         ),
-        # Content + collapsible sources + cost badge
+        # Content + rich content + collapsible sources + cost badge
         rx.box(
             # Main answer
             rx.markdown(
                 msg["content"],
                 class_name="text-[0.95rem] leading-relaxed text-gray-700 rtl-auto prose prose-sm max-w-none",
+            ),
+            # Rich content: inline images
+            rx.cond(
+                msg["image_urls"] != "",
+                _render_images(msg["image_urls"], msg["image_captions"]),
+                rx.fragment(),
+            ),
+            # Rich content: ICS calendar event download
+            rx.cond(
+                msg["ics_url"] != "",
+                _render_ics_download(msg["ics_url"], msg["ics_title"]),
+                rx.fragment(),
+            ),
+            # Rich content: disambiguation/clarification buttons
+            rx.cond(
+                msg["button_options"] != "",
+                _render_buttons(msg["button_prompt"], msg["button_options"]),
+                rx.fragment(),
             ),
             # Collapsible sources section (only if sources exist)
             rx.cond(
@@ -89,6 +115,116 @@ def _assistant_bubble(msg: dict) -> rx.Component:
         class_name="bg-assistant-bubble rounded-xl px-5 py-4 mb-1",
     )
 
+
+# =========================================================================
+# Rich Content: Inline Images
+# =========================================================================
+
+def _render_images(image_urls: rx.Var[str], image_captions: rx.Var[str]) -> rx.Component:
+    """Render inline images from pipe-separated URL and caption strings."""
+    return rx.box(
+        rx.foreach(
+            image_urls.split("|"),
+            lambda url, idx: _render_single_image(url, image_captions, idx),
+        ),
+        class_name="mt-3 space-y-2",
+    )
+
+
+def _render_single_image(url: rx.Var[str], captions: rx.Var[str], idx: rx.Var[int]) -> rx.Component:
+    """Render a single inline image with optional caption."""
+    return rx.box(
+        rx.image(
+            src=url,
+            alt="Archive image",
+            class_name=(
+                "rounded-lg max-w-full max-h-80 object-contain "
+                "border border-gray-200 shadow-sm"
+            ),
+            loading="lazy",
+        ),
+        class_name="inline-block",
+    )
+
+
+# =========================================================================
+# Rich Content: ICS Calendar Event Download
+# =========================================================================
+
+def _render_ics_download(ics_url: rx.Var[str], ics_title: rx.Var[str]) -> rx.Component:
+    """Render a calendar event download button."""
+    return rx.flex(
+        rx.el.a(
+            rx.flex(
+                rx.icon("calendar-plus", size=18, class_name="text-blue-500"),
+                rx.box(
+                    rx.text(
+                        "📅 Download Calendar Event",
+                        class_name="text-sm font-medium text-blue-600",
+                    ),
+                    rx.text(
+                        ics_title,
+                        class_name="text-xs text-gray-500 truncate",
+                    ),
+                ),
+                align="center",
+                gap="2",
+            ),
+            href=ics_url,
+            download=True,
+            class_name=(
+                "inline-flex items-center px-4 py-2.5 rounded-lg "
+                "bg-blue-50 hover:bg-blue-100 border border-blue-200 "
+                "transition-colors cursor-pointer no-underline"
+            ),
+        ),
+        class_name="mt-3",
+    )
+
+
+# =========================================================================
+# Rich Content: Disambiguation / Clarification Buttons
+# =========================================================================
+
+def _render_buttons(prompt: rx.Var[str], options_str: rx.Var[str]) -> rx.Component:
+    """Render disambiguation buttons from pipe-separated options string."""
+    return rx.box(
+        rx.flex(
+            rx.foreach(
+                options_str.split("|"),
+                _render_single_button,
+            ),
+            wrap="wrap",
+            gap="2",
+        ),
+        class_name="mt-3",
+    )
+
+
+def _render_single_button(option: rx.Var[str]) -> rx.Component:
+    """Render a single disambiguation button that sends option as message."""
+    return rx.el.button(
+        rx.flex(
+            rx.icon("user", size=14, class_name="text-emerald-500 shrink-0"),
+            rx.text(
+                option,
+                class_name="text-sm text-gray-700 rtl-auto",
+            ),
+            align="center",
+            gap="1.5",
+        ),
+        on_click=AppState.send_suggestion(option),
+        class_name=(
+            "px-4 py-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 "
+            "border border-emerald-200 transition-colors cursor-pointer "
+            "text-left"
+        ),
+    )
+
+
+# =========================================================================
+# Collapsible Sources
+# =========================================================================
 
 def _collapsible_sources(sources_md: rx.Var[str]) -> rx.Component:
     """Render sources as a collapsible details/summary section.
@@ -124,6 +260,10 @@ def _collapsible_sources(sources_md: rx.Var[str]) -> rx.Component:
         class_name="mt-3 sources-details",
     )
 
+
+# =========================================================================
+# Typing Indicator
+# =========================================================================
 
 def typing_indicator() -> rx.Component:
     """Animated typing indicator (three bouncing dots)."""

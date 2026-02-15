@@ -43,6 +43,7 @@ class WhatsAppMessageDocument(BaseRAGDocument):
     has_media: bool = Field(default=False, description="Has media attachment")
     media_type: Optional[str] = Field(default=None, description="MIME type of media")
     media_url: Optional[str] = Field(default=None, description="URL to media file")
+    media_path: Optional[str] = Field(default=None, description="Local path to saved media file (e.g., data/images/media_xxx.jpg)")
     
     @classmethod
     def get_source(cls) -> Source:
@@ -67,6 +68,7 @@ class WhatsAppMessageDocument(BaseRAGDocument):
         has_media: bool = False,
         media_type: Optional[str] = None,
         media_url: Optional[str] = None,
+        media_path: Optional[str] = None,
         message_content_type: Optional[ContentType] = None
     ) -> "WhatsAppMessageDocument":
         """Create a WhatsAppMessageDocument from webhook payload data.
@@ -141,7 +143,8 @@ class WhatsAppMessageDocument(BaseRAGDocument):
             message=message,
             has_media=has_media,
             media_type=media_type,
-            media_url=media_url
+            media_url=media_url,
+            media_path=media_path,
         )
     
     def to_searchable_content(self) -> str:
@@ -208,7 +211,8 @@ class WhatsAppMessageDocument(BaseRAGDocument):
             "sender": self.sender,
             "message": self.message,
             "has_media": self.has_media,
-            "media_type": self.media_type
+            "media_type": self.media_type,
+            "media_path": self.media_path or "",
         })
         
         return TextNode(
