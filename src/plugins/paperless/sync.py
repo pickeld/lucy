@@ -5,6 +5,7 @@ import logging
 import re
 import time
 import uuid
+from datetime import datetime
 from email.policy import default as default_email_policy
 from typing import List, Optional
 
@@ -434,18 +435,33 @@ class DocumentSyncer:
                         correspondent_id = doc.get("correspondent")
                         sender = correspondents.get(correspondent_id, "") if correspondent_id else ""
                         
+                        # Parse document creation date from Paperless API.
+                        # The 'created' field is an ISO 8601 string like
+                        # "2023-03-15T00:00:00+02:00".  Use it as the primary
+                        # timestamp so the date shown in Lucy's response is the
+                        # actual document date, not the sync/indexing time.
+                        created_str = doc.get("created", "")
+                        if created_str:
+                            try:
+                                created_dt = datetime.fromisoformat(created_str)
+                                doc_timestamp = int(created_dt.timestamp())
+                            except (ValueError, TypeError):
+                                doc_timestamp = int(time.time())
+                        else:
+                            doc_timestamp = int(time.time())
+                        
                         base_metadata = {
                             "source": "paperless",
                             "source_id": source_id,
                             "content_type": "document",
                             "chat_name": title,
                             "sender": sender,
-                            "timestamp": int(time.time()),
+                            "timestamp": doc_timestamp,
                             "tags": ",".join(
                                 str(t) for t in doc.get("tags", [])
                             ),
                             "document_type": doc.get("document_type_name", ""),
-                            "created": doc.get("created", ""),
+                            "created": created_str,
                             "modified": doc.get("modified", ""),
                         }
                         
