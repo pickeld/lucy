@@ -162,6 +162,11 @@ def _normal_mode(convo_id: rx.Var, convo_title: rx.Var, is_active: rx.Var) -> rx
                         "Export",
                         on_click=AppState.export_chat(convo_id),
                     ),
+                    rx.dropdown_menu.item(
+                        rx.icon("clipboard-copy", size=14, class_name="mr-2"),
+                        "Copy",
+                        on_click=AppState.copy_chat_to_clipboard(convo_id),
+                    ),
                     rx.dropdown_menu.separator(),
                     rx.dropdown_menu.item(
                         rx.icon("trash-2", size=14, class_name="mr-2"),

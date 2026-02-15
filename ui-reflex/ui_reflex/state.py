@@ -821,6 +821,22 @@ class AppState(rx.State):
         except Exception as e:
             logger.error(f"Export chat error: {e}")
 
+    async def copy_chat_to_clipboard(self, convo_id: str):
+        """Copy a conversation as Markdown text to the clipboard."""
+        try:
+            data = await api_client.export_conversation(convo_id)
+            if "error" in data:
+                logger.error(f"Copy chat failed: {data['error']}")
+                return rx.toast.error("Failed to copy chat")
+            markdown = data.get("markdown", "")
+            return [
+                rx.set_clipboard(markdown),
+                rx.toast.success("Chat copied to clipboard"),
+            ]
+        except Exception as e:
+            logger.error(f"Copy chat error: {e}")
+            return rx.toast.error("Failed to copy chat")
+
     # =====================================================================
     # CHAT / QUERY
     # =====================================================================
