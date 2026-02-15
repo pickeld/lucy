@@ -1489,25 +1489,17 @@ def _parse_answer(raw_answer: Any) -> str:
 
 
 def _format_sources(sources: list[dict]) -> str:
-    """Format source citations as markdown for the collapsible sources section."""
+    """Format source citations as markdown for the collapsible sources section.
+
+    The ``content`` field already contains a cleanly formatted string from
+    the RAG layer in the form ``Source | date | item text``, so we only
+    need to number the entries.  No redundant header or score display.
+    """
     if not sources:
         return ""
     lines: list[str] = []
     for i, src in enumerate(sources):
-        sender = src.get("sender", "")
-        chat_name = src.get("chat_name", "")
-        content = src.get("content", "")[:200]
-        score = src.get("score")
-        score_str = f" — {score:.0%}" if score else ""
-
-        if sender:
-            header = f"**{i + 1}. {sender}** in _{chat_name}_{score_str}"
-        elif chat_name:
-            header = f"**{i + 1}.** _{chat_name}_{score_str}"
-        else:
-            header = f"**{i + 1}.** _Source_{score_str}"
-
-        lines.append(header)
+        content = src.get("content", "")[:300]
         if content:
-            lines.append(f"> {content}{'…' if len(content) >= 200 else ''}\n")
+            lines.append(f"**{i + 1}.** {content}{'…' if len(content) >= 300 else ''}\n")
     return "\n".join(lines)

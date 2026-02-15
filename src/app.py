@@ -690,20 +690,11 @@ def export_conversation_endpoint(conversation_id: str):
                         lines.append("<summary>📚 Sources</summary>")
                         lines.append("")
                         for i, src in enumerate(src_list):
-                            sender = src.get("sender", "")
-                            chat_name = src.get("chat_name", "")
-                            src_content = src.get("content", "")[:200]
-                            score = src.get("score")
-                            score_str = f" — {score:.0%}" if score else ""
-                            if sender:
-                                header = f"**{i + 1}. {sender}** in _{chat_name}_{score_str}"
-                            elif chat_name:
-                                header = f"**{i + 1}.** _{chat_name}_{score_str}"
-                            else:
-                                header = f"**{i + 1}.** _Source_{score_str}"
-                            lines.append(header)
+                            src_content = src.get("content", "")[:300]
                             if src_content:
-                                lines.append(f"> {src_content}{'…' if len(src_content) >= 200 else ''}")
+                                lines.append(f"**{i + 1}.** {src_content}{'…' if len(src_content) >= 300 else ''}")
+                            else:
+                                lines.append(f"**{i + 1}.** _(empty source)_")
                             lines.append("")
                         lines.append("</details>")
                         lines.append("")
