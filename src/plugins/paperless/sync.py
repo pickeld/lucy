@@ -505,6 +505,18 @@ class DocumentSyncer:
                                 )
                             else:
                                 logger.info(f"Indexed: {title}")
+                            
+                            # Entity extraction from document content
+                            try:
+                                from entity_extractor import extract_entities_from_document
+                                extract_entities_from_document(
+                                    doc_title=title,
+                                    doc_text=content,
+                                    source_ref=source_id,
+                                    sender=sender,
+                                )
+                            except Exception as ee:
+                                logger.debug(f"Entity extraction failed for '{title}' (non-critical): {ee}")
                         else:
                             errors += 1
                             logger.warning(f"Partially failed: {title}")

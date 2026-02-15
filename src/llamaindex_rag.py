@@ -134,6 +134,112 @@ class ArchiveRetriever(BaseRetriever):
     # Ensures the LLM has temporal awareness of the latest messages.
     RECENCY_SUPPLEMENT_COUNT = 5
     
+    def _inject_entity_facts(self, query: str) -> List[NodeWithScore]:
+        """Inject known entity facts as high-priority context nodes.
+        
+        When the query mentions a known person (by name or alias), looks up
+        their stored facts in the Entity Store and creates a context node with
+        the information. This enables instant answers for factual questions
+        like "בת כמה מיה?" (How old is Mia?) using stored birth_date.
+        
+        Facts are permanent/time-invariant (birth_date, city, ID number, etc.).
+        Age is computed from birth_date at query time, not stored.
+        
+        Args:
+            query: The search query string
+            
+        Returns:
+            List of NodeWithScore with entity facts (empty if no matches)
+        """
+        try:
+            import entity_db
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            
+            # Tokenize query to find person name tokens
+            tokens = LlamaIndexRAG._tokenize_query(query)
+            if not tokens:
+                return []
+            
+            # Try to resolve each token as a person name
+            injected = []
+            seen_person_ids: set = set()
+            
+            for token in tokens:
+                matches = entity_db.resolve_name(token)
+                for match in matches:
+                    pid = match["id"]
+                    if pid in seen_person_ids:
+                        continue
+                    seen_person_ids.add(pid)
+                    
+                    # Get full person with facts
+                    person = entity_db.get_person(pid)
+                    if not person:
+                        continue
+                    
+                    facts = person.get("facts", {})
+                    if not facts:
+                        continue
+                    
+                    # Build fact text
+                    fact_lines = [f"Known facts about {person['canonical_name']}:"]
+                    
+                    for key, value in facts.items():
+                        if key == "birth_date":
+                            # Compute age from birth_date
+                            try:
+                                tz = ZoneInfo(settings.get("timezone", "Asia/Jerusalem"))
+                                now = datetime.now(tz)
+                                bd = datetime.fromisoformat(value)
+                                age = now.year - bd.year - (
+                                    (now.month, now.day) < (bd.month, bd.day)
+                                )
+                                fact_lines.append(
+                                    f"- Birth date: {value} (age: {age})"
+                                )
+                            except (ValueError, TypeError):
+                                fact_lines.append(f"- Birth date: {value}")
+                        else:
+                            label = key.replace("_", " ").title()
+                            fact_lines.append(f"- {label}: {value}")
+                    
+                    # Add aliases
+                    aliases = [
+                        a["alias"] for a in person.get("aliases", [])
+                        if a["alias"] != person["canonical_name"]
+                    ]
+                    if aliases:
+                        fact_lines.append(
+                            f"- Also known as: {', '.join(aliases[:5])}"
+                        )
+                    
+                    # Add relationships
+                    rels = person.get("relationships", [])
+                    for rel in rels[:3]:
+                        fact_lines.append(
+                            f"- {rel['relationship_type'].title()} of {rel['related_name']}"
+                        )
+                    
+                    fact_text = "\n".join(fact_lines)
+                    node = TextNode(
+                        text=fact_text,
+                        metadata={
+                            "source": "entity_store",
+                            "content_type": "entity_facts",
+                            "person_name": person["canonical_name"],
+                            "person_id": pid,
+                        },
+                    )
+                    # High score so entity facts appear first in context
+                    injected.append(NodeWithScore(node=node, score=1.0))
+            
+            return injected
+        except ImportError:
+            return []  # entity_db not available
+        except Exception:
+            return []
+    
     def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         """Retrieve relevant messages/documents using hybrid search.
         
@@ -234,6 +340,18 @@ class ArchiveRetriever(BaseRetriever):
                     if nws.node and nws.node.id_ not in existing_ids:
                         existing_ids.add(nws.node.id_)
                         results.append(nws)
+        
+        # Entity fact injection: when the query mentions a known person,
+        # inject their stored facts as a high-priority context node so the
+        # LLM can answer factual questions (age, birth date, etc.) directly
+        # without needing to find the information in retrieved messages.
+        try:
+            entity_nodes = self._inject_entity_facts(query_bundle.query_str)
+            if entity_nodes:
+                results = entity_nodes + results
+                logger.info(f"Injected {len(entity_nodes)} entity fact node(s)")
+        except Exception as e:
+            logger.debug(f"Entity fact injection failed (non-critical): {e}")
         
         # Ensure at least one node so the synthesizer doesn't return "Empty Response"
         if not results:
@@ -2407,19 +2525,60 @@ class LlamaIndexRAG:
             hebrew_date=hebrew_date,
         )
         
-        # Append the dynamic known contacts list and disambiguation instruction
-        # so the LLM can ask for clarification when a name matches multiple
-        # people (e.g., "דורון" → Doron Yazkirovich vs דורון עלאני).
-        # This is injected dynamically (not in the template) so it works
-        # regardless of the system_prompt stored in the database.
-        # The sender list is fetched from Redis cache (fast) and only adds
-        # ~2K tokens even with 500+ contacts.
+        # Append the dynamic known contacts list and disambiguation instruction.
+        # Strategy: use Entity Store (rich aliases) when available, fall back
+        # to the flat Redis-cached sender list.
         try:
-            sender_list = self.get_sender_list()
-            if sender_list:
-                contacts_str = ", ".join(sender_list)
+            contacts_str = ""
+            contact_count = 0
+            
+            # Strategy 1: Entity Store with aliases (richer disambiguation)
+            try:
+                import entity_db
+                persons = entity_db.get_all_persons_summary()
+                if persons:
+                    contact_entries = []
+                    for p in persons:
+                        if p.get("is_group"):
+                            continue
+                        name = p["canonical_name"]
+                        aliases = [
+                            a for a in p.get("aliases", [])
+                            if isinstance(a, str) and a != name
+                        ]
+                        if aliases:
+                            alias_str = "/".join(aliases[:3])
+                            contact_entries.append(f"{name} ({alias_str})")
+                        else:
+                            contact_entries.append(name)
+                    contacts_str = ", ".join(contact_entries)
+                    contact_count = len(contact_entries)
+            except Exception:
+                pass  # Fall back to sender list
+            
+            # Strategy 2: Flat sender list from Redis (fallback)
+            if not contacts_str:
+                sender_list = self.get_sender_list()
+                if sender_list:
+                    contacts_str = ", ".join(sender_list)
+                    contact_count = len(sender_list)
+            
+            # Cap contacts string to ~6000 chars (~1500 tokens) to prevent
+            # the system prompt from exceeding LLM token limits.
+            MAX_CONTACTS_CHARS = 6000
+            if len(contacts_str) > MAX_CONTACTS_CHARS:
+                # Truncate at the last complete entry before the limit
+                truncated = contacts_str[:MAX_CONTACTS_CHARS]
+                last_comma = truncated.rfind(", ")
+                if last_comma > 0:
+                    contacts_str = truncated[:last_comma]
+                else:
+                    contacts_str = truncated
+                contacts_str += f" ... (and more, {contact_count} total)"
+            
+            if contacts_str:
                 prompt += (
-                    f"\n\nKnown Contacts ({len(sender_list)} people):\n"
+                    f"\n\nKnown Contacts ({contact_count} people):\n"
                     f"{contacts_str}\n\n"
                     "CRITICAL DISAMBIGUATION RULE (MUST FOLLOW):\n"
                     "BEFORE answering any question that mentions a person by first name only, "

@@ -657,6 +657,18 @@ class EmailSyncer:
                                 )
                             else:
                                 logger.info(f"Indexed email: {parsed.subject}")
+                            
+                            # Entity extraction from email content
+                            try:
+                                from entity_extractor import extract_entities_from_document
+                                extract_entities_from_document(
+                                    doc_title=parsed.subject or "Email",
+                                    doc_text=body,
+                                    source_ref=f"gmail:{msg_id}",
+                                    sender=parsed.from_address or "",
+                                )
+                            except Exception as ee:
+                                logger.debug(f"Entity extraction failed for email '{parsed.subject}' (non-critical): {ee}")
                         else:
                             errors += 1
 

@@ -356,6 +356,20 @@ class WhatsAppPlugin(ChannelPlugin):
                     media_url=media_url,
                 )
                 logger.debug(f"Stored message: {chat_name} || {msg}")
+                
+                # Entity extraction (async, non-blocking — failures are logged and ignored)
+                try:
+                    from entity_extractor import maybe_extract_entities
+                    maybe_extract_entities(
+                        sender=sender,
+                        chat_name=chat_name or "Unknown",
+                        message=msg.message,
+                        timestamp=str(msg.timestamp) if msg.timestamp else "0",
+                        chat_id=chat_id or "",
+                        whatsapp_id=msg.contact.id,
+                    )
+                except Exception as ee:
+                    logger.debug(f"Entity extraction failed (non-critical): {ee}")
         except Exception as e:
             trace = traceback.format_exc()
             logger.error(f"Background webhook processing error: {e} ::: {payload}\n{trace}")
