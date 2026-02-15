@@ -568,6 +568,7 @@ class LlamaIndexRAG:
             ("source_type", PayloadSchemaType.KEYWORD, "source_type keyword index (legacy)"),
             ("is_group", PayloadSchemaType.BOOL, "is_group bool index"),
             ("source_id", PayloadSchemaType.KEYWORD, "source_id keyword index"),
+            ("chat_id", PayloadSchemaType.KEYWORD, "chat_id keyword index"),
         ]
         
         for field_name, schema_type, description in index_configs:
@@ -1381,6 +1382,7 @@ class LlamaIndexRAG:
         query: str,
         k: int = 10,
         filter_chat_name: Optional[str] = None,
+        filter_sender: Optional[str] = None,
         filter_days: Optional[int] = None,
         filter_sources: Optional[List[str]] = None,
         filter_date_from: Optional[str] = None,
@@ -1400,10 +1402,15 @@ class LlamaIndexRAG:
         content matches.  Results are deduplicated by node ID, keeping
         the highest score.
         
+        When ``filter_sender`` is provided, the sender field fulltext search
+        is skipped (exact match already applied via filter conditions) but
+        chat_name and message searches still run.
+        
         Args:
             query: Text to search for
             k: Max results to return
             filter_chat_name: Optional chat filter
+            filter_sender: Optional sender filter (exact match)
             filter_days: Optional time filter
             filter_sources: Optional source filter
             filter_date_from: Optional ISO date string for start of range
@@ -1425,6 +1432,7 @@ class LlamaIndexRAG:
             # Build common filter conditions (AND logic)
             must_conditions = self._build_filter_conditions(
                 filter_chat_name=filter_chat_name,
+                filter_sender=filter_sender,
                 filter_days=filter_days,
                 filter_sources=filter_sources,
                 filter_date_from=filter_date_from,
@@ -1436,12 +1444,16 @@ class LlamaIndexRAG:
             import re as _re_local
             numeric_tokens = [t for t in tokens if _re_local.fullmatch(r"\d{5,}", t)]
             
-            # Search each field with OR-matched tokens, different scores
+            # Search each field with OR-matched tokens, different scores.
+            # Skip sender field when filter_sender is set — the exact-match
+            # filter already constrains results to that sender, so fulltext
+            # search on the sender field would be redundant.
             field_searches = [
-                ("sender", self.FULLTEXT_SCORE_SENDER),
                 ("chat_name", self.FULLTEXT_SCORE_CHAT_NAME),
                 ("message", self.FULLTEXT_SCORE_MESSAGE),
             ]
+            if not filter_sender:
+                field_searches.insert(0, ("sender", self.FULLTEXT_SCORE_SENDER))
             
             # Add numbers field search when query contains numeric sequences
             if numeric_tokens:
@@ -1653,12 +1665,21 @@ class LlamaIndexRAG:
                 filter_content_types=filter_content_types,
             )
             
-            # Exclude conversation chunks — we want individual messages for recency
+            # Require a valid timestamp (>0) and exclude conversation chunks —
+            # we want individual messages for recency, not synthetic multi-message
+            # chunks which would duplicate content.
             must_conditions.append(
                 FieldCondition(key="timestamp", range=Range(gt=0))
             )
             
-            scroll_filter = Filter(must=must_conditions) if must_conditions else None
+            must_not_conditions = [
+                FieldCondition(key="source_type", match=MatchValue(value="conversation_chunk"))
+            ]
+            
+            scroll_filter = Filter(
+                must=must_conditions if must_conditions else None,
+                must_not=must_not_conditions,
+            )
             
             # Use order_by to sort by timestamp descending (most recent first)
             records, _ = self.qdrant_client.scroll(
@@ -1727,8 +1748,11 @@ class LlamaIndexRAG:
             return results
         
         try:
-            # Collect unique (chat_name, timestamp) pairs from results
-            chat_windows: Dict[str, List[int]] = {}  # chat_name -> [timestamps]
+            # Collect unique chat identifiers and timestamps from results.
+            # Prefer chat_id (unique, e.g. '972501234567@c.us') over chat_name
+            # (display name, can be duplicated across different chats like "Family").
+            # Falls back to chat_name for sources without chat_id (e.g. Paperless).
+            chat_windows: Dict[str, Dict] = {}  # key -> {timestamps, filter_field, filter_value}
             existing_ids: set = set()
             
             for nws in results:
@@ -1737,10 +1761,22 @@ class LlamaIndexRAG:
                     continue
                 existing_ids.add(node.id_)
                 metadata = getattr(node, "metadata", {})
+                chat_id = metadata.get("chat_id")
                 chat_name = metadata.get("chat_name")
                 timestamp = metadata.get("timestamp")
-                if chat_name and timestamp and isinstance(timestamp, (int, float)):
-                    chat_windows.setdefault(chat_name, []).append(int(timestamp))
+                if not timestamp or not isinstance(timestamp, (int, float)):
+                    continue
+                # Use chat_id when available (WhatsApp), fall back to chat_name (Paperless)
+                if chat_id:
+                    key = f"id:{chat_id}"
+                    chat_windows.setdefault(key, {
+                        "timestamps": [], "filter_field": "chat_id", "filter_value": chat_id
+                    })["timestamps"].append(int(timestamp))
+                elif chat_name:
+                    key = f"name:{chat_name}"
+                    chat_windows.setdefault(key, {
+                        "timestamps": [], "filter_field": "chat_name", "filter_value": chat_name
+                    })["timestamps"].append(int(timestamp))
             
             if not chat_windows:
                 return results
@@ -1754,12 +1790,15 @@ class LlamaIndexRAG:
             
             per_chat_limit = max(3, budget // len(chat_windows))
             
-            for chat_name, timestamps in chat_windows.items():
+            for chat_key, window_info in chat_windows.items():
+                timestamps = window_info["timestamps"]
+                filter_field = window_info["filter_field"]
+                filter_value = window_info["filter_value"]
                 min_ts = min(timestamps) - self.CONTEXT_WINDOW_SECONDS
                 max_ts = max(timestamps) + self.CONTEXT_WINDOW_SECONDS
                 
                 must_conditions = [
-                    FieldCondition(key="chat_name", match=MatchValue(value=chat_name)),
+                    FieldCondition(key=filter_field, match=MatchValue(value=filter_value)),
                     FieldCondition(key="timestamp", range=Range(gte=min_ts, lte=max_ts)),
                 ]
                 
@@ -1791,7 +1830,7 @@ class LlamaIndexRAG:
                             expanded_nodes.append(NodeWithScore(node=node, score=0.5))
                             
                 except Exception as e:
-                    logger.debug(f"Context expansion for chat '{chat_name}' failed: {e}")
+                    logger.debug(f"Context expansion for chat '{chat_key}' failed: {e}")
                     continue
             
             if expanded_nodes:
@@ -1866,11 +1905,36 @@ class LlamaIndexRAG:
             if budget <= 0:
                 return results
             
-            # Fetch sibling chunks for each document
+            # Fetch sibling chunks for each document.
+            # Use chunk_total from the matched chunk's metadata to determine
+            # the scroll limit, ensuring we fetch ALL sibling chunks rather
+            # than a budget-derived subset.  The downstream context budget
+            # trimmer in _retrieve() will handle any overflow.
             sibling_nodes: List[NodeWithScore] = []
-            per_doc_limit = max(5, budget // len(doc_ids))
+            
+            # Build a map of doc_source_id -> chunk_total from matched results
+            doc_chunk_totals: Dict[str, int] = {}
+            for nws in results:
+                node = nws.node
+                if not node:
+                    continue
+                metadata = getattr(node, "metadata", {})
+                source_id = metadata.get("source_id", "")
+                chunk_total = metadata.get("chunk_total")
+                if source_id in doc_ids and chunk_total:
+                    try:
+                        doc_chunk_totals[source_id] = max(
+                            doc_chunk_totals.get(source_id, 0),
+                            int(chunk_total)
+                        )
+                    except (ValueError, TypeError):
+                        pass
             
             for doc_source_id in doc_ids:
+                # Use chunk_total if known, otherwise fall back to budget-based limit
+                fallback_limit = max(5, budget // len(doc_ids))
+                doc_limit = doc_chunk_totals.get(doc_source_id, fallback_limit)
+                
                 try:
                     records, _ = self.qdrant_client.scroll(
                         collection_name=self.COLLECTION_NAME,
@@ -1880,7 +1944,7 @@ class LlamaIndexRAG:
                                 match=MatchValue(value=doc_source_id)
                             )
                         ]),
-                        limit=per_doc_limit,
+                        limit=doc_limit,
                         with_payload=True,
                         with_vectors=False,
                     )
@@ -2038,12 +2102,17 @@ class LlamaIndexRAG:
                     f"results below {self.MINIMUM_SIMILARITY_SCORE}"
                 )
             
-            # Hybrid search: also do full-text search on metadata and merge results
-            if include_metadata_search and not filter_sender:
+            # Hybrid search: also do full-text search on metadata and merge results.
+            # When filter_sender is set, the sender field fulltext search is
+            # automatically skipped inside _fulltext_search (exact match already
+            # applied via filter conditions), but chat_name and message searches
+            # still run — so we no longer disable metadata search entirely.
+            if include_metadata_search:
                 fulltext_results = self._fulltext_search(
                     query=query,
                     k=k,
                     filter_chat_name=filter_chat_name,
+                    filter_sender=filter_sender,
                     filter_days=filter_days,
                     filter_sources=filter_sources,
                     filter_date_from=filter_date_from,
