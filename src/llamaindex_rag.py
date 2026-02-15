@@ -204,34 +204,36 @@ class ArchiveRetriever(BaseRetriever):
         if results and _current_chars(results) < max_context_chars * 0.8:
             results = self._rag.expand_document_chunks(results, max_total=self._k * 3)
         
-        # Always supplement with recent messages so the LLM has temporal
-        # awareness (knows what the actual latest messages are). This
-        # ensures queries like "what's the last message?" get the correct
-        # answer even when semantic search returns older matches.
-        recent = self._rag.recency_search(
-            k=self.RECENCY_SUPPLEMENT_COUNT,
-            **_fkw,
-        )
-        if recent:
-            if results:
-                # Merge: interleave recency results at the FRONT of the list.
-                # This ensures recent short messages (voice transcriptions, etc.)
-                # aren't pushed out of the context budget by large documents.
-                existing_ids = {nws.node.id_ for nws in results if nws.node}
-                new_recent = [
-                    nws for nws in recent
-                    if nws.node and nws.node.id_ not in existing_ids
-                ]
-                for nws in new_recent:
-                    existing_ids.add(nws.node.id_)
-                # Prepend recency results so they survive budget trimming
-                results = new_recent + results
-            else:
-                # No semantic results — use recent messages as primary context
-                results = recent
-                logger.info(
-                    f"Semantic search empty, using {len(results)} recent messages"
+        # Per-chat recency supplement: fetch recent messages only from
+        # chats that already appear in the semantic search results.
+        # This prevents unrelated recent messages (e.g. voice recordings
+        # from a test chat) from polluting the context.
+        if results:
+            chat_names_in_results: set = set()
+            for nws in results:
+                if nws.node:
+                    cn = getattr(nws.node, "metadata", {}).get("chat_name")
+                    if cn:
+                        chat_names_in_results.add(cn)
+            
+            existing_ids = {nws.node.id_ for nws in results if nws.node}
+            per_chat_limit = max(2, self.RECENCY_SUPPLEMENT_COUNT // max(len(chat_names_in_results), 1))
+            
+            for chat_name in chat_names_in_results:
+                chat_recent = self._rag.recency_search(
+                    k=per_chat_limit,
+                    filter_chat_name=chat_name,
+                    filter_sender=self._filter_sender,
+                    filter_days=self._filter_days,
+                    filter_sources=self._filter_sources,
+                    filter_date_from=self._filter_date_from,
+                    filter_date_to=self._filter_date_to,
+                    filter_content_types=self._filter_content_types,
                 )
+                for nws in chat_recent:
+                    if nws.node and nws.node.id_ not in existing_ids:
+                        existing_ids.add(nws.node.id_)
+                        results.append(nws)
         
         # Ensure at least one node so the synthesizer doesn't return "Empty Response"
         if not results:
