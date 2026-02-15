@@ -338,6 +338,11 @@ class WhatsAppPlugin(ChannelPlugin):
             
             # Store message in RAG vector store
             if msg.message and self._rag:
+                # Pass media info for correct content_type (voice, image, etc.)
+                has_media = getattr(msg, "has_media", False)
+                media_type = getattr(msg, "media_type", None)
+                media_url = getattr(msg, "media_url", None)
+                
                 self._rag.add_message(
                     thread_id=chat_id or "UNKNOWN",
                     chat_id=chat_id or "UNKNOWN",
@@ -345,7 +350,10 @@ class WhatsAppPlugin(ChannelPlugin):
                     is_group=msg.is_group,
                     sender=sender,
                     message=msg.message,
-                    timestamp=str(msg.timestamp) if msg.timestamp else "0"
+                    timestamp=str(msg.timestamp) if msg.timestamp else "0",
+                    has_media=has_media,
+                    media_type=media_type,
+                    media_url=media_url,
                 )
                 logger.debug(f"Stored message: {chat_name} || {msg}")
         except Exception as e:
