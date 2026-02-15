@@ -1,5 +1,5 @@
 1. add external / internet sources
 2. create google events
 3. integrate gmail
-4. integrate paperless-ngx
-5. voice notes
+4. identify faces
+5. 
