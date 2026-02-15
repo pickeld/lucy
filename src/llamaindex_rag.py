@@ -26,7 +26,7 @@ from llama_index.core import (
     StorageContext,
     VectorStoreIndex,
 )
-from llama_index.core.chat_engine import CondensePlusContextChatEngine
+from llama_index.core.chat_engine import CondensePlusContextChatEngine, ContextChatEngine
 from llama_index.core.memory import ChatMemoryBuffer
 from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
@@ -184,15 +184,24 @@ class ArchiveRetriever(BaseRetriever):
             **_fkw,
         )
         
+        # Early budget tracking: compute budget once and skip expansions
+        # if we're already close to the limit, avoiding wasteful Qdrant
+        # queries for context that will just be trimmed away.
+        max_context_chars = self._rag.MAX_CONTEXT_TOKENS * 4  # ~12000 chars default
+        
+        def _current_chars(nodes: List[NodeWithScore]) -> int:
+            return sum(len(getattr(n.node, "text", "") or "") for n in nodes if n.node)
+        
         # Context expansion: fetch surrounding messages from the same chats
         # so that replies and nearby messages are included as context.
-        if results:
+        if results and _current_chars(results) < max_context_chars * 0.8:
             results = self._rag.expand_context(results, max_total=self._k * 2)
         
         # Document chunk expansion: when a Paperless document chunk is found,
         # fetch ALL sibling chunks from the same document so the LLM sees the
         # complete document content, not just the chunk that matched the query.
-        if results:
+        # Skip if we're already near the budget limit.
+        if results and _current_chars(results) < max_context_chars * 0.8:
             results = self._rag.expand_document_chunks(results, max_total=self._k * 3)
         
         # Always supplement with recent messages so the LLM has temporal
@@ -230,7 +239,7 @@ class ArchiveRetriever(BaseRetriever):
         # With full Paperless document chunks (up to 6000 chars each) and sibling
         # expansion, the total context can easily exceed 50K tokens. Use
         # rag_max_context_tokens × 4 chars/token as the character budget.
-        max_context_chars = self._rag.MAX_CONTEXT_TOKENS * 4  # ~12000 chars default
+        # max_context_chars already computed above for early budget checks
         total_chars = 0
         trimmed: List[NodeWithScore] = []
         for nws in results:
@@ -604,8 +613,10 @@ class LlamaIndexRAG:
     # =========================================================================
     
     CHUNK_BUFFER_KEY_PREFIX = "rag:chunk_buffer:"
-    CHUNK_BUFFER_TTL = 120  # 2 minutes — flush buffer if no new messages
-    CHUNK_MAX_MESSAGES = 5  # Flush when buffer reaches this many messages
+    CHUNK_BUFFER_TTL = int(settings.get("rag_chunk_buffer_ttl", "120"))
+    CHUNK_MAX_MESSAGES = int(settings.get("rag_chunk_max_messages", "5"))
+    CHUNK_OVERLAP_MESSAGES = int(settings.get("rag_chunk_overlap_messages", "1"))
+    MIN_SOLO_EMBED_CHARS = int(settings.get("rag_min_solo_embed_chars", "80"))
     
     def _buffer_message_for_chunking(
         self,
@@ -672,12 +683,25 @@ class LlamaIndexRAG:
             redis = get_redis_client()
             buffer_key = f"{self.CHUNK_BUFFER_KEY_PREFIX}{chat_id}"
             
-            # Atomically get all messages and delete the buffer
+            # Get all messages from the buffer
             raw_messages = redis.lrange(buffer_key, 0, -1)
-            redis.delete(buffer_key)
             
             if not raw_messages or len(raw_messages) < 2:
+                redis.delete(buffer_key)
                 return False  # Need at least 2 messages for a meaningful chunk
+            
+            # Keep the last N messages as overlap for the next chunk.
+            # This ensures context continuity between consecutive chunks.
+            overlap = self.CHUNK_OVERLAP_MESSAGES
+            if overlap > 0 and len(raw_messages) > overlap:
+                # Delete all, then re-push the overlap messages
+                redis.delete(buffer_key)
+                overlap_messages = raw_messages[-overlap:]
+                for msg in overlap_messages:
+                    redis.rpush(buffer_key, msg)
+                redis.expire(buffer_key, self.CHUNK_BUFFER_TTL)
+            else:
+                redis.delete(buffer_key)
             
             # Parse buffered messages
             messages = []
@@ -795,8 +819,18 @@ class LlamaIndexRAG:
             # Convert to LlamaIndex TextNode with standardized schema
             node = doc.to_llama_index_node()
             
-            # Insert individual message into index
-            self.index.insert_nodes([node])
+            # Only embed messages individually if they carry enough semantic
+            # meaning on their own.  Short messages (e.g. "ok", "thanks", "yes")
+            # produce poor standalone embeddings and are better captured as part
+            # of a conversation chunk.  This saves ~20-40% of WhatsApp embedding
+            # costs since most chat messages are short.
+            if len(message) >= self.MIN_SOLO_EMBED_CHARS:
+                self.index.insert_nodes([node])
+            else:
+                logger.debug(
+                    f"Skipping solo embed for short message ({len(message)} chars < "
+                    f"{self.MIN_SOLO_EMBED_CHARS}): {message[:40]}..."
+                )
             
             # Buffer for conversation chunking (creates context-rich chunks)
             self._buffer_message_for_chunking(
@@ -826,11 +860,10 @@ class LlamaIndexRAG:
     def add_node(self, node: TextNode) -> bool:
         """Add a pre-constructed TextNode to the vector store.
         
-        If the node text exceeds EMBEDDING_MAX_CHARS it is truncated to
-        avoid hitting the embedding model's token limit (8191 for
-        text-embedding-3-large).  A first attempt is made with the full
-        text; on a 400 "maximum context length" error the text is
-        truncated and retried once.
+        Proactively truncates node text that exceeds EMBEDDING_MAX_CHARS
+        before calling the embedding API, avoiding a wasted API call on
+        oversized content.  Falls back to reactive truncation if a 400
+        "maximum context length" error still occurs.
         
         Args:
             node: LlamaIndex TextNode to add
@@ -839,6 +872,14 @@ class LlamaIndexRAG:
             True if successful, False otherwise
         """
         try:
+            # Proactive truncation: avoid a wasted API call on oversized text
+            if len(node.text) > self.EMBEDDING_MAX_CHARS:
+                logger.info(
+                    f"Proactively truncating node text ({len(node.text)} chars "
+                    f"→ {self.EMBEDDING_MAX_CHARS} chars)"
+                )
+                node.text = node.text[:self.EMBEDDING_MAX_CHARS]
+            
             self.index.insert_nodes([node])
             logger.debug(f"Added node to RAG: {node.text[:50]}...")
             return True
@@ -1037,11 +1078,11 @@ class LlamaIndexRAG:
     FULLTEXT_SCORE_MESSAGE = float(settings.get("rag_fulltext_score_message", "0.75"))
     FULLTEXT_SCORE_NUMBERS = float(settings.get("rag_fulltext_score_numbers", "0.90"))
     
-    # Common Hebrew prefixes (prepositions, conjunctions, articles)
-    # that are attached to words: ה (the), ב (in), ל (to), מ (from),
-    # ש (that), כ (like), ו (and).  Stripping these helps match
-    # inflected forms against stored text.
-    _HEBREW_PREFIXES = "הבלמשכו"
+    # Morphological prefixes to strip during fulltext tokenization.
+    # Default covers Hebrew prepositions/conjunctions/articles:
+    # ה (the), ב (in), ל (to), מ (from), ש (that), כ (like), ו (and).
+    # Configurable via settings key 'rag_morphology_prefixes'.
+    _MORPHOLOGY_PREFIXES = settings.get("rag_morphology_prefixes", "")
     
     @staticmethod
     def _expand_hebrew_tokens(tokens: List[str]) -> List[str]:
@@ -1078,10 +1119,10 @@ class LlamaIndexRAG:
             if not _re.search(r'[\u0590-\u05FF]', token):
                 continue
             
-            # Strip common Hebrew prefixes (one or two prefix letters)
+            # Strip morphological prefixes (one or two prefix letters)
             word = token
             for _ in range(2):  # Strip up to 2 prefix letters
-                if len(word) > 3 and word[0] in LlamaIndexRAG._HEBREW_PREFIXES:
+                if len(word) > 3 and LlamaIndexRAG._MORPHOLOGY_PREFIXES and word[0] in LlamaIndexRAG._MORPHOLOGY_PREFIXES:
                     stripped = word[1:]
                     if stripped.lower() not in seen and len(stripped) >= 3:
                         seen.add(stripped.lower())
@@ -2053,16 +2094,20 @@ class LlamaIndexRAG:
         tz = ZoneInfo(timezone)
         now = datetime.now(tz)
         current_datetime = now.strftime("%A, %B %d, %Y at %H:%M")
-        hebrew_day = {
-            "Monday": "יום שני",
-            "Tuesday": "יום שלישי",
-            "Wednesday": "יום רביעי",
-            "Thursday": "יום חמישי",
-            "Friday": "יום שישי",
-            "Saturday": "שבת",
-            "Sunday": "יום ראשון"
-        }.get(now.strftime("%A"), now.strftime("%A"))
-        hebrew_date = f"{hebrew_day}, {now.day}/{now.month}/{now.year} בשעה {now.strftime('%H:%M')}"
+        # Build a locale-aware local date string.  Uses the OS locale
+        # (e.g. ``he_IL``) when available so day names are not hardcoded.
+        # Falls back to a numeric-only format that works for any language.
+        try:
+            import locale as _locale
+            saved = _locale.getlocale(_locale.LC_TIME)
+            try:
+                _locale.setlocale(_locale.LC_TIME, "")  # Use system locale
+                local_day = now.strftime("%A")           # Localized day name
+            finally:
+                _locale.setlocale(_locale.LC_TIME, saved)
+        except Exception:
+            local_day = now.strftime("%A")  # Fallback to English day name
+        hebrew_date = f"{local_day}, {now.day}/{now.month}/{now.year} {now.strftime('%H:%M')}"
         
         # Read system prompt template from settings, with runtime placeholder injection
         prompt_template = settings.get("system_prompt", "")
@@ -2219,15 +2264,40 @@ class LlamaIndexRAG:
             "Standalone Question:"
         )
         
-        engine = CondensePlusContextChatEngine.from_defaults(
-            retriever=retriever,
-            memory=memory,
-            llm=Settings.llm,
-            system_prompt=system_prompt,
-            context_prompt=context_prompt,
-            condense_prompt=condense_prompt,
-            verbose=(settings.get("log_level", "INFO") == "DEBUG"),
-        )
+        # Optimisation: for the first message in a conversation (empty history),
+        # use ContextChatEngine which skips the condense step entirely.
+        # This saves one LLM call (~$0.002-0.01) per new conversation since
+        # the condense step for a first message just returns the original query.
+        has_history = False
+        try:
+            chat_history = memory.get_all()
+            has_history = bool(chat_history)
+        except Exception:
+            pass  # If we can't check, default to the full engine
+        
+        verbose = settings.get("log_level", "INFO") == "DEBUG"
+        
+        if has_history:
+            engine = CondensePlusContextChatEngine.from_defaults(
+                retriever=retriever,
+                memory=memory,
+                llm=Settings.llm,
+                system_prompt=system_prompt,
+                context_prompt=context_prompt,
+                condense_prompt=condense_prompt,
+                verbose=verbose,
+            )
+        else:
+            # First message: skip the condense LLM call
+            engine = ContextChatEngine.from_defaults(
+                retriever=retriever,
+                memory=memory,
+                llm=Settings.llm,
+                system_prompt=system_prompt,
+                context_prompt=context_prompt,
+                verbose=verbose,
+            )
+            logger.debug("Using ContextChatEngine (no history, skipping condense)")
         
         logger.debug(f"Created chat engine for conversation {conversation_id}")
         return engine

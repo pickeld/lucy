@@ -4,14 +4,22 @@ import email
 import logging
 import re
 import time
-import unicodedata
 import uuid
 from email.policy import default as default_email_policy
-from html.parser import HTMLParser
-from io import StringIO
 from typing import List, Optional
 
 from llama_index.core.schema import TextNode
+
+from utils.text_processing import (
+    MAX_CHUNK_CHARS,
+    CHUNK_OVERLAP_CHARS,
+    MIN_CONTENT_CHARS,
+    MIN_WORD_CHAR_RATIO,
+    is_quality_chunk,
+    split_text,
+    strip_html,
+    strip_unicode_control,
+)
 
 from .client import PaperlessClient
 
@@ -19,57 +27,6 @@ logger = logging.getLogger(__name__)
 
 # Default tag name applied to documents after RAG indexing
 DEFAULT_PROCESSED_TAG = "rag-indexed"
-
-# Maximum characters per chunk for embedding.
-# text-embedding-3-large has an 8191 token limit.
-# Many Paperless documents contain raw HTML, base64, or quoted-printable
-# encoded content where the char-to-token ratio is much worse than plain
-# text (~1 char/token for encoded data vs ~4 for English prose).
-# Using 6000 chars keeps us safely under the 8191 token limit even for
-# worst-case encoded content.
-MAX_CHUNK_CHARS = 6_000
-CHUNK_OVERLAP_CHARS = 200
-
-# Minimum useful content length after sanitization (characters).
-# Documents shorter than this after cleaning are skipped entirely.
-MIN_CONTENT_CHARS = 50
-
-# Minimum ratio of word-like characters in a chunk for it to be considered
-# useful for embedding.  Chunks below this threshold are mostly base64,
-# encoded data, or other noise.
-MIN_WORD_CHAR_RATIO = 0.40
-
-# Unicode categories to strip from document content.
-# Category "Cf" (Format) covers all invisible formatting characters:
-#   - RTL/LTR marks (U+200E, U+200F)
-#   - Zero-width space/joiner/non-joiner (U+200B–U+200D)
-#   - Directional overrides (U+202A–U+202E, U+2066–U+2069)
-#   - BOM (U+FEFF), soft hyphen (U+00AD), etc.
-# These are commonly inserted by OCR engines when processing
-# Hebrew/Arabic documents and break Qdrant's multilingual tokenizer,
-# preventing proper word matching in fulltext search.
-_STRIP_UNICODE_CATEGORIES = {"Cf"}
-
-
-def _strip_unicode_control(text: str) -> str:
-    """Remove Unicode format characters (category Cf) from text.
-
-    Uses :mod:`unicodedata` to identify characters by category rather
-    than maintaining a manual list of code points.  Category ``Cf``
-    (Format) covers all invisible formatting characters such as
-    RTL/LTR marks, zero-width joiners, directional overrides, BOM,
-    soft hyphens, etc.
-
-    Args:
-        text: Input string potentially containing control characters
-
-    Returns:
-        Cleaned string with format characters removed
-    """
-    return "".join(
-        ch for ch in text
-        if unicodedata.category(ch) not in _STRIP_UNICODE_CATEGORIES
-    )
 
 # Regex to extract numeric sequences (≥5 digits) from document content.
 # Used to populate a 'numbers' metadata field for reverse ID lookups.
@@ -104,41 +61,6 @@ _RE_HEADER_CONTINUATION = re.compile(
     r"(?<=\n)[ \t]+\S.*$",
     re.MULTILINE,
 )
-
-
-class _HTMLTextExtractor(HTMLParser):
-    """Minimal HTML-to-text extractor.
-
-    Strips all tags and returns concatenated text content.
-    """
-
-    def __init__(self):
-        super().__init__()
-        self._buf = StringIO()
-
-    def handle_data(self, data: str) -> None:
-        self._buf.write(data)
-
-    def get_text(self) -> str:
-        return self._buf.getvalue()
-
-
-def _strip_html(html: str) -> str:
-    """Remove HTML tags and return plain text.
-
-    Args:
-        html: String potentially containing HTML markup
-
-    Returns:
-        Plain text with tags removed
-    """
-    extractor = _HTMLTextExtractor()
-    try:
-        extractor.feed(html)
-        return extractor.get_text()
-    except Exception:
-        # If parsing fails, fall back to simple regex strip
-        return re.sub(r"<[^>]+>", " ", html)
 
 
 def _extract_mime_text_parts(raw: str) -> Optional[str]:
@@ -180,7 +102,7 @@ def _extract_mime_text_parts(raw: str) -> Optional[str]:
         elif ct == "text/html":
             payload = part.get_content()
             if isinstance(payload, str):
-                plain = _strip_html(payload).strip()
+                plain = strip_html(payload).strip()
                 if plain:
                     text_parts.append(plain)
 
@@ -214,7 +136,7 @@ def _sanitize_content(raw: str) -> str:
     # OCR engines (especially for Hebrew/Arabic) insert these characters
     # which break Qdrant's multilingual tokenizer and prevent fulltext
     # search from matching words like "דוד" wrapped in RTL marks (‫דוד‬).
-    raw = _strip_unicode_control(raw)
+    raw = strip_unicode_control(raw)
 
     # --- Step 1: Try structured MIME parsing first ---
     mime_text = _extract_mime_text_parts(raw)
@@ -248,7 +170,7 @@ def _sanitize_content(raw: str) -> str:
 
     # --- Step 3: Strip residual HTML ---
     if "<" in text and ">" in text:
-        text = _strip_html(text)
+        text = strip_html(text)
 
     # --- Step 4: Normalise whitespace ---
     # Collapse 3+ consecutive newlines to 2
@@ -260,85 +182,6 @@ def _sanitize_content(raw: str) -> str:
     return text
 
 
-def _is_quality_chunk(chunk: str) -> bool:
-    """Check whether a text chunk contains enough meaningful content.
-
-    Rejects chunks that are predominantly non-word characters (base64
-    residue, encoded data, random symbols) or too short to be useful.
-
-    Args:
-        chunk: A single text chunk
-
-    Returns:
-        True if the chunk passes quality checks
-    """
-    stripped = chunk.strip()
-    if len(stripped) < 20:
-        return False
-
-    # Count word-like characters (letters, digits, common punctuation, spaces)
-    # Hebrew/Arabic/Cyrillic etc. are included via \w
-    word_chars = len(re.findall(r"[\w\s.,;:!?'\"-]", stripped, re.UNICODE))
-    ratio = word_chars / len(stripped) if stripped else 0
-
-    if ratio < MIN_WORD_CHAR_RATIO:
-        logger.debug(
-            "Rejecting low-quality chunk (%.0f%% word chars, %d chars): %.60s...",
-            ratio * 100,
-            len(stripped),
-            stripped,
-        )
-        return False
-
-    return True
-
-
-def _split_text(
-    text: str,
-    max_chars: int = MAX_CHUNK_CHARS,
-    overlap: int = CHUNK_OVERLAP_CHARS,
-) -> List[str]:
-    """Split text into chunks that fit within the embedding model's token limit.
-    
-    Tries to split on paragraph boundaries (double newline) for cleaner chunks.
-    Falls back to hard character splits with overlap if paragraphs are too large.
-    
-    Args:
-        text: Full document text
-        max_chars: Maximum characters per chunk
-        overlap: Character overlap between consecutive chunks
-        
-    Returns:
-        List of text chunks (at least one element)
-    """
-    if len(text) <= max_chars:
-        return [text]
-    
-    chunks: List[str] = []
-    start = 0
-    while start < len(text):
-        end = start + max_chars
-        if end >= len(text):
-            chunks.append(text[start:])
-            break
-        
-        # Try to break at a paragraph boundary
-        boundary = text.rfind("\n\n", start, end)
-        if boundary == -1 or boundary <= start:
-            # Fall back to sentence boundary
-            boundary = text.rfind(". ", start, end)
-        if boundary == -1 or boundary <= start:
-            # Hard split
-            boundary = end
-        else:
-            boundary += 1  # Include the delimiter character
-        
-        chunks.append(text[start:boundary])
-        start = max(boundary - overlap, boundary)  # overlap only when hard-splitting
-        if boundary == end:
-            start = boundary - overlap  # Apply overlap on hard splits
-    
-    return chunks
 
 
 class DocumentSyncer:
@@ -569,11 +412,11 @@ class DocumentSyncer:
                         
                         # Split large documents into chunks to stay within
                         # the embedding model's token limit
-                        chunks = _split_text(content, MAX_CHUNK_CHARS, CHUNK_OVERLAP_CHARS)
+                        chunks = split_text(content, MAX_CHUNK_CHARS, CHUNK_OVERLAP_CHARS)
                         
                         # Quality-gate: drop chunks that are mostly noise
                         pre_filter = len(chunks)
-                        chunks = [c for c in chunks if _is_quality_chunk(c)]
+                        chunks = [c for c in chunks if is_quality_chunk(c)]
                         if pre_filter > len(chunks):
                             logger.info(
                                 f"Quality filter dropped {pre_filter - len(chunks)}/{pre_filter} "
@@ -615,40 +458,28 @@ class DocumentSyncer:
                         ))
                         numbers_str = " ".join(all_numbers) if all_numbers else ""
                         
-                        chunk_ok = True
+                        # Build all chunk nodes, then batch-embed in one API call
+                        chunk_nodes = []
                         for idx, chunk in enumerate(chunks):
                             chunk_meta = dict(base_metadata)
-                            # Store chunk text in 'message' metadata so fulltext
-                            # search on the 'message' field can find documents.
-                            # Use the full chunk text (bounded by MAX_CHUNK_CHARS)
-                            # so that keywords anywhere in the chunk are findable
-                            # via fulltext search — not just the first 2000 chars.
-                            # Previously truncated at 2000 chars which caused
-                            # fulltext search to miss important content like
-                            # children's names in divorce agreements.
                             chunk_meta["message"] = chunk
-                            # Store extracted numbers for reverse ID lookups
                             if numbers_str:
                                 chunk_meta["numbers"] = numbers_str
                             if len(chunks) > 1:
                                 chunk_meta["chunk_index"] = str(idx)
                                 chunk_meta["chunk_total"] = str(len(chunks))
                             
-                            # Prepend document title to embedding text so that
-                            # queries mentioning the document name (e.g. "הסכם
-                            # גירושין") boost relevance of ALL chunks from that
-                            # document, not just chunks that happen to contain
-                            # the title text.
                             embedding_text = f"Document: {title}\n\n{chunk}"
                             
-                            node = TextNode(
+                            chunk_nodes.append(TextNode(
                                 text=embedding_text,
                                 metadata=chunk_meta,
                                 id_=str(uuid.uuid4()),
-                            )
-                            
-                            if not self.rag.add_node(node):
-                                chunk_ok = False
+                            ))
+                        
+                        # Batch insert: single embedding API call + Qdrant upsert
+                        added = self.rag.add_nodes(chunk_nodes)
+                        chunk_ok = added == len(chunk_nodes)
                         
                         if chunk_ok:
                             synced += 1
