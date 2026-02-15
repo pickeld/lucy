@@ -721,7 +721,7 @@ class VoiceMessage(MediaMessageBase):
                 # Set message so it gets stored in RAG
                 if self.transcription:
                     caption = f" (caption: {self.message})" if self.message else ""
-                    self.message = f"[Voice message transcription] {self.transcription}{caption}"
+                    self.message = f"[הקלטה קולית / Voice recording transcription] {self.transcription}{caption}"
                     logger.info(f"Transcribed voice message: {self.transcription[:80]}...")
             finally:
                 # Clean up temp file

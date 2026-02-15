@@ -214,12 +214,18 @@ class ArchiveRetriever(BaseRetriever):
         )
         if recent:
             if results:
-                # Merge: deduplicate by node ID, keeping originals first
+                # Merge: interleave recency results at the FRONT of the list.
+                # This ensures recent short messages (voice transcriptions, etc.)
+                # aren't pushed out of the context budget by large documents.
                 existing_ids = {nws.node.id_ for nws in results if nws.node}
-                for nws in recent:
-                    if nws.node and nws.node.id_ not in existing_ids:
-                        existing_ids.add(nws.node.id_)
-                        results.append(nws)
+                new_recent = [
+                    nws for nws in recent
+                    if nws.node and nws.node.id_ not in existing_ids
+                ]
+                for nws in new_recent:
+                    existing_ids.add(nws.node.id_)
+                # Prepend recency results so they survive budget trimming
+                results = new_recent + results
             else:
                 # No semantic results — use recent messages as primary context
                 results = recent
@@ -239,17 +245,36 @@ class ArchiveRetriever(BaseRetriever):
         # With full Paperless document chunks (up to 6000 chars each) and sibling
         # expansion, the total context can easily exceed 50K tokens. Use
         # rag_max_context_tokens × 4 chars/token as the character budget.
-        # max_context_chars already computed above for early budget checks
+        # max_context_chars already computed above for early budget checks.
+        #
+        # Per-result cap: no single result may exceed 40% of the total budget.
+        # This prevents a few large Paperless documents from consuming all
+        # context space, ensuring shorter results (voice transcriptions, messages)
+        # also get included.
+        per_result_cap = int(max_context_chars * 0.4)
         total_chars = 0
         trimmed: List[NodeWithScore] = []
         for nws in results:
             node_text = getattr(nws.node, "text", "") if nws.node else ""
             text_len = len(node_text)
-            if total_chars + text_len > max_context_chars and trimmed:
+            # Cap oversized results (e.g., Paperless documents) so they
+            # don't consume the entire budget, leaving room for shorter
+            # results like voice transcriptions and messages.
+            effective_len = min(text_len, per_result_cap)
+            if text_len > per_result_cap and nws.node:
+                truncated_text = node_text[:per_result_cap] + "\n[...truncated...]"
+                truncated_node = TextNode(
+                    text=truncated_text,
+                    metadata=getattr(nws.node, "metadata", {}),
+                    id_=nws.node.id_,
+                )
+                nws = NodeWithScore(node=truncated_node, score=nws.score)
+                effective_len = len(truncated_text)
+            if total_chars + effective_len > max_context_chars and trimmed:
                 # Budget exhausted — stop adding more results
                 break
             trimmed.append(nws)
-            total_chars += text_len
+            total_chars += effective_len
         
         if len(trimmed) < len(results):
             logger.info(
