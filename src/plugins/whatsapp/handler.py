@@ -301,40 +301,176 @@ class MediaMessageBase(WhatsappMSG):
     def _load_media(self, payload: Dict[str, Any]) -> None:
         """Load and process media from payload.
         
+        Tries multiple strategies to obtain media content:
+        1. Inline base64 data from the webhook payload (media.data)
+        2. Media URL from the webhook payload (media.url), rewritten for Docker
+        3. WAHA API fallback to download media by message ID
+        
         Args:
             payload: The webhook payload containing media information
         """
         if not self.has_media:
             return
         
-        media = payload.get("media", {})
+        media = payload.get("media") or {}
         self.media_url = media.get('url')
         self.media_type = media.get('mimetype')
         
-        # Only fetch media if URL is present
-        if not self.media_url:
-            logger.warning(f"Media message has no URL, skipping media download.")
-            self.has_media = False
+        logger.debug(
+            f"Media payload: url={self.media_url}, mimetype={self.media_type}, "
+            f"has_data={'data' in media}, keys={list(media.keys())}"
+        )
+        
+        # Strategy 1: Inline base64 data from WAHA (some configs include it directly)
+        inline_data = media.get('data')
+        if inline_data:
+            logger.debug("Using inline base64 media data from webhook payload")
+            self.media_base64 = inline_data
+            self._save_media_debug(payload)
             return
+        
+        # Strategy 2: Media URL from webhook payload (rewrite host for Docker)
+        if self.media_url:
+            self._download_from_url(payload)
+            return
+        
+        # Strategy 3: Download via WAHA API using message ID
+        message_id = payload.get("id")
+        if message_id:
+            self._download_via_api(payload, message_id)
+            return
+        
+        logger.warning(
+            f"Media message has no URL, no inline data, and no message ID. "
+            f"Cannot download media. Media keys: {list(media.keys())}"
+        )
+        self.has_media = False
+    
+    def _download_from_url(self, payload: Dict[str, Any]) -> None:
+        """Download media from the URL provided in the webhook payload.
+        
+        Rewrites the URL host to use the configured WAHA base URL,
+        since WAHA may generate URLs with localhost which is unreachable
+        from other Docker containers.
+        """
+        from urllib.parse import urlparse, urlunparse
+        
+        parsed = urlparse(self.media_url or "")
+        waha_parsed = urlparse(settings.waha_base_url)
+        rewritten = parsed._replace(scheme=waha_parsed.scheme,
+                                     netloc=waha_parsed.netloc)
+        self.media_url = str(urlunparse(rewritten))
         
         try:
             response = httpx.get(
-                self.media_url, 
-                headers={"X-Api-Key": settings.waha_api_key}
+                self.media_url,  # guaranteed str after urlunparse
+                headers={"X-Api-Key": settings.waha_api_key},
+                timeout=30.0
             )
+            response.raise_for_status()
             self.media_base64 = base64.standard_b64encode(response.content).decode("utf-8")
-            
-            if settings.log_level == "DEBUG" and self.media_type:
-                # save media to file
-                extension = self.media_type.split("/")[-1]
+            self._save_media_debug(payload)
+        except Exception as e:
+            logger.error(f"Failed to download media from {self.media_url}: {e}")
+            self.has_media = False
+    
+    def _download_via_api(self, payload: Dict[str, Any], message_id: str) -> None:
+        """Download media via the WAHA API when no URL is provided.
+        
+        Uses the WAHA session API to fetch media by message ID.
+        This is the fallback when WAHA doesn't include media URLs
+        in the webhook payload (e.g., file storage not enabled).
+        
+        Tries multiple WAHA API endpoint patterns since the exact
+        endpoint varies by WAHA version.
+        """
+        session = settings.waha_session_name
+        waha_base = settings.waha_base_url
+        headers = {
+            "X-Api-Key": settings.waha_api_key,
+            "Content-Type": "application/json"
+        }
+        
+        # Build the chat ID from the payload for endpoints that need it
+        chat_id = payload.get("from") or ""
+        
+        # Try multiple WAHA API endpoint patterns
+        attempts = [
+            # WAHA Plus POST endpoint (most common)
+            ("POST", f"{waha_base}/api/{session}/messages/download-media",
+             {"messageId": message_id}),
+            # Alternative POST format
+            ("POST", f"{waha_base}/api/messages/download",
+             {"session": session, "messageId": message_id}),
+            # Chat-scoped endpoint
+            ("POST", f"{waha_base}/api/{session}/chats/{chat_id}/messages/{message_id}/download",
+             None),
+        ]
+        
+        for method, api_url, body in attempts:
+            logger.debug(f"Trying media download: {method} {api_url}")
+            try:
+                if method == "POST":
+                    response = httpx.post(
+                        api_url, headers=headers,
+                        json=body, timeout=30.0
+                    )
+                else:
+                    response = httpx.get(
+                        api_url, headers=headers, timeout=30.0
+                    )
+                
+                if response.status_code == 404:
+                    logger.debug(f"Endpoint not found (404), trying next: {api_url}")
+                    continue
+                
+                response.raise_for_status()
+                
+                # Response may be binary media or JSON with base64 data
+                resp_content_type = response.headers.get("content-type", "")
+                if "application/json" in resp_content_type:
+                    data = response.json()
+                    self.media_base64 = data.get("data") or data.get("base64")
+                    self.media_type = self.media_type or data.get("mimetype")
+                else:
+                    # Binary media response
+                    self.media_base64 = base64.standard_b64encode(response.content).decode("utf-8")
+                    self.media_type = self.media_type or resp_content_type.split(";")[0].strip()
+                
+                if self.media_base64:
+                    logger.debug(
+                        f"Downloaded media via API ({len(self.media_base64)} chars base64) "
+                        f"from {api_url}"
+                    )
+                    self._save_media_debug(payload)
+                    return
+                else:
+                    logger.debug(f"Empty response from {api_url}, trying next")
+                    continue
+                    
+            except Exception as e:
+                logger.debug(f"Failed {method} {api_url}: {e}")
+                continue
+        
+        # All attempts failed
+        logger.error(
+            f"All WAHA media download attempts failed for message {message_id}. "
+            f"Media keys in payload: {list((payload.get('media') or {}).keys())}"
+        )
+        self.has_media = False
+    
+    def _save_media_debug(self, payload: Dict[str, Any]) -> None:
+        """Save media to disk when in DEBUG log level."""
+        if settings.log_level == "DEBUG" and self.media_type and self.media_base64:
+            try:
+                extension = self.media_type.split("/")[-1].split(";")[0]
                 filename = f"tmp/images/media_{payload.get('id')}.{extension}"
                 with open(filename, "wb") as f:
-                    f.write(response.content)
+                    f.write(base64.b64decode(self.media_base64))
                 logger.debug(f"Saved media to {filename}")
                 self.saved_path = filename
-        except Exception as e:
-            logger.error(f"Failed to download media: {e}")
-            self.has_media = False
+            except Exception as e:
+                logger.debug(f"Failed to save media debug file: {e}")
     
     def _media_json(self) -> Optional[Dict[str, Any]]:
         """Generate media-specific JSON structure.
