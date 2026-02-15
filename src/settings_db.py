@@ -115,6 +115,7 @@ _REVERSE_ENV_MAP: Dict[str, str] = {v: k for k, v in ENV_KEY_MAP.items()}
 
 # Default system prompt template — {current_datetime} and {hebrew_date} are
 # injected at runtime by LlamaIndexRAG._build_system_prompt().
+# The known contacts list is appended dynamically after template formatting.
 _DEFAULT_SYSTEM_PROMPT = (
     "You are a helpful AI assistant for a personal knowledge base and message archive search system.\n"
     "You have access to retrieved messages and documents from multiple sources "
@@ -133,7 +134,16 @@ _DEFAULT_SYSTEM_PROMPT = (
     "6. If the question is general (like \"what day is today?\"), answer directly "
     "without referencing the archive.\n"
     "7. Answer in the SAME LANGUAGE as the question.\n"
-    "8. Be concise but thorough. Prefer specific facts over vague summaries."
+    "8. Be concise but thorough. Prefer specific facts over vague summaries.\n"
+    "9. DISAMBIGUATION: When the user mentions a person's name (first name only) "
+    "that matches multiple people in the known contacts list below, ASK the user "
+    "to clarify which person they mean BEFORE answering. Present the matching "
+    "names as numbered options. For example: 'I found multiple people named Doron: "
+    "1) Doron Yazkirovich 2) דורון עלאני — which one did you mean?' "
+    "Note: names may appear in different languages/scripts (Hebrew and English) "
+    "but refer to the same first name (e.g., דורון = Doron, דוד = David). "
+    "Only ask if there is genuine ambiguity — if the user provided a full name "
+    "or enough context to identify the person, answer directly."
 )
 
 # Each tuple: (key, default_value, category, type, description)

@@ -2192,10 +2192,15 @@ class LlamaIndexRAG:
         return LlamaIndexRAG._chat_store
     
     def _build_system_prompt(self) -> str:
-        """Build the system prompt with current date/time.
+        """Build the system prompt with current date/time and known contacts.
+        
+        Injects:
+        - Current date/time ({current_datetime}, {hebrew_date})
+        - Dynamic list of all known sender/contact names from the archive
+          so the LLM can disambiguate when a name matches multiple people
         
         Returns:
-            System prompt string with dynamic date injection
+            System prompt string with dynamic date and contact list injection
         """
         timezone = settings.get("timezone", "Asia/Jerusalem")
         tz = ZoneInfo(timezone)
@@ -2238,13 +2243,40 @@ class LlamaIndexRAG:
                 "6. If the question is general (like \"what day is today?\"), answer directly "
                 "without referencing the archive.\n"
                 "7. Answer in the SAME LANGUAGE as the question.\n"
-                "8. Be concise but thorough. Prefer specific facts over vague summaries."
+                "8. Be concise but thorough. Prefer specific facts over vague summaries.\n"
+                "9. DISAMBIGUATION: When the user mentions a person's name (first name only) "
+                "that matches multiple people in the known contacts list below, ASK the user "
+                "to clarify which person they mean BEFORE answering. Present the matching "
+                "names as numbered options. For example: 'I found multiple people named Doron: "
+                "1) Doron Yazkirovich 2) דורון עלאני — which one did you mean?' "
+                "Note: names may appear in different languages/scripts (Hebrew and English) "
+                "but refer to the same first name (e.g., דורון = Doron, דוד = David). "
+                "Only ask if there is genuine ambiguity — if the user provided a full name "
+                "or enough context to identify the person, answer directly."
             )
         
-        return prompt_template.format(
+        prompt = prompt_template.format(
             current_datetime=current_datetime,
             hebrew_date=hebrew_date,
         )
+        
+        # Append the dynamic known contacts list so the LLM can disambiguate
+        # names that match multiple people (e.g., "דורון" → Doron Yazkirovich
+        # vs דורון עלאני).  The list is fetched from Redis cache (fast) and
+        # only adds ~2K tokens even with 500+ contacts.
+        try:
+            sender_list = self.get_sender_list()
+            if sender_list:
+                contacts_str = ", ".join(sender_list)
+                prompt += (
+                    f"\n\nKnown Contacts ({len(sender_list)} people):\n"
+                    f"{contacts_str}"
+                )
+                logger.debug(f"Injected {len(sender_list)} contacts into system prompt")
+        except Exception as e:
+            logger.debug(f"Failed to inject contacts into system prompt (non-fatal): {e}")
+        
+        return prompt
     
     def create_chat_engine(
         self,
