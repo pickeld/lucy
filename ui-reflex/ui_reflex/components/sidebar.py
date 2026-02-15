@@ -275,18 +275,36 @@ def _bottom_section() -> rx.Component:
             ),
             rx.fragment(),
         ),
-        rx.link(
-            rx.flex(
-                rx.icon("settings", size=16, class_name="text-sidebar-muted"),
-                rx.text("Settings", class_name="text-sm text-sidebar-text ml-2"),
-                align="center",
-                class_name=(
-                    "px-3 py-2 rounded-lg hover:bg-sidebar-hover "
-                    "transition-colors duration-150 cursor-pointer"
+        rx.flex(
+            rx.link(
+                rx.flex(
+                    rx.icon("settings", size=16, class_name="text-sidebar-muted"),
+                    rx.text("Settings", class_name="text-sm text-sidebar-text ml-2"),
+                    align="center",
+                    class_name=(
+                        "px-3 py-2 rounded-lg hover:bg-sidebar-hover "
+                        "transition-colors duration-150 cursor-pointer"
+                    ),
                 ),
+                href="/settings",
+                underline="none",
+                class_name="flex-1",
             ),
-            href="/settings",
-            underline="none",
+            rx.link(
+                rx.flex(
+                    rx.icon("users", size=16, class_name="text-sidebar-muted"),
+                    rx.text("Entities", class_name="text-sm text-sidebar-text ml-2"),
+                    align="center",
+                    class_name=(
+                        "px-3 py-2 rounded-lg hover:bg-sidebar-hover "
+                        "transition-colors duration-150 cursor-pointer"
+                    ),
+                ),
+                href="/entities",
+                underline="none",
+            ),
+            direction="row",
+            gap="0",
         ),
         class_name="pb-3",
     )
