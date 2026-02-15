@@ -85,7 +85,8 @@ services:
     container_name: lucy-ui
     restart: unless-stopped
     environment:
-      API_URL: "http://app:8765"
+      API_URL: "http://app:8765"           # Server-to-server (Reflex backend → Flask)
+      PUBLIC_API_URL: "http://localhost:8765"  # Browser-facing (iframe src)
     ports:
       - "3001:3000"   # Reflex frontend (3000 taken by WAHA)
       - "8000:8000"   # Reflex backend (must match frontend's expected port)

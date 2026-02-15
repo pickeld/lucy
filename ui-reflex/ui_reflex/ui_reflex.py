@@ -16,8 +16,13 @@ from .components.layout import layout
 from .components.chat_area import chat_area
 from .components.settings_page import settings_page
 
-# Backend API URL for embedding the entities UI in an iframe
-_API_URL = os.environ.get("API_URL", "http://localhost:8765")
+# Backend API URL for embedding the entities UI in an iframe.
+# PUBLIC_API_URL is the browser-reachable address (differs from API_URL in Docker,
+# where API_URL is an internal hostname like "http://app:8765" that browsers can't resolve).
+_PUBLIC_API_URL = os.environ.get(
+    "PUBLIC_API_URL",
+    os.environ.get("API_URL", "http://localhost:8765"),
+)
 
 
 # =========================================================================
@@ -38,7 +43,7 @@ def entities() -> rx.Component:
     """Entities page — sidebar + entity management UI (iframe to Flask backend)."""
     return layout(
         rx.el.iframe(
-            src=f"{_API_URL}/entities/ui",
+            src=f"{_PUBLIC_API_URL}/entities/ui",
             width="100%",
             height="100%",
             style={
