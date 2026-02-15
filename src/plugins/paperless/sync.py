@@ -620,10 +620,13 @@ class DocumentSyncer:
                             chunk_meta = dict(base_metadata)
                             # Store chunk text in 'message' metadata so fulltext
                             # search on the 'message' field can find documents.
-                            # Use 2000 chars (up from 1000) to improve fulltext
-                            # coverage for documents with key info beyond the
-                            # first paragraph (e.g., birth dates, ID numbers).
-                            chunk_meta["message"] = chunk[:2000]
+                            # Use the full chunk text (bounded by MAX_CHUNK_CHARS)
+                            # so that keywords anywhere in the chunk are findable
+                            # via fulltext search — not just the first 2000 chars.
+                            # Previously truncated at 2000 chars which caused
+                            # fulltext search to miss important content like
+                            # children's names in divorce agreements.
+                            chunk_meta["message"] = chunk
                             # Store extracted numbers for reverse ID lookups
                             if numbers_str:
                                 chunk_meta["numbers"] = numbers_str

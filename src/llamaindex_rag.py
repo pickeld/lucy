@@ -151,6 +151,12 @@ class ArchiveRetriever(BaseRetriever):
         if results:
             results = self._rag.expand_context(results, max_total=self._k * 2)
         
+        # Document chunk expansion: when a Paperless document chunk is found,
+        # fetch ALL sibling chunks from the same document so the LLM sees the
+        # complete document content, not just the chunk that matched the query.
+        if results:
+            results = self._rag.expand_document_chunks(results, max_total=self._k * 3)
+        
         # Always supplement with recent messages so the LLM has temporal
         # awareness (knows what the actual latest messages are). This
         # ensures queries like "what's the last message?" get the correct
@@ -183,6 +189,29 @@ class ArchiveRetriever(BaseRetriever):
                 metadata={"source": "system", "note": "no_results"},
             )
             results = [NodeWithScore(node=placeholder, score=0.0)]
+        
+        # Context budget: cap total text to avoid exceeding LLM token limits.
+        # With full Paperless document chunks (up to 6000 chars each) and sibling
+        # expansion, the total context can easily exceed 50K tokens. Use
+        # rag_max_context_tokens × 4 chars/token as the character budget.
+        max_context_chars = self._rag.MAX_CONTEXT_TOKENS * 4  # ~12000 chars default
+        total_chars = 0
+        trimmed: List[NodeWithScore] = []
+        for nws in results:
+            node_text = getattr(nws.node, "text", "") if nws.node else ""
+            text_len = len(node_text)
+            if total_chars + text_len > max_context_chars and trimmed:
+                # Budget exhausted — stop adding more results
+                break
+            trimmed.append(nws)
+            total_chars += text_len
+        
+        if len(trimmed) < len(results):
+            logger.info(
+                f"Context budget trimmed {len(results)} → {len(trimmed)} results "
+                f"({total_chars} chars, budget={max_context_chars})"
+            )
+            results = trimmed
         
         return results
 
@@ -925,12 +954,31 @@ class LlamaIndexRAG:
         # Resolve a human-readable source label
         source_label = LlamaIndexRAG._SOURCE_LABELS.get(source, source.capitalize() if source else "Unknown")
         
-        # WhatsApp messages have a 'message' field in metadata
+        # For Paperless documents, prefer _node_content (full chunk text, up to
+        # 6000 chars) over the 'message' metadata field which may be truncated
+        # (old syncs stored only 2000 chars in 'message').  This ensures the LLM
+        # sees the complete document chunk without requiring a re-sync.
+        if source == "paperless":
+            node_content = payload.get("_node_content")
+            if node_content and isinstance(node_content, str):
+                try:
+                    content_dict = json.loads(node_content)
+                    text = content_dict.get("text")
+                    if text:
+                        formatted_time = format_timestamp(str(timestamp))
+                        if sender and sender != "Unknown":
+                            return f"[{source_label} | {formatted_time}] {sender} in {chat_name}:\n{text}"
+                        return f"[{source_label} | {formatted_time}] Document '{chat_name}':\n{text}"
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            # Fall through to 'message' field if _node_content unavailable
+        
+        # WhatsApp messages (and Paperless fallback) use the 'message' metadata field
         if message:
             formatted_time = format_timestamp(str(timestamp))
             return f"[{source_label} | {formatted_time}] {sender} in {chat_name}: {message}"
         
-        # Paperless/generic documents: extract text from _node_content
+        # Generic documents without 'message': extract text from _node_content
         node_content = payload.get("_node_content")
         if node_content and isinstance(node_content, str):
             try:
@@ -938,11 +986,9 @@ class LlamaIndexRAG:
                 text = content_dict.get("text")
                 if text:
                     formatted_time = format_timestamp(str(timestamp))
-                    # Truncate very long document text for display
-                    display_text = text[:2000] if len(text) > 2000 else text
                     if sender and sender != "Unknown":
-                        return f"[{source_label} | {formatted_time}] {sender} in {chat_name}:\n{display_text}"
-                    return f"[{source_label} | {formatted_time}] Document '{chat_name}':\n{display_text}"
+                        return f"[{source_label} | {formatted_time}] {sender} in {chat_name}:\n{text}"
+                    return f"[{source_label} | {formatted_time}] Document '{chat_name}':\n{text}"
             except (json.JSONDecodeError, TypeError):
                 pass
         
@@ -1581,6 +1627,124 @@ class LlamaIndexRAG:
             logger.debug(f"Context expansion failed (non-critical): {e}")
             return results
     
+    def expand_document_chunks(
+        self,
+        results: List[NodeWithScore],
+        max_total: int = 30,
+    ) -> List[NodeWithScore]:
+        """Expand results by fetching ALL sibling chunks from matched Paperless documents.
+        
+        When a Paperless document chunk is found in search results, this method
+        fetches all other chunks from the same document using the source_id prefix.
+        This ensures the LLM sees the complete document content — not just the
+        chunk that happened to match the query semantically.
+        
+        For example, if the query "how many children does David have?" matches a
+        custody clause chunk of a divorce agreement, this will also fetch the
+        preamble chunk that lists the children's names and birthdates.
+        
+        Only applies to multi-chunk Paperless documents (source_id starts with
+        "paperless:"). WhatsApp messages and single-chunk documents are unaffected.
+        
+        Args:
+            results: Original search results (may include Paperless document chunks)
+            max_total: Maximum total nodes to return after expansion
+            
+        Returns:
+            Merged list of original results + sibling document chunks, deduplicated
+        """
+        if not results:
+            return results
+        
+        try:
+            # Collect unique Paperless document IDs from results
+            # source_id format for Paperless: "paperless:{doc_id}"
+            doc_ids: set = set()
+            existing_ids: set = set()
+            
+            for nws in results:
+                node = nws.node
+                if not node:
+                    continue
+                existing_ids.add(node.id_)
+                metadata = getattr(node, "metadata", {})
+                source = metadata.get("source", "")
+                source_id = metadata.get("source_id", "")
+                # Only expand Paperless multi-chunk documents
+                if source == "paperless" and source_id.startswith("paperless:"):
+                    doc_id = source_id  # e.g. "paperless:123"
+                    # Check if this document has multiple chunks
+                    chunk_total = metadata.get("chunk_total")
+                    if chunk_total and int(chunk_total) > 1:
+                        doc_ids.add(doc_id)
+            
+            if not doc_ids:
+                return results
+            
+            budget = max_total - len(results)
+            if budget <= 0:
+                return results
+            
+            # Fetch sibling chunks for each document
+            sibling_nodes: List[NodeWithScore] = []
+            per_doc_limit = max(5, budget // len(doc_ids))
+            
+            for doc_source_id in doc_ids:
+                try:
+                    records, _ = self.qdrant_client.scroll(
+                        collection_name=self.COLLECTION_NAME,
+                        scroll_filter=Filter(must=[
+                            FieldCondition(
+                                key="source_id",
+                                match=MatchValue(value=doc_source_id)
+                            )
+                        ]),
+                        limit=per_doc_limit,
+                        with_payload=True,
+                        with_vectors=False,
+                    )
+                    
+                    for record in records:
+                        record_id = str(record.id)
+                        if record_id in existing_ids:
+                            continue  # Skip chunks already in results
+                        existing_ids.add(record_id)
+                        
+                        payload = record.payload or {}
+                        text = self._extract_text_from_payload(payload)
+                        if text:
+                            node = TextNode(
+                                text=text,
+                                metadata={
+                                    mk: mv for mk, mv in payload.items()
+                                    if not mk.startswith("_")
+                                },
+                                id_=record_id,
+                            )
+                            # Score slightly below original results
+                            sibling_nodes.append(
+                                NodeWithScore(node=node, score=0.45)
+                            )
+                            
+                except Exception as e:
+                    logger.debug(
+                        f"Document chunk expansion for '{doc_source_id}' failed: {e}"
+                    )
+                    continue
+            
+            if sibling_nodes:
+                logger.info(
+                    f"Document chunk expansion added {len(sibling_nodes)} sibling "
+                    f"chunks from {len(doc_ids)} document(s)"
+                )
+                results = results + sibling_nodes
+            
+            return results[:max_total]
+            
+        except Exception as e:
+            logger.debug(f"Document chunk expansion failed (non-critical): {e}")
+            return results
+    
     def search(
         self,
         query: str,
@@ -1878,6 +2042,10 @@ class LlamaIndexRAG:
             "new relevant information but you already discussed the topic in previous "
             "turns, use that prior context to answer — do NOT say 'no results found' "
             "when you already have the information from earlier in the conversation.\n"
+            "When documents mention related concepts (e.g., 'minors'/'קטינים' implies "
+            "children exist, a 'divorce agreement'/'הסכם גירושין' implies the parties "
+            "were married), EXTRACT and REPORT that implicit information rather than "
+            "saying no results were found. Partial answers are better than no answer.\n"
             "Only say no relevant messages were found if BOTH the retrieved context "
             "AND the chat history lack the information needed to answer."
         )
