@@ -42,7 +42,7 @@ def _conversation_view() -> rx.Component:
         ),
         # Messages
         rx.foreach(
-            AppState.messages,
+            AppState.safe_messages,
             message_bubble,
         ),
         # Typing indicator

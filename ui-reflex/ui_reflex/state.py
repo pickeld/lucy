@@ -258,6 +258,30 @@ class AppState(rx.State):
     # =====================================================================
 
     @rx.var(cache=True)
+    def safe_messages(self) -> list[dict[str, str]]:
+        """Messages with all rich content fields guaranteed to exist.
+        
+        Normalizes message dicts so that old messages (loaded from DB
+        before the rich content feature) have empty string defaults
+        for image_urls, ics_url, button_options, etc. — preventing
+        JavaScript 'undefined.split()' errors in the Reflex component.
+        """
+        _required_keys = (
+            "role", "content", "sources", "cost", "rich_content",
+            "image_urls", "image_captions",
+            "ics_url", "ics_title",
+            "button_prompt", "button_options",
+        )
+        result: list[dict[str, str]] = []
+        for msg in self.messages:
+            normalized = dict(msg)
+            for key in _required_keys:
+                if key not in normalized:
+                    normalized[key] = ""
+            result.append(normalized)
+        return result
+
+    @rx.var(cache=True)
     def show_chat(self) -> bool:
         """Whether to show the chat view (vs empty state)."""
         return bool(self.messages) or bool(self.conversation_id)
