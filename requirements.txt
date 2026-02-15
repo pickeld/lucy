@@ -38,3 +38,6 @@ google-auth-oauthlib>=1.0
 # Attachment text extraction
 pypdf>=3.0
 python-docx>=0.8
+
+# Calendar event generation
+icalendar>=5.0.0
