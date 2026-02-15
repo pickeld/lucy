@@ -1096,6 +1096,78 @@ class LlamaIndexRAG:
         
         return None
     
+    # =========================================================================
+    # Cross-script contact name expansion for fulltext search
+    # =========================================================================
+    
+    def _expand_tokens_with_contact_names(self, tokens: List[str]) -> List[str]:
+        """Expand query tokens with cross-script contact name matches.
+        
+        When a query contains a Hebrew name like 'שירן' that matches a contact
+        stored as 'Shiran Waintrob' in English (or vice versa), this method adds
+        the alternative-script name tokens so fulltext search on sender/chat_name
+        fields can find the match.
+        
+        Uses the known contacts list (Redis-cached) to build a first-name →
+        full-name-tokens mapping. Each contact's first name (lowercased) maps
+        to all parts of the full name. When a query token matches a known first
+        name, the full name parts are added as additional search tokens.
+        
+        This handles both directions:
+        - Hebrew query → English-stored names (שירן → Shiran, Waintrob)
+        - English query → Hebrew-stored names (Doron → דורון, עלאני)
+        
+        Args:
+            tokens: Original query tokens (from _tokenize_query)
+            
+        Returns:
+            Expanded token list (originals + cross-script contact name parts)
+        """
+        try:
+            contacts = self.get_sender_list()
+            if not contacts:
+                return tokens
+            
+            # Also include chat names (DM chats use the contact name as chat_name)
+            chat_names = self.get_chat_list()
+            all_names = set(contacts)
+            if chat_names:
+                all_names.update(chat_names)
+            
+            # Build first_name (lowercased) → set of full name parts mapping.
+            # E.g., {"shiran": {"Shiran", "Waintrob"}, "דורון": {"דורון", "עלאני"}}
+            name_map: Dict[str, set] = {}
+            for contact in all_names:
+                parts = contact.split()
+                if not parts:
+                    continue
+                first = parts[0].lower()
+                all_parts = set(parts)
+                name_map.setdefault(first, set()).update(all_parts)
+            
+            # Check each token against the name map
+            expanded = list(tokens)
+            seen = {t.lower() for t in tokens}
+            
+            for token in tokens:
+                low = token.lower()
+                if low in name_map:
+                    for name_part in name_map[low]:
+                        if name_part.lower() not in seen:
+                            seen.add(name_part.lower())
+                            expanded.append(name_part)
+            
+            if len(expanded) > len(tokens):
+                logger.debug(
+                    f"Cross-script name expansion: {len(tokens)} → {len(expanded)} tokens "
+                    f"(added: {[t for t in expanded[len(tokens):]]})"
+                )
+            
+            return expanded
+        except Exception as e:
+            logger.debug(f"Cross-script name expansion failed (non-critical): {e}")
+            return tokens
+    
     # Field-aware full-text search scores: sender matches are most valuable
     # because users often ask "what did X say about Y?"
     FULLTEXT_SCORE_SENDER = float(settings.get("rag_fulltext_score_sender", "0.95"))
@@ -1474,6 +1546,13 @@ class LlamaIndexRAG:
             import re as _re_local
             numeric_tokens = [t for t in tokens if _re_local.fullmatch(r"\d{5,}", t)]
             
+            # Cross-script contact name expansion: when a query token matches
+            # a known contact's first name (in any script), add the contact's
+            # full name parts as additional tokens.  This ensures that a Hebrew
+            # query like "שירן" also finds "Shiran Waintrob" in the sender
+            # field, and vice versa.  Only used for sender/chat_name fields.
+            contact_tokens = self._expand_tokens_with_contact_names(tokens)
+            
             # Search each field with OR-matched tokens, different scores.
             # Skip sender field when filter_sender is set — the exact-match
             # filter already constrains results to that sender, so fulltext
@@ -1494,8 +1573,14 @@ class LlamaIndexRAG:
             best_nodes: Dict[str, NodeWithScore] = {}
             
             for field_name, field_score in field_searches:
-                # For the 'numbers' field, only use numeric tokens
-                search_tokens = numeric_tokens if field_name == "numbers" else tokens
+                # Use contact-expanded tokens for sender/chat_name (cross-script),
+                # numeric tokens for numbers field, original tokens for message.
+                if field_name == "numbers":
+                    search_tokens = numeric_tokens
+                elif field_name in ("sender", "chat_name"):
+                    search_tokens = contact_tokens
+                else:
+                    search_tokens = tokens
                 results = self._fulltext_search_by_field(
                     field_name=field_name,
                     tokens=search_tokens,
@@ -2427,6 +2512,12 @@ class LlamaIndexRAG:
             "children exist, a 'divorce agreement'/'הסכם גירושין' implies the parties "
             "were married), EXTRACT and REPORT that implicit information rather than "
             "saying no results were found. Partial answers are better than no answer.\n"
+            "When the user asks for suggestions or advice about a person, base your "
+            "recommendations on the SPECIFIC situation described in the retrieved messages "
+            "and conversation history. Do not give generic advice — tailor it to what the "
+            "person is actually going through as evidenced by the messages (e.g., if "
+            "messages show anxiety about a medical procedure, give procedure-specific advice, "
+            "not generic stress management tips).\n"
             "Only say no relevant messages were found if BOTH the retrieved context "
             "AND the chat history lack the information needed to answer."
         )
@@ -2461,6 +2552,16 @@ class LlamaIndexRAG:
             "- If the user responds with just a person's name (disambiguation), "
             "combine it with the original question from chat history to form a "
             "complete standalone query. Keep the name in its original script.\n"
+            "- NUMBERED DISAMBIGUATION: When the user responds with JUST A NUMBER "
+            "(like '1', '2', '3') to a disambiguation question in the chat history, "
+            "map that number to the corresponding person name from the numbered "
+            "options list in the assistant's previous message, then combine it with "
+            "the ORIGINAL question to form a complete standalone query. Use the name "
+            "EXACTLY as it appeared in the numbered options (same script).\n"
+            "- When a follow-up question references someone discussed in previous "
+            "turns (e.g., 'How old is she?', 'בת כמה שירן?'), ALWAYS include the "
+            "person's FULL NAME (as established in the conversation) in the rewritten "
+            "query to maximize search effectiveness.\n"
             "- If there is NO chat history, rewrite the query to be MORE "
             "EXPLICIT and DETAILED for search. Expand shorthand, resolve "
             "ambiguity, and add related terms the user is implicitly asking "
@@ -2477,6 +2578,14 @@ class LlamaIndexRAG:
             "  Follow-up: 'Doron Yazkirovich' → 'What did Doron Yazkirovich ask me?'\n"
             "- Chat: 'מה דורון שאל אותי?' → 'לאיזה דורון? 1) Doron Yazkirovich 2) דורון עלאני'\n"
             "  Follow-up: 'דורון עלאני' → 'מה דורון עלאני שאל אותי?'\n"
+            "- Chat: 'מה שירן עוברת?' → 'מצאתי: 1) Shiran Waintrob. לאיזה שירן?'\n"
+            "  Follow-up: '1' → 'מה Shiran Waintrob עוברת? What is Shiran Waintrob going through?'\n"
+            "- Chat: 'What did Doron ask me?' → 'Multiple: 1) Doron Yazkirovich 2) דורון עלאני'\n"
+            "  Follow-up: '2' → 'What did דורון עלאני ask me?'\n"
+            "- Chat: discussed Shiran Waintrob's stress about an upcoming event\n"
+            "  Follow-up: 'בת כמה שירן?' → 'מה הגיל או תאריך הלידה של Shiran Waintrob?'\n"
+            "- Chat: discussed Shiran Waintrob's situation\n"
+            "  Follow-up: 'מה אתה מציע לה?' → 'What advice for Shiran Waintrob regarding her situation?'\n"
             "- No history. Message: 'בן כמה בן פיקל?'\n"
             "  → 'מה הגיל או תאריך הלידה של הבן של פיקל?'\n"
             "- No history. Message: 'How old is David?'\n"
