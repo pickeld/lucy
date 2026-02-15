@@ -1493,13 +1493,20 @@ def _format_sources(sources: list[dict]) -> str:
 
     The ``content`` field already contains a cleanly formatted string from
     the RAG layer in the form ``Source | date | item text``, so we only
-    need to number the entries.  No redundant header or score display.
+    need to number the entries and append a relevance score.
+
+    Scores > 1 are raw timestamps from recency search and are not shown.
+    Scores between 0 and 1 are displayed as percentages.
     """
     if not sources:
         return ""
     lines: list[str] = []
     for i, src in enumerate(sources):
         content = src.get("content", "")[:300]
+        score = src.get("score")
+        # Only show score when it's a meaningful relevance value (0–1 range).
+        # Scores > 1 are Unix timestamps from recency search — skip those.
+        score_str = f" ({score:.0%})" if score and 0 < score <= 1 else ""
         if content:
-            lines.append(f"**{i + 1}.** {content}{'…' if len(content) >= 300 else ''}\n")
+            lines.append(f"**{i + 1}.** {content}{'…' if len(content) >= 300 else ''}{score_str}\n")
     return "\n".join(lines)

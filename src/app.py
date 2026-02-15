@@ -691,8 +691,10 @@ def export_conversation_endpoint(conversation_id: str):
                         lines.append("")
                         for i, src in enumerate(src_list):
                             src_content = src.get("content", "")[:300]
+                            score = src.get("score")
+                            score_str = f" ({score:.0%})" if score and 0 < score <= 1 else ""
                             if src_content:
-                                lines.append(f"**{i + 1}.** {src_content}{'…' if len(src_content) >= 300 else ''}")
+                                lines.append(f"**{i + 1}.** {src_content}{'…' if len(src_content) >= 300 else ''}{score_str}")
                             else:
                                 lines.append(f"**{i + 1}.** _(empty source)_")
                             lines.append("")
