@@ -31,6 +31,9 @@ print("✅ Utils imported", flush=True)
 import conversations_db
 print("✅ Conversations DB imported", flush=True)
 
+import entity_db
+print("✅ Entity DB imported", flush=True)
+
 import cost_db
 from cost_meter import METER
 print("✅ Cost tracking imported", flush=True)
@@ -993,6 +996,209 @@ def costs_breakdown():
         trace = traceback.format_exc()
         logger.error(f"Cost breakdown error: {e}\n{trace}")
         return jsonify({"error": str(e)}), 500
+
+
+# =============================================================================
+# ENTITY STORE ENDPOINTS
+# =============================================================================
+
+@app.route("/entities", methods=["GET"])
+def list_entities():
+    """List all person entities with summary info."""
+    try:
+        query = request.args.get("q")
+        if query:
+            persons = entity_db.search_persons(query)
+        else:
+            persons = entity_db.get_all_persons_summary()
+        return jsonify({"persons": persons, "count": len(persons)}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Entity list error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/entities/stats", methods=["GET"])
+def entity_stats():
+    """Get entity store statistics."""
+    try:
+        stats = entity_db.get_stats()
+        return jsonify(stats), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/entities/<int:person_id>", methods=["GET"])
+def get_entity(person_id: int):
+    """Get a person entity with all facts, aliases, and relationships."""
+    try:
+        person = entity_db.get_person(person_id)
+        if not person:
+            return jsonify({"error": "Person not found"}), 404
+        return jsonify(person), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Entity get error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/entities/<int:person_id>", methods=["DELETE"])
+def delete_entity(person_id: int):
+    """Delete a person entity and all associated data."""
+    try:
+        deleted = entity_db.delete_person(person_id)
+        if not deleted:
+            return jsonify({"error": "Person not found"}), 404
+        return jsonify({"status": "ok", "person_id": person_id}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Entity delete error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/entities/<int:person_id>/facts", methods=["GET"])
+def get_entity_facts(person_id: int):
+    """Get all facts for a person entity."""
+    try:
+        facts = entity_db.get_all_facts(person_id)
+        return jsonify({"person_id": person_id, "facts": facts}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Entity facts error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/entities/<int:person_id>/facts", methods=["POST"])
+def set_entity_fact(person_id: int):
+    """Add or update a fact for a person entity."""
+    try:
+        data = request.json or {}
+        key = data.get("key")
+        value = data.get("value")
+        if not key or not value:
+            return jsonify({"error": "Missing 'key' and/or 'value'"}), 400
+
+        entity_db.set_fact(
+            person_id=person_id,
+            key=key,
+            value=value,
+            confidence=data.get("confidence", 0.8),
+            source_type="manual",
+        )
+        return jsonify({"status": "ok", "person_id": person_id, "key": key}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Entity set fact error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/entities/<int:person_id>/aliases", methods=["POST"])
+def add_entity_alias(person_id: int):
+    """Add a name alias to a person entity."""
+    try:
+        data = request.json or {}
+        alias = data.get("alias")
+        if not alias:
+            return jsonify({"error": "Missing 'alias'"}), 400
+
+        entity_db.add_alias(
+            person_id=person_id,
+            alias=alias,
+            source="manual",
+        )
+        return jsonify({"status": "ok", "person_id": person_id, "alias": alias}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Entity add alias error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/entities/resolve/<name>", methods=["GET"])
+def resolve_entity_name(name: str):
+    """Resolve a name to matching person entities (for disambiguation)."""
+    try:
+        matches = entity_db.resolve_name(name)
+        return jsonify({"name": name, "matches": matches, "count": len(matches)}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Entity resolve error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/entities/facts/all", methods=["GET"])
+def list_all_facts():
+    """List all facts across all persons, optionally filtered by fact_key."""
+    try:
+        fact_key = request.args.get("key")
+        limit = min(request.args.get("limit", 200, type=int), 500)
+        facts = entity_db.get_all_facts_global(fact_key=fact_key, limit=limit)
+        keys = entity_db.get_fact_keys()
+        return jsonify({"facts": facts, "count": len(facts), "available_keys": keys}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Entity all facts error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/entities/seed", methods=["POST"])
+def seed_entities():
+    """Seed entity store from WhatsApp contacts.
+    
+    Fetches all contacts from WAHA API and creates person records
+    with aliases. Pass {"confirm": true} to execute.
+    """
+    try:
+        data = request.json or {}
+        
+        # Fetch contacts from WAHA
+        session = settings.waha_session_name
+        waha_base = settings.waha_base_url
+        
+        import httpx
+        resp = httpx.get(
+            f"{waha_base}/api/contacts/all?session={session}",
+            headers={"X-Api-Key": settings.waha_api_key},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        contacts = resp.json()
+        
+        if not data.get("confirm", False):
+            # Dry run: show what would be created
+            named_contacts = [
+                c for c in contacts
+                if c.get("name") or c.get("pushname")
+            ]
+            return jsonify({
+                "status": "dry_run",
+                "total_contacts": len(contacts),
+                "named_contacts": len(named_contacts),
+                "message": f"Would seed {len(named_contacts)} contacts. "
+                           f"Pass {{\"confirm\": true}} to proceed.",
+                "sample": [
+                    {"name": c.get("name"), "pushname": c.get("pushname"), "id": c.get("id")}
+                    for c in named_contacts[:10]
+                ],
+            }), 200
+        
+        result = entity_db.seed_from_whatsapp_contacts(contacts)
+        return jsonify({
+            "status": "ok",
+            "result": result,
+            "stats": entity_db.get_stats(),
+        }), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Entity seed error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/entities/ui", methods=["GET"])
+def entities_ui():
+    """Serve the entity management web UI."""
+    from flask import send_from_directory
+    templates_dir = Path(__file__).resolve().parent / "templates"
+    return send_from_directory(str(templates_dir), "entities.html")
 
 
 # =============================================================================

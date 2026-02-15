@@ -1108,10 +1108,11 @@ class LlamaIndexRAG:
         the alternative-script name tokens so fulltext search on sender/chat_name
         fields can find the match.
         
-        Uses the known contacts list (Redis-cached) to build a first-name →
-        full-name-tokens mapping. Each contact's first name (lowercased) maps
-        to all parts of the full name. When a query token matches a known first
-        name, the full name parts are added as additional search tokens.
+        Strategy (ordered by richness):
+        1. Entity Store aliases (if available): uses person_aliases table which
+           links all name variants across scripts for each person
+        2. Fallback: sender + chat name lists from Redis cache, with simple
+           first-name → full-name-parts mapping
         
         This handles both directions:
         - Hebrew query → English-stored names (שירן → Shiran, Waintrob)
@@ -1124,26 +1125,15 @@ class LlamaIndexRAG:
             Expanded token list (originals + cross-script contact name parts)
         """
         try:
-            contacts = self.get_sender_list()
-            if not contacts:
+            # Strategy 1: Use Entity Store aliases (richer, links all name variants)
+            name_map = self._build_entity_name_map()
+            
+            # Strategy 2: Fallback to sender/chat list if entity store is empty
+            if not name_map:
+                name_map = self._build_sender_name_map()
+            
+            if not name_map:
                 return tokens
-            
-            # Also include chat names (DM chats use the contact name as chat_name)
-            chat_names = self.get_chat_list()
-            all_names = set(contacts)
-            if chat_names:
-                all_names.update(chat_names)
-            
-            # Build first_name (lowercased) → set of full name parts mapping.
-            # E.g., {"shiran": {"Shiran", "Waintrob"}, "דורון": {"דורון", "עלאני"}}
-            name_map: Dict[str, set] = {}
-            for contact in all_names:
-                parts = contact.split()
-                if not parts:
-                    continue
-                first = parts[0].lower()
-                all_parts = set(parts)
-                name_map.setdefault(first, set()).update(all_parts)
             
             # Check each token against the name map
             expanded = list(tokens)
@@ -1167,6 +1157,78 @@ class LlamaIndexRAG:
         except Exception as e:
             logger.debug(f"Cross-script name expansion failed (non-critical): {e}")
             return tokens
+    
+    def _build_entity_name_map(self) -> Dict[str, set]:
+        """Build a name→name_parts map from the Entity Store aliases.
+        
+        For each person, all aliases are cross-linked so that ANY alias
+        token maps to ALL other alias parts. This is much richer than the
+        sender list approach because it handles multi-script aliases directly.
+        
+        Returns:
+            Dict of lowercased-alias → set of all name parts for that person
+        """
+        try:
+            import entity_db
+            persons = entity_db.get_all_persons_summary()
+            if not persons:
+                return {}
+            
+            name_map: Dict[str, set] = {}
+            for person in persons:
+                # Collect all name parts from canonical name + all aliases
+                all_parts: set = set()
+                canonical = person.get("canonical_name", "")
+                if canonical:
+                    all_parts.update(canonical.split())
+                
+                for alias in person.get("aliases", []):
+                    if isinstance(alias, str):
+                        all_parts.update(alias.split())
+                    elif isinstance(alias, dict):
+                        alias_text = alias.get("alias", "")
+                        if alias_text:
+                            all_parts.update(alias_text.split())
+                
+                # Map each part (lowercased) → all parts
+                for part in list(all_parts):
+                    name_map.setdefault(part.lower(), set()).update(all_parts)
+            
+            return name_map
+        except Exception:
+            return {}
+    
+    def _build_sender_name_map(self) -> Dict[str, set]:
+        """Build a name→name_parts map from sender/chat lists (fallback).
+        
+        Uses the Redis-cached sender and chat name lists to build a simple
+        first-name → full-name-parts mapping.
+        
+        Returns:
+            Dict of lowercased-first-name → set of full name parts
+        """
+        try:
+            contacts = self.get_sender_list()
+            if not contacts:
+                return {}
+            
+            chat_names = self.get_chat_list()
+            all_names = set(contacts)
+            if chat_names:
+                all_names.update(chat_names)
+            
+            name_map: Dict[str, set] = {}
+            for contact in all_names:
+                parts = contact.split()
+                if not parts:
+                    continue
+                first = parts[0].lower()
+                all_parts = set(parts)
+                name_map.setdefault(first, set()).update(all_parts)
+            
+            return name_map
+        except Exception:
+            return {}
     
     # Field-aware full-text search scores: sender matches are most valuable
     # because users often ask "what did X say about Y?"

@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Entity Store — Person Management</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f23; color: #e0e0e0; min-height: 100vh; }
+.container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+h1 { color: #7c8aff; margin-bottom: 8px; font-size: 1.8rem; }
+.subtitle { color: #888; margin-bottom: 24px; font-size: 0.9rem; }
+
+/* Stats bar */
+.stats-bar { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+.stat-card { background: #1a1a3e; border-radius: 12px; padding: 16px 24px; flex: 1; min-width: 120px; text-align: center; }
+.stat-card .number { font-size: 2rem; font-weight: 700; color: #7c8aff; }
+.stat-card .label { font-size: 0.8rem; color: #888; margin-top: 4px; }
+
+/* Toolbar */
+.toolbar { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; align-items: center; }
+.toolbar input[type="text"] { flex: 1; min-width: 200px; padding: 10px 16px; border-radius: 8px; border: 1px solid #333; background: #1a1a3e; color: #e0e0e0; font-size: 1rem; outline: none; }
+.toolbar input:focus { border-color: #7c8aff; }
+.btn { padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer; font-size: 0.9rem; font-weight: 600; transition: all 0.2s; }
+.btn-primary { background: #7c8aff; color: #fff; }
+.btn-primary:hover { background: #6570dd; }
+.btn-success { background: #4caf50; color: #fff; }
+.btn-success:hover { background: #3d9141; }
+.btn-danger { background: #ef5350; color: #fff; }
+.btn-danger:hover { background: #d32f2f; }
+.btn-ghost { background: transparent; border: 1px solid #555; color: #ccc; }
+.btn-ghost:hover { background: #1a1a3e; }
+.btn-sm { padding: 6px 12px; font-size: 0.8rem; }
+
+/* Person list */
+.person-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
+.person-card { background: #1a1a3e; border-radius: 12px; padding: 20px; border: 1px solid #2a2a4e; cursor: pointer; transition: all 0.2s; }
+.person-card:hover { border-color: #7c8aff; transform: translateY(-2px); }
+.person-card.selected { border-color: #7c8aff; box-shadow: 0 0 12px rgba(124,138,255,0.2); }
+.person-name { font-size: 1.2rem; font-weight: 600; color: #fff; margin-bottom: 8px; }
+.person-aliases { font-size: 0.85rem; color: #aaa; margin-bottom: 8px; }
+.person-aliases span { background: #2a2a4e; padding: 2px 8px; border-radius: 4px; margin-left: 4px; display: inline-block; margin-bottom: 4px; }
+.person-meta { font-size: 0.8rem; color: #666; display: flex; gap: 12px; }
+
+/* Detail panel */
+.detail-panel { display: none; background: #1a1a3e; border-radius: 12px; padding: 24px; margin-top: 20px; border: 1px solid #2a2a4e; }
+.detail-panel.visible { display: block; }
+.detail-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.detail-header h2 { color: #7c8aff; font-size: 1.4rem; }
+.section-title { color: #7c8aff; font-size: 1rem; font-weight: 600; margin: 20px 0 12px; border-bottom: 1px solid #2a2a4e; padding-bottom: 8px; }
+
+/* Facts table */
+.facts-table { width: 100%; border-collapse: collapse; }
+.facts-table th, .facts-table td { padding: 8px 12px; text-align: right; border-bottom: 1px solid #2a2a4e; }
+.facts-table th { color: #888; font-weight: 500; font-size: 0.85rem; }
+.facts-table td { color: #e0e0e0; }
+
+/* Add forms */
+.add-form { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.add-form input { padding: 8px 12px; border-radius: 6px; border: 1px solid #333; background: #0f0f23; color: #e0e0e0; font-size: 0.9rem; outline: none; }
+.add-form input:focus { border-color: #7c8aff; }
+
+/* Toast notification */
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #4caf50; color: #fff; padding: 12px 24px; border-radius: 8px; font-size: 0.9rem; z-index: 1000; display: none; animation: fadeIn 0.3s; }
+.toast.error { background: #ef5350; }
+@keyframes fadeIn { from { opacity: 0; transform: translateX(-50%) translateY(10px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+
+/* Loading */
+.loading { text-align: center; padding: 40px; color: #888; }
+.empty-state { text-align: center; padding: 60px; color: #666; }
+.empty-state .icon { font-size: 3rem; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>👤 Entity Store</h1>
+    <p class="subtitle">Person knowledge base — manage contacts, aliases, and facts</p>
+
+    <!-- Stats -->
+    <div class="stats-bar" id="stats-bar">
+        <div class="stat-card"><div class="number" id="stat-persons">—</div><div class="label">Persons</div></div>
+        <div class="stat-card"><div class="number" id="stat-aliases">—</div><div class="label">Aliases</div></div>
+        <div class="stat-card"><div class="number" id="stat-facts">—</div><div class="label">Facts</div></div>
+        <div class="stat-card"><div class="number" id="stat-relationships">—</div><div class="label">Relationships</div></div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+        <input type="text" id="search-input" placeholder="Search persons..." oninput="debounceSearch()">
+        <button class="btn btn-primary" id="btn-persons" onclick="showPersonsView()" style="opacity:1;">👤 Persons</button>
+        <button class="btn btn-ghost" id="btn-facts" onclick="showFactsView()">📋 All Facts</button>
+        <select id="fact-key-filter" style="display:none;padding:10px 12px;border-radius:8px;border:1px solid #333;background:#1a1a3e;color:#e0e0e0;font-size:0.9rem;outline:none;" onchange="loadAllFacts()">
+            <option value="">All fact keys</option>
+        </select>
+        <button class="btn btn-success" onclick="seedEntities()">🌱 Seed from WhatsApp</button>
+        <button class="btn btn-ghost" onclick="refreshCurrentView()">🔄 Refresh</button>
+    </div>
+
+    <!-- Person list -->
+    <div id="person-list" class="person-list">
+        <div class="loading">Loading...</div>
+    </div>
+
+    <!-- All Facts table (hidden by default) -->
+    <div id="all-facts-view" style="display:none;">
+        <table class="facts-table" style="background:#1a1a3e;border-radius:12px;overflow:hidden;">
+            <thead>
+                <tr style="background:#2a2a4e;">
+                    <th style="padding:12px;">Person</th>
+                    <th style="padding:12px;">Key</th>
+                    <th style="padding:12px;">Value</th>
+                    <th style="padding:12px;">Confidence</th>
+                    <th style="padding:12px;">Source</th>
+                    <th style="padding:12px;">Date</th>
+                </tr>
+            </thead>
+            <tbody id="all-facts-tbody"></tbody>
+        </table>
+    </div>
+
+    <!-- Detail panel -->
+    <div id="detail-panel" class="detail-panel">
+        <div class="detail-header">
+            <h2 id="detail-name"></h2>
+            <div>
+                <button class="btn btn-danger btn-sm" onclick="deletePerson()">🗑 Delete</button>
+                <button class="btn btn-ghost btn-sm" onclick="closeDetail()">✕ Close</button>
+            </div>
+        </div>
+        
+        <div style="color: #888; font-size: 0.85rem; margin-bottom: 16px;">
+            <span id="detail-whatsapp"></span>
+            <span id="detail-phone" style="margin-right: 16px;"></span>
+            <span id="detail-last-seen"></span>
+        </div>
+
+        <!-- Aliases -->
+        <div class="section-title">📝 Aliases</div>
+        <div id="detail-aliases"></div>
+        <div class="add-form">
+            <input type="text" id="new-alias" placeholder="Add alias..." style="flex:1;">
+            <button class="btn btn-primary btn-sm" onclick="addAlias()">+ Add</button>
+        </div>
+
+        <!-- Facts -->
+        <div class="section-title">📋 Facts</div>
+        <table class="facts-table" id="detail-facts">
+            <thead><tr><th>Key</th><th>Value</th><th>Confidence</th><th>Source</th></tr></thead>
+            <tbody></tbody>
+        </table>
+        <div class="add-form">
+            <input type="text" id="new-fact-key" placeholder="Key (e.g. birth_date)" style="width:160px;">
+            <input type="text" id="new-fact-value" placeholder="Value" style="flex:1;">
+            <button class="btn btn-primary btn-sm" onclick="addFact()">+ Add Fact</button>
+        </div>
+
+        <!-- Relationships -->
+        <div class="section-title">🔗 Relationships</div>
+        <div id="detail-relationships"></div>
+    </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '';  // Same origin
+let allPersons = [];
+let selectedPersonId = null;
+let searchTimeout = null;
+
+// ---- Init ----
+document.addEventListener('DOMContentLoaded', () => {
+    loadStats();
+    loadPersons();
+});
+
+// ---- Stats ----
+async function loadStats() {
+    try {
+        const resp = await fetch(`${API}/entities/stats`);
+        const data = await resp.json();
+        document.getElementById('stat-persons').textContent = data.persons || 0;
+        document.getElementById('stat-aliases').textContent = data.aliases || 0;
+        document.getElementById('stat-facts').textContent = data.facts || 0;
+        document.getElementById('stat-relationships').textContent = data.relationships || 0;
+    } catch (e) {
+        console.error('Failed to load stats:', e);
+    }
+}
+
+// ---- Person List ----
+async function loadPersons(query) {
+    const listEl = document.getElementById('person-list');
+    listEl.innerHTML = '<div class="loading">Loading...</div>';
+    
+    try {
+        const url = query ? `${API}/entities?q=${encodeURIComponent(query)}` : `${API}/entities`;
+        const resp = await fetch(url);
+        const data = await resp.json();
+        allPersons = data.persons || [];
+        
+        if (allPersons.length === 0) {
+            listEl.innerHTML = `
+                <div class="empty-state" style="grid-column: 1/-1;">
+                    <div class="icon">👤</div>
+                    <p>No persons found</p>
+                    <p style="margin-top:8px;font-size:0.85rem;">Click "Seed from WhatsApp" to import contacts</p>
+                </div>`;
+            return;
+        }
+        
+        listEl.innerHTML = allPersons.map(p => {
+            const aliases = (p.aliases || []).filter(a => {
+                const aliasText = typeof a === 'string' ? a : a.alias || a;
+                return aliasText !== p.canonical_name;
+            }).slice(0, 4);
+            const aliasHTML = aliases.map(a => {
+                const text = typeof a === 'string' ? a : a.alias || a;
+                return `<span>${escapeHtml(text)}</span>`;
+            }).join('');
+            const factCount = p.facts ? Object.keys(p.facts).length : (p.fact_count || 0);
+            const aliasCount = p.aliases ? p.aliases.length : (p.alias_count || 0);
+            
+            return `<div class="person-card ${p.id === selectedPersonId ? 'selected' : ''}" onclick="selectPerson(${p.id})">
+                <div class="person-name">${escapeHtml(p.canonical_name)}</div>
+                ${aliasHTML ? `<div class="person-aliases">${aliasHTML}</div>` : ''}
+                <div class="person-meta">
+                    <span>📝 ${aliasCount} aliases</span>
+                    <span>📋 ${factCount} facts</span>
+                    ${p.phone ? `<span>📱 ${escapeHtml(p.phone)}</span>` : ''}
+                </div>
+            </div>`;
+        }).join('');
+    } catch (e) {
+        listEl.innerHTML = `<div class="empty-state" style="grid-column:1/-1;"><p>Error loading persons</p><p style="color:#ef5350">${e.message}</p></div>`;
+    }
+}
+
+function debounceSearch() {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => {
+        const query = document.getElementById('search-input').value.trim();
+        loadPersons(query || undefined);
+    }, 300);
+}
+
+// ---- Select Person ----
+async function selectPerson(id) {
+    selectedPersonId = id;
+    
+    // Highlight in list
+    document.querySelectorAll('.person-card').forEach(c => c.classList.remove('selected'));
+    event.currentTarget?.classList.add('selected');
+    
+    try {
+        const resp = await fetch(`${API}/entities/${id}`);
+        const person = await resp.json();
+        
+        if (person.error) {
+            showToast(person.error, true);
+            return;
+        }
+        
+        // Header
+        document.getElementById('detail-name').textContent = person.canonical_name;
+        document.getElementById('detail-whatsapp').textContent = person.whatsapp_id ? `WA: ${person.whatsapp_id}` : '';
+        document.getElementById('detail-phone').textContent = person.phone ? `📱 ${person.phone}` : '';
+        document.getElementById('detail-last-seen').textContent = person.last_seen ? `Last seen: ${person.last_seen}` : '';
+        
+        // Aliases
+        const aliasesEl = document.getElementById('detail-aliases');
+        const aliases = person.aliases || [];
+        aliasesEl.innerHTML = aliases.map(a => 
+            `<span style="display:inline-block;background:#2a2a4e;padding:4px 12px;border-radius:6px;margin:0 4px 6px 0;font-size:0.9rem;">
+                ${escapeHtml(a.alias)} <small style="color:#888;">(${a.script})</small>
+            </span>`
+        ).join('') || '<span style="color:#666;">No aliases</span>';
+        
+        // Facts
+        const factsBody = document.querySelector('#detail-facts tbody');
+        const factsDetail = person.facts_detail || [];
+        if (factsDetail.length > 0) {
+            factsBody.innerHTML = factsDetail.map(f => `
+                <tr>
+                    <td><strong>${escapeHtml(f.fact_key)}</strong></td>
+                    <td>${escapeHtml(f.fact_value)}</td>
+                    <td>${f.confidence != null ? (f.confidence * 100).toFixed(0) + '%' : '—'}</td>
+                    <td style="color:#888;font-size:0.8rem;">${escapeHtml(f.source_type || '')} ${f.extracted_at ? '· ' + f.extracted_at : ''}</td>
+                </tr>
+            `).join('');
+        } else {
+            factsBody.innerHTML = '<tr><td colspan="4" style="color:#666;text-align:center;">No facts recorded</td></tr>';
+        }
+        
+        // Relationships
+        const relsEl = document.getElementById('detail-relationships');
+        const rels = person.relationships || [];
+        if (rels.length > 0) {
+            relsEl.innerHTML = rels.map(r => 
+                `<span style="display:inline-block;background:#2a2a4e;padding:4px 12px;border-radius:6px;margin:0 4px 6px 0;">
+                    ${escapeHtml(r.relationship_type)} → ${escapeHtml(r.related_name)}
+                </span>`
+            ).join('');
+        } else {
+            relsEl.innerHTML = '<span style="color:#666;">No relationships</span>';
+        }
+        
+        // Show panel
+        document.getElementById('detail-panel').classList.add('visible');
+    } catch (e) {
+        showToast('Failed to load person: ' + e.message, true);
+    }
+}
+
+function closeDetail() {
+    document.getElementById('detail-panel').classList.remove('visible');
+    selectedPersonId = null;
+    document.querySelectorAll('.person-card').forEach(c => c.classList.remove('selected'));
+}
+
+// ---- Actions ----
+async function addAlias() {
+    if (!selectedPersonId) return;
+    const input = document.getElementById('new-alias');
+    const alias = input.value.trim();
+    if (!alias) return;
+    
+    try {
+        const resp = await fetch(`${API}/entities/${selectedPersonId}/aliases`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ alias }),
+        });
+        const data = await resp.json();
+        if (data.error) throw new Error(data.error);
+        
+        input.value = '';
+        showToast(`Alias "${alias}" added`);
+        selectPerson(selectedPersonId);
+        loadStats();
+    } catch (e) {
+        showToast('Failed: ' + e.message, true);
+    }
+}
+
+async function addFact() {
+    if (!selectedPersonId) return;
+    const keyInput = document.getElementById('new-fact-key');
+    const valueInput = document.getElementById('new-fact-value');
+    const key = keyInput.value.trim();
+    const value = valueInput.value.trim();
+    if (!key || !value) return;
+    
+    try {
+        const resp = await fetch(`${API}/entities/${selectedPersonId}/facts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key, value }),
+        });
+        const data = await resp.json();
+        if (data.error) throw new Error(data.error);
+        
+        keyInput.value = '';
+        valueInput.value = '';
+        showToast(`Fact "${key}" updated`);
+        selectPerson(selectedPersonId);
+        loadStats();
+    } catch (e) {
+        showToast('Failed: ' + e.message, true);
+    }
+}
+
+async function deletePerson() {
+    if (!selectedPersonId) return;
+    if (!confirm('Delete this person and all associated data?')) return;
+    
+    try {
+        const resp = await fetch(`${API}/entities/${selectedPersonId}`, { method: 'DELETE' });
+        const data = await resp.json();
+        if (data.error) throw new Error(data.error);
+        
+        showToast('Person deleted');
+        closeDetail();
+        loadPersons();
+        loadStats();
+    } catch (e) {
+        showToast('Failed: ' + e.message, true);
+    }
+}
+
+async function seedEntities() {
+    if (!confirm('Seed entity store from WhatsApp contacts?\n\nThis will fetch all contacts from WAHA and create person records.')) return;
+    
+    showToast('Seeding from WhatsApp contacts...');
+    
+    try {
+        const resp = await fetch(`${API}/entities/seed`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ confirm: true }),
+        });
+        const data = await resp.json();
+        if (data.error) throw new Error(data.error);
+        
+        const r = data.result || {};
+        showToast(`Seeded: ${r.created || 0} created, ${r.updated || 0} updated, ${r.skipped || 0} skipped`);
+        loadPersons();
+        loadStats();
+    } catch (e) {
+        showToast('Seed failed: ' + e.message, true);
+    }
+}
+
+// ---- View Switching ----
+let currentView = 'persons';
+
+function showPersonsView() {
+    currentView = 'persons';
+    document.getElementById('person-list').style.display = '';
+    document.getElementById('all-facts-view').style.display = 'none';
+    document.getElementById('detail-panel').classList.remove('visible');
+    document.getElementById('search-input').style.display = '';
+    document.getElementById('fact-key-filter').style.display = 'none';
+    document.getElementById('btn-persons').className = 'btn btn-primary';
+    document.getElementById('btn-facts').className = 'btn btn-ghost';
+    loadPersons();
+}
+
+function showFactsView() {
+    currentView = 'facts';
+    document.getElementById('person-list').style.display = 'none';
+    document.getElementById('all-facts-view').style.display = '';
+    document.getElementById('detail-panel').classList.remove('visible');
+    document.getElementById('search-input').style.display = 'none';
+    document.getElementById('fact-key-filter').style.display = '';
+    document.getElementById('btn-persons').className = 'btn btn-ghost';
+    document.getElementById('btn-facts').className = 'btn btn-primary';
+    loadAllFacts();
+}
+
+function refreshCurrentView() {
+    if (currentView === 'facts') loadAllFacts();
+    else loadPersons();
+    loadStats();
+}
+
+async function loadAllFacts() {
+    const tbody = document.getElementById('all-facts-tbody');
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:#888;">Loading...</td></tr>';
+    
+    try {
+        const keyFilter = document.getElementById('fact-key-filter').value;
+        const url = keyFilter
+            ? `${API}/entities/facts/all?key=${encodeURIComponent(keyFilter)}`
+            : `${API}/entities/facts/all`;
+        const resp = await fetch(url);
+        const data = await resp.json();
+        
+        // Populate key filter dropdown (only on first load or when unfiltered)
+        if (!keyFilter && data.available_keys) {
+            const select = document.getElementById('fact-key-filter');
+            const currentVal = select.value;
+            // Keep the "All" option, rebuild the rest
+            select.innerHTML = '<option value="">All fact keys</option>';
+            data.available_keys.forEach(k => {
+                const opt = document.createElement('option');
+                opt.value = k;
+                opt.textContent = k;
+                select.appendChild(opt);
+            });
+            select.value = currentVal;
+        }
+        
+        const facts = data.facts || [];
+        if (facts.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:40px;color:#666;">No facts recorded yet</td></tr>';
+            return;
+        }
+        
+        tbody.innerHTML = facts.map(f => `
+            <tr style="cursor:pointer;" onclick="selectPerson(${f.person_id})">
+                <td style="padding:10px 12px;"><strong>${escapeHtml(f.person_name)}</strong></td>
+                <td style="padding:10px 12px;color:#7c8aff;">${escapeHtml(f.fact_key)}</td>
+                <td style="padding:10px 12px;">${escapeHtml(f.fact_value)}</td>
+                <td style="padding:10px 12px;color:#888;">${f.confidence != null ? (f.confidence * 100).toFixed(0) + '%' : '—'}</td>
+                <td style="padding:10px 12px;color:#888;font-size:0.8rem;">${escapeHtml(f.source_type || '')}</td>
+                <td style="padding:10px 12px;color:#666;font-size:0.8rem;">${f.extracted_at || ''}</td>
+            </tr>
+        `).join('');
+    } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:20px;color:#ef5350;">Error: ${e.message}</td></tr>`;
+    }
+}
+
+// ---- Helpers ----
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = String(text);
+    return div.innerHTML;
+}
+
+function showToast(message, isError = false) {
+    const toast = document.getElementById('toast');
+    toast.textContent = message;
+    toast.className = 'toast' + (isError ? ' error' : '');
+    toast.style.display = 'block';
+    setTimeout(() => { toast.style.display = 'none'; }, 3000);
+}
+</script>
+</body>
+</html>
