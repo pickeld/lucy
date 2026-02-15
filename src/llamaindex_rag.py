@@ -2260,19 +2260,34 @@ class LlamaIndexRAG:
             hebrew_date=hebrew_date,
         )
         
-        # Append the dynamic known contacts list so the LLM can disambiguate
-        # names that match multiple people (e.g., "דורון" → Doron Yazkirovich
-        # vs דורון עלאני).  The list is fetched from Redis cache (fast) and
-        # only adds ~2K tokens even with 500+ contacts.
+        # Append the dynamic known contacts list and disambiguation instruction
+        # so the LLM can ask for clarification when a name matches multiple
+        # people (e.g., "דורון" → Doron Yazkirovich vs דורון עלאני).
+        # This is injected dynamically (not in the template) so it works
+        # regardless of the system_prompt stored in the database.
+        # The sender list is fetched from Redis cache (fast) and only adds
+        # ~2K tokens even with 500+ contacts.
         try:
             sender_list = self.get_sender_list()
             if sender_list:
                 contacts_str = ", ".join(sender_list)
                 prompt += (
                     f"\n\nKnown Contacts ({len(sender_list)} people):\n"
-                    f"{contacts_str}"
+                    f"{contacts_str}\n\n"
+                    "DISAMBIGUATION RULE: When the user mentions a person by first name only "
+                    "and that name matches multiple people in the Known Contacts list above, "
+                    "you MUST ask the user to clarify which person they mean BEFORE answering. "
+                    "Present the matching names as numbered options. For example:\n"
+                    "'I found multiple people named Doron:\n"
+                    "1) Doron Yazkirovich\n"
+                    "2) דורון עלאני\n"
+                    "Which one did you mean?'\n"
+                    "Names may appear in different scripts (Hebrew and English) but refer to "
+                    "the same first name (e.g., דורון = Doron, דוד = David, דנה = Dana). "
+                    "Only ask if there is genuine ambiguity — if the user provided a full name, "
+                    "last name, or enough context to identify the person, answer directly."
                 )
-                logger.debug(f"Injected {len(sender_list)} contacts into system prompt")
+                logger.debug(f"Injected {len(sender_list)} contacts + disambiguation rule into system prompt")
         except Exception as e:
             logger.debug(f"Failed to inject contacts into system prompt (non-fatal): {e}")
         
