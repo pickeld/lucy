@@ -1571,6 +1571,7 @@ class LlamaIndexRAG:
         "manual": "Manual",
         "web_scrape": "Web",
         "api_import": "Import",
+        "call_recording": "Call Recording",
         "entity_store": "Entity Store",
         "system": "System",
     }

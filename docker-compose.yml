@@ -68,6 +68,9 @@ services:
       - ./src:/app/src        # Hot reload source code
       - ./.env:/app/.env:ro   # Mount real .env (read-only, first-run seed)
       - ./data:/app/data      # SQLite settings database persistence
+      # Call Recordings: mount host directory into container.
+      # Change the left side to your actual recordings folder path.
+      - /Users/dpickel/Library/CloudStorage/Dropbox/call_recordings:/app/data/call_recordings:ro
     depends_on:
       redis:
         condition: service_started

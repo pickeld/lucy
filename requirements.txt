@@ -45,3 +45,10 @@ python-docx>=0.8
 
 # Calendar event generation
 icalendar>=5.0.0
+
+# Call Recordings plugin — audio transcription
+openai-whisper>=20231117
+mutagen>=1.47
+
+# Call Recordings plugin — Dropbox integration (optional)
+dropbox>=12.0

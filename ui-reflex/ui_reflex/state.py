@@ -129,6 +129,15 @@ SETTING_LABELS: dict[str, str] = {
     "gmail_max_emails": "Max Emails per Sync",
     "gmail_processed_label": "Processed Label",
     "gmail_include_attachments": "Include Attachments",
+    # Call Recordings plugin
+    "call_recordings_source_type": "Source Type",
+    "call_recordings_source_path": "Source Path",
+    "call_recordings_dropbox_token": "Dropbox Token",
+    "call_recordings_whisper_model": "Whisper Model Size",
+    "call_recordings_file_extensions": "Audio File Extensions",
+    "call_recordings_max_files": "Max Files per Sync",
+    "call_recordings_sync_interval": "Sync Interval (seconds)",
+    "call_recordings_default_participants": "Default Participants",
 }
 
 
@@ -221,6 +230,14 @@ class AppState(rx.State):
     gmail_selected_folders: list[str] = []  # folder display names
     gmail_folders_loading: bool = False
     gmail_folder_dropdown_open: bool = False
+
+    # --- Call Recordings test state ---
+    call_recordings_test_status: str = ""   # "", "testing", "success", "error"
+    call_recordings_test_message: str = ""
+
+    # --- Call Recordings sync state ---
+    call_recordings_sync_status: str = ""   # "", "syncing", "complete", "error"
+    call_recordings_sync_message: str = ""
 
     # --- Tab state ---
     settings_tab: str = "ai"   # Active main tab
@@ -1695,6 +1712,59 @@ class AppState(rx.State):
     def close_gmail_folder_dropdown(self):
         """Close the folder dropdown."""
         self.gmail_folder_dropdown_open = False
+
+    # ----- Call Recordings test -----
+
+    async def test_call_recordings_connection(self):
+        """Test call recordings source connectivity."""
+        self.call_recordings_test_status = "testing"
+        self.call_recordings_test_message = "Testing source access…"
+        yield
+
+        result = await api_client.test_call_recordings_connection()
+        if "error" in result:
+            self.call_recordings_test_status = "error"
+            self.call_recordings_test_message = f"❌ {result['error']}"
+        elif result.get("status") == "connected":
+            source = result.get("source", "")
+            path = result.get("path", "")
+            self.call_recordings_test_status = "success"
+            self.call_recordings_test_message = (
+                f"✅ Connected — {source} source at {path}"
+            )
+        else:
+            self.call_recordings_test_status = "error"
+            self.call_recordings_test_message = "❌ Unexpected response"
+
+    # ----- Call Recordings sync -----
+
+    async def start_call_recordings_sync(self):
+        """Trigger call recordings sync (scan → transcribe → index)."""
+        self.call_recordings_sync_status = "syncing"
+        self.call_recordings_sync_message = "⏳ Scanning and transcribing recordings…"
+        yield
+
+        result = await api_client.start_call_recordings_sync()
+        if "error" in result:
+            self.call_recordings_sync_status = "error"
+            self.call_recordings_sync_message = f"❌ {result['error']}"
+        elif result.get("status") == "complete":
+            synced = result.get("synced", 0)
+            skipped = result.get("skipped", 0)
+            errors = result.get("errors", 0)
+            self.call_recordings_sync_status = "complete"
+            self.call_recordings_sync_message = (
+                f"✅ Sync complete — {synced} transcribed & indexed, "
+                f"{skipped} skipped, {errors} errors"
+            )
+            # Refresh RAG stats
+            self.rag_stats = await api_client.get_rag_stats()
+        elif result.get("status") == "already_running":
+            self.call_recordings_sync_status = "syncing"
+            self.call_recordings_sync_message = "⏳ Sync already in progress"
+        else:
+            self.call_recordings_sync_status = "error"
+            self.call_recordings_sync_message = f"❌ Unexpected response: {result}"
 
     async def reset_category(self, category: str):
         """Reset a settings category to defaults."""

@@ -524,6 +524,53 @@ async def start_gmail_sync(force: bool = False) -> dict[str, Any]:
 
 
 # =========================================================================
+# PLUGINS — CALL RECORDINGS
+# =========================================================================
+
+async def test_call_recordings_connection() -> dict[str, Any]:
+    """Test call recordings source connectivity."""
+    try:
+        resp = await _get_client().get("/plugins/call_recordings/test", timeout=10)
+        data = resp.json()
+        if resp.status_code == 200:
+            return data
+        else:
+            msg = data.get("message") or data.get("error") or "Connection failed"
+            return {"error": msg}
+    except httpx.ConnectError:
+        return {"error": "Cannot reach API server"}
+    except Exception as e:
+        logger.error(f"Error testing call recordings connection: {e}")
+        return {"error": str(e)}
+
+
+async def start_call_recordings_sync(force: bool = False) -> dict[str, Any]:
+    """Trigger call recordings sync (scan → transcribe → index).
+
+    Args:
+        force: If True, skip dedup checks and re-index everything.
+    """
+    try:
+        params = {"force": "true"} if force else {}
+        resp = await _get_client().post(
+            "/plugins/call_recordings/sync", params=params, timeout=600,
+        )
+        data = resp.json()
+        if resp.status_code == 200:
+            return data
+        else:
+            msg = data.get("error") or f"HTTP {resp.status_code}"
+            return {"error": msg}
+    except httpx.ConnectError:
+        return {"error": "Cannot reach API server"}
+    except httpx.ReadTimeout:
+        return {"error": "Sync timed out — it may still be running in the background"}
+    except Exception as e:
+        logger.error(f"Error starting call recordings sync: {e}")
+        return {"error": str(e)}
+
+
+# =========================================================================
 # ENTITY STORE
 # =========================================================================
 

@@ -19,11 +19,9 @@ flowchart TD
     F -->|Already processed| G[Skip]
     F -->|New file| H[WhisperTranscriber]
     
-    H -->|Local Whisper| I[openai-whisper lib]
-    H -->|OpenAI API| J[OpenAI Whisper API]
+    H --> I[openai-whisper lib - local inference]
     
     I --> K[Transcription Result]
-    J --> K
     
     K --> L[CallRecordingDocument.from_transcription]
     L --> M[to_llama_index_node]
@@ -92,7 +90,7 @@ class DropboxFileScanner(BaseFileScanner):
 
 ### 3. Transcriber Module — `transcriber.py`
 
-Wraps both local Whisper and the OpenAI Whisper API behind a unified interface.
+Uses local OpenAI Whisper for audio-to-text transcription with configurable model size.
 
 **Interface:**
 
@@ -106,27 +104,21 @@ class TranscriptionResult:
     confidence: float            # Average confidence score
 
 class WhisperTranscriber:
-    def __init__(self, mode: str, model_size: str):
+    def __init__(self, model_size: str = "medium"):
         """
         Args:
-            mode: 'local' or 'api'
-            model_size: 'small', 'medium', or 'large' (local only)
+            model_size: 'small', 'medium', or 'large'
         """
     
     def transcribe(self, audio_path: Path) -> TranscriptionResult
 ```
 
-**Local mode:**
-- Uses `openai-whisper` Python package
+**Behavior:**
+- Uses `openai-whisper` Python package (local inference only, no API calls)
 - Loads model based on configured size: `small`, `medium`, `large`
 - Model is loaded lazily on first use and cached for subsequent calls
 - Returns language detection, timestamped segments, and confidence
-
-**API mode:**
-- Uses the OpenAI `audio/transcriptions` endpoint via `openai` SDK (already in requirements)
-- Model is always `whisper-1` (API doesn't expose size selection)
-- Simpler setup, no local GPU required, but has cost implications
-- Falls back to local mode if API call fails
+- Automatically uses GPU (CUDA) if available, falls back to CPU
 
 ### 4. Sync Module — `sync.py`
 
@@ -191,7 +183,6 @@ Standard `ChannelPlugin` implementation.
 | `call_recordings_source_type` | `local` | select | Source: local directory or dropbox |
 | `call_recordings_source_path` | `/app/data/call_recordings` | text | Local directory path or Dropbox folder path |
 | `call_recordings_dropbox_token` | `` | secret | Dropbox API access token |
-| `call_recordings_whisper_mode` | `api` | select | Transcription mode: local whisper or OpenAI API |
 | `call_recordings_whisper_model` | `medium` | select | Whisper model size: small, medium, large |
 | `call_recordings_file_extensions` | `mp3,wav,m4a,ogg,flac` | text | Comma-separated audio file extensions to process |
 | `call_recordings_max_files` | `100` | int | Maximum files to process per sync run |

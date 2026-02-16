@@ -424,6 +424,12 @@ def _plugins_tab() -> rx.Component:
                         _gmail_actions(),
                         rx.fragment(),
                     ),
+                    # Call Recordings actions
+                    rx.cond(
+                        AppState.active_plugin_tab_value == "call_recordings",
+                        _call_recordings_actions(),
+                        rx.fragment(),
+                    ),
                 ),
             ),
             rx.text(
@@ -485,6 +491,49 @@ def _paperless_actions() -> rx.Component:
             AppState.paperless_sync_message != "",
             rx.text(
                 AppState.paperless_sync_message,
+                class_name="text-sm mt-2",
+            ),
+            rx.fragment(),
+        ),
+        class_name="mt-4 pt-4 border-t border-gray-200",
+    )
+
+
+def _call_recordings_actions() -> rx.Component:
+    """Call Recordings test connection and sync buttons."""
+    return rx.box(
+        rx.flex(
+            rx.button(
+                rx.icon("wifi", size=14, class_name="mr-1"),
+                "Test Connection",
+                on_click=AppState.test_call_recordings_connection,
+                loading=AppState.call_recordings_test_status == "testing",
+                size="2",
+                class_name="bg-blue-500 text-white hover:bg-blue-600",
+            ),
+            rx.button(
+                rx.icon("refresh-cw", size=14, class_name="mr-1"),
+                "Sync Now",
+                on_click=AppState.start_call_recordings_sync,
+                loading=AppState.call_recordings_sync_status == "syncing",
+                size="2",
+                class_name="bg-green-500 text-white hover:bg-green-600",
+            ),
+            gap="3",
+            align="center",
+        ),
+        rx.cond(
+            AppState.call_recordings_test_message != "",
+            rx.text(
+                AppState.call_recordings_test_message,
+                class_name="text-sm mt-2",
+            ),
+            rx.fragment(),
+        ),
+        rx.cond(
+            AppState.call_recordings_sync_message != "",
+            rx.text(
+                AppState.call_recordings_sync_message,
                 class_name="text-sm mt-2",
             ),
             rx.fragment(),
