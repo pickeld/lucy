@@ -177,6 +177,8 @@ class CallRecordingsPlugin(ChannelPlugin):
         logger.info("Call Recordings plugin initialized (v2 — review workflow)")
 
     def shutdown(self) -> None:
+        if self._syncer:
+            self._syncer.shutdown()
         if self._transcriber:
             self._transcriber.unload_model()
         self._scanner = None
@@ -272,15 +274,30 @@ class CallRecordingsPlugin(ChannelPlugin):
 
         @bp.route("/files/<content_hash>/transcribe", methods=["POST"])
         def transcribe_file(content_hash):
-            """Transcribe (or re-transcribe) a single audio file."""
+            """Transcribe (or re-transcribe) a single audio file.
+
+            Runs transcription in a background thread and returns
+            immediately with status 'queued'.  Poll ``GET /files``
+            or ``GET /files/<hash>`` to track progress.
+            """
             if not plugin._syncer:
                 return jsonify({"error": "Plugin not initialized"}), 500
 
-            result = plugin._syncer.transcribe_file(content_hash)
+            # Verify file exists before queuing
+            record = recording_db.get_file(content_hash)
+            if not record:
+                return jsonify({"status": "error", "error": "File not found"}), 404
 
-            if result.get("status") == "error":
-                return jsonify(result), 400
-            return jsonify(result), 200
+            # Mark as transcribing immediately so UI shows spinner
+            recording_db.update_status(content_hash, "transcribing")
+
+            future = plugin._syncer.transcribe_file_async(content_hash)
+
+            return jsonify({
+                "status": "queued",
+                "content_hash": content_hash,
+                "message": "Transcription started in background",
+            }), 202
 
         # =====================================================================
         # APPROVE — index a transcribed file into Qdrant
@@ -457,10 +474,10 @@ class CallRecordingsPlugin(ChannelPlugin):
                         ).isoformat() if _can_import_zoneinfo() else "",
                     )
 
-                    # Auto-transcribe in background
+                    # Queue background transcription (non-blocking)
                     if plugin._syncer:
                         try:
-                            plugin._syncer.transcribe_file(content_hash)
+                            plugin._syncer.transcribe_file_async(content_hash)
                         except Exception as te:
                             logger.warning(f"Auto-transcribe failed for {safe_name}: {te}")
 

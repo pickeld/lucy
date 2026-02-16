@@ -9,6 +9,10 @@ Composable steps:
     approve_file()        — Build nodes from transcription, index in Qdrant
     delete_file()         — Remove file from disk and tracking DB
     sync_recordings()     — Legacy: scan + transcribe + auto-approve (all-in-one)
+
+Transcription runs in a background thread pool so Flask endpoints return
+immediately.  Progress is tracked via the ``status`` field in the recording
+DB (pending → transcribing → transcribed / error).
 """
 
 import errno
@@ -20,6 +24,7 @@ import shutil
 import tempfile
 import time
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -57,6 +62,11 @@ class CallRecordingSyncer:
         rag: LlamaIndexRAG instance
     """
 
+    # One transcription at a time — Whisper is GPU/CPU-bound and concurrent
+    # runs would OOM or thrash.  The single worker thread is enough to keep
+    # the Flask event loop unblocked.
+    _POOL_WORKERS = 1
+
     def __init__(
         self,
         scanner: LocalFileScanner,
@@ -69,6 +79,10 @@ class CallRecordingSyncer:
         self._syncing = False
         self._last_sync = 0
         self._recording_count = 0
+        self._pool: Optional[ThreadPoolExecutor] = ThreadPoolExecutor(
+            max_workers=self._POOL_WORKERS,
+            thread_name_prefix="whisper",
+        )
 
     @property
     def is_syncing(self) -> bool:
@@ -86,17 +100,79 @@ class CallRecordingSyncer:
     # Step 1: Scan and register
     # -------------------------------------------------------------------------
 
+    def shutdown(self) -> None:
+        """Shut down the background thread pool.
+
+        Waits for any in-progress transcription to finish, then releases
+        the pool.  Called by the plugin's ``shutdown()`` hook.
+        """
+        if self._pool:
+            logger.info("Shutting down transcription thread pool...")
+            self._pool.shutdown(wait=True)
+            self._pool = None
+            logger.info("Transcription thread pool shut down")
+
+    # -------------------------------------------------------------------------
+    # Async transcription helpers
+    # -------------------------------------------------------------------------
+
+    def transcribe_file_async(self, content_hash: str) -> Optional[Future]:
+        """Submit a transcription job to the background thread pool.
+
+        Returns immediately.  The job updates the recording DB status
+        as it progresses (transcribing → transcribed / error).
+
+        Args:
+            content_hash: SHA256 content hash identifying the file
+
+        Returns:
+            A ``Future`` for the background job, or ``None`` if the pool
+            is not available.
+        """
+        if not self._pool:
+            logger.warning("Thread pool not available — running transcription synchronously")
+            self.transcribe_file(content_hash)
+            return None
+
+        # Pre-validate the record exists before submitting
+        record = recording_db.get_file(content_hash)
+        if not record:
+            logger.warning(f"Cannot queue transcription — file not found: {content_hash}")
+            return None
+
+        logger.info(f"Queuing background transcription for {record.get('filename', content_hash)}")
+
+        future = self._pool.submit(self._transcribe_worker, content_hash)
+        return future
+
+    def _transcribe_worker(self, content_hash: str) -> Dict:
+        """Background worker that runs ``transcribe_file`` in the thread pool.
+
+        Catches all exceptions so the thread pool stays healthy.
+        """
+        try:
+            return self.transcribe_file(content_hash)
+        except Exception as e:
+            logger.error(f"Background transcription failed for {content_hash}: {e}")
+            try:
+                recording_db.update_status(content_hash, "error", str(e))
+            except Exception:
+                pass
+            return {"status": "error", "error": str(e)}
+
     def scan_and_register(self, auto_transcribe: bool = True) -> Dict:
         """Discover audio files and register them in the tracking DB.
 
         New files are inserted with status 'pending'.  Already-tracked files
-        are left unchanged.  Optionally auto-transcribes new files.
+        are left unchanged.  When *auto_transcribe* is ``True``, new files
+        are queued for background transcription (non-blocking).
 
         Args:
-            auto_transcribe: If True, transcribe newly discovered files.
+            auto_transcribe: If True, queue newly discovered files for
+                background transcription.
 
         Returns:
-            Dict with counts: discovered, new, transcribed, errors
+            Dict with counts: discovered, new, queued, errors
         """
         if self._syncing:
             return {"status": "already_running"}
@@ -104,7 +180,7 @@ class CallRecordingSyncer:
         self._syncing = True
         discovered = 0
         new_files = 0
-        transcribed = 0
+        queued = 0
         errors = 0
 
         try:
@@ -117,7 +193,7 @@ class CallRecordingSyncer:
                     "status": "complete",
                     "discovered": 0,
                     "new": 0,
-                    "transcribed": 0,
+                    "queued": 0,
                     "errors": 0,
                 }
 
@@ -170,30 +246,27 @@ class CallRecordingSyncer:
                 if row.get("status") == "pending":
                     new_files += 1
 
-                    # Auto-transcribe new files
+                    # Queue background transcription for new files
                     if auto_transcribe:
                         try:
-                            result = self.transcribe_file(af.content_hash)
-                            if result.get("status") == "transcribed":
-                                transcribed += 1
-                            elif result.get("status") == "error":
-                                errors += 1
+                            self.transcribe_file_async(af.content_hash)
+                            queued += 1
                         except Exception as e:
-                            logger.error(f"Auto-transcribe failed for {af.filename}: {e}")
+                            logger.error(f"Failed to queue transcription for {af.filename}: {e}")
                             errors += 1
 
             self._last_sync = int(time.time())
 
             logger.info(
                 f"Scan complete: {discovered} found, {new_files} new, "
-                f"{transcribed} transcribed, {errors} errors"
+                f"{queued} queued for transcription, {errors} errors"
             )
 
             return {
                 "status": "complete",
                 "discovered": discovered,
                 "new": new_files,
-                "transcribed": transcribed,
+                "queued": queued,
                 "errors": errors,
             }
 
@@ -324,6 +397,17 @@ class CallRecordingSyncer:
                 "text_length": len(transcription.text),
             }
 
+        except ValueError as e:
+            # Raised by _validate_audio or our reshape-error handler —
+            # the audio file is corrupt, empty, or undecodable.
+            error_str = str(e)
+            logger.warning(f"Transcription failed for {filename}: {error_str}")
+            recording_db.update_status(content_hash, "error", error_str)
+            return {
+                "status": "error",
+                "error": error_str,
+                "error_type": "bad_audio",
+            }
         except Exception as e:
             error_str = str(e)
             # Detect ffmpeg "Resource deadlock avoided" buried in Whisper errors
@@ -338,6 +422,19 @@ class CallRecordingSyncer:
                     "status": "error",
                     "error": clean_msg,
                     "error_type": "file_locked",
+                }
+            # Catch tensor reshape errors that might slip through
+            if "cannot reshape tensor of 0 elements" in error_str:
+                clean_msg = (
+                    f"Audio file contains no processable audio data: {filename}. "
+                    f"The file may be corrupt, empty, or in an unsupported format."
+                )
+                logger.warning(f"Empty audio tensor for {filename}")
+                recording_db.update_status(content_hash, "error", clean_msg)
+                return {
+                    "status": "error",
+                    "error": clean_msg,
+                    "error_type": "bad_audio",
                 }
             logger.error(f"Transcription failed for {filename}: {e}")
             recording_db.update_status(content_hash, "error", error_str)
