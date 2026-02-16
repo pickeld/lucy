@@ -286,9 +286,9 @@ def get_person(person_id: int) -> Optional[Dict[str, Any]]:
 
         person = dict(row)
 
-        # Fetch aliases
+        # Fetch aliases (include id for delete support)
         alias_rows = conn.execute(
-            "SELECT alias, script, source FROM person_aliases WHERE person_id = ?",
+            "SELECT id, alias, script, source FROM person_aliases WHERE person_id = ?",
             (person_id,),
         ).fetchall()
         person["aliases"] = [dict(a) for a in alias_rows]
@@ -638,6 +638,54 @@ def get_all_facts(person_id: int) -> Dict[str, str]:
             (person_id,),
         ).fetchall()
         return {r["fact_key"]: r["fact_value"] for r in rows}
+    finally:
+        conn.close()
+
+
+def delete_fact(person_id: int, fact_key: str) -> bool:
+    """Delete a single fact for a person by key.
+
+    Args:
+        person_id: The person
+        fact_key: The fact key to delete
+
+    Returns:
+        True if the fact was deleted
+    """
+    conn = _get_connection()
+    try:
+        cursor = conn.execute(
+            "DELETE FROM person_facts WHERE person_id = ? AND fact_key = ?",
+            (person_id, fact_key),
+        )
+        if cursor.rowcount > 0:
+            conn.execute(
+                "UPDATE persons SET last_updated = CURRENT_TIMESTAMP WHERE id = ?",
+                (person_id,),
+            )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def delete_alias(alias_id: int) -> bool:
+    """Delete a single alias by its row ID.
+
+    Args:
+        alias_id: The alias row ID
+
+    Returns:
+        True if the alias was deleted
+    """
+    conn = _get_connection()
+    try:
+        cursor = conn.execute(
+            "DELETE FROM person_aliases WHERE id = ?",
+            (alias_id,),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
     finally:
         conn.close()
 

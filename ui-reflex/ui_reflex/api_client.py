@@ -521,3 +521,153 @@ async def start_gmail_sync(force: bool = False) -> dict[str, Any]:
     except Exception as e:
         logger.error(f"Error starting Gmail sync: {e}")
         return {"error": str(e)}
+
+
+# =========================================================================
+# ENTITY STORE
+# =========================================================================
+
+async def fetch_entities(query: str | None = None) -> list[dict[str, Any]]:
+    """Fetch all person entities, optionally filtered by search query."""
+    try:
+        params: dict[str, Any] = {}
+        if query:
+            params["q"] = query
+        resp = await _get_client().get("/entities", params=params, timeout=15)
+        if resp.status_code == 200:
+            return resp.json().get("persons", [])
+    except (httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadError):
+        logger.warning("Connection error fetching entities — resetting client")
+        _reset_client()
+    except Exception as e:
+        logger.error(f"Error fetching entities: {e}")
+    return []
+
+
+async def fetch_entity_stats() -> dict[str, Any]:
+    """Fetch entity store statistics (persons, aliases, facts, relationships)."""
+    try:
+        resp = await _get_client().get("/entities/stats", timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        logger.error(f"Error fetching entity stats: {e}")
+    return {}
+
+
+async def fetch_entity(person_id: int) -> dict[str, Any]:
+    """Fetch a single person entity with all facts, aliases, and relationships."""
+    try:
+        resp = await _get_client().get(f"/entities/{person_id}", timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        elif resp.status_code == 404:
+            return {"error": "Person not found"}
+        else:
+            data = resp.json()
+            return {"error": data.get("error", f"HTTP {resp.status_code}")}
+    except Exception as e:
+        logger.error(f"Error fetching entity {person_id}: {e}")
+        return {"error": str(e)}
+
+
+async def delete_entity(person_id: int) -> dict[str, Any]:
+    """Delete a person entity and all associated data."""
+    try:
+        resp = await _get_client().delete(f"/entities/{person_id}", timeout=10)
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error deleting entity {person_id}: {e}")
+        return {"error": str(e)}
+
+
+async def add_entity_fact(
+    person_id: int, key: str, value: str,
+) -> dict[str, Any]:
+    """Add or update a fact for a person entity."""
+    try:
+        resp = await _get_client().post(
+            f"/entities/{person_id}/facts",
+            json={"key": key, "value": value},
+            timeout=10,
+        )
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error adding entity fact: {e}")
+        return {"error": str(e)}
+
+
+async def delete_entity_fact(person_id: int, fact_key: str) -> dict[str, Any]:
+    """Delete a single fact for a person entity."""
+    try:
+        resp = await _get_client().delete(
+            f"/entities/{person_id}/facts/{fact_key}", timeout=10,
+        )
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error deleting entity fact: {e}")
+        return {"error": str(e)}
+
+
+async def add_entity_alias(person_id: int, alias: str) -> dict[str, Any]:
+    """Add a name alias to a person entity."""
+    try:
+        resp = await _get_client().post(
+            f"/entities/{person_id}/aliases",
+            json={"alias": alias},
+            timeout=10,
+        )
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error adding entity alias: {e}")
+        return {"error": str(e)}
+
+
+async def delete_entity_alias(
+    person_id: int, alias_id: int,
+) -> dict[str, Any]:
+    """Delete a single alias for a person entity by alias row ID."""
+    try:
+        resp = await _get_client().delete(
+            f"/entities/{person_id}/aliases/{alias_id}", timeout=10,
+        )
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error deleting entity alias: {e}")
+        return {"error": str(e)}
+
+
+async def seed_entities() -> dict[str, Any]:
+    """Seed entity store from WhatsApp contacts."""
+    try:
+        resp = await _get_client().post(
+            "/entities/seed",
+            json={"confirm": True},
+            timeout=60,
+        )
+        return resp.json()
+    except httpx.ConnectError:
+        return {"error": "Cannot reach API server"}
+    except httpx.ReadTimeout:
+        return {"error": "Seed timed out — it may still be running"}
+    except Exception as e:
+        logger.error(f"Error seeding entities: {e}")
+        return {"error": str(e)}
+
+
+async def fetch_all_entity_facts(
+    key: str | None = None,
+) -> dict[str, Any]:
+    """Fetch all facts across all persons, optionally filtered by key."""
+    try:
+        params: dict[str, Any] = {}
+        if key:
+            params["key"] = key
+        resp = await _get_client().get(
+            "/entities/facts/all", params=params, timeout=15,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        logger.error(f"Error fetching all entity facts: {e}")
+    return {"facts": [], "available_keys": []}

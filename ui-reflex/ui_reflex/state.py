@@ -26,6 +26,48 @@ logger = logging.getLogger(__name__)
 # Human-readable display labels for settings keys
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Human-readable labels for entity fact keys
+# ---------------------------------------------------------------------------
+
+FACT_LABELS: dict[str, str] = {
+    "birth_date": "Birthday",
+    "gender": "Gender",
+    "city": "City",
+    "job_title": "Job Title",
+    "employer": "Employer",
+    "marital_status": "Marital Status",
+    "email": "Email",
+    "id_number": "ID Number",
+    "is_business": "Business Account",
+    "age": "Age",
+    "address": "Address",
+    "country": "Country",
+    "industry": "Industry",
+    "phone": "Phone",
+    "recent_topic": "Recent Topic",
+    "recent_mood": "Recent Mood",
+}
+
+# Fact keys grouped by semantic category for the entity detail panel.
+# Order matters — categories are displayed top-to-bottom.
+FACT_CATEGORIES: list[dict[str, object]] = [
+    {"name": "Identity", "icon": "tag", "keys": ["gender", "birth_date", "age", "id_number"]},
+    {"name": "Location", "icon": "map-pin", "keys": ["city", "address", "country"]},
+    {"name": "Work", "icon": "briefcase", "keys": ["job_title", "employer", "industry"]},
+    {"name": "Contact", "icon": "mail", "keys": ["email", "phone"]},
+    {"name": "Business", "icon": "building", "keys": ["is_business"]},
+]
+
+# All keys that belong to a named category — anything else goes to "Other"
+_CATEGORIZED_KEYS: set[str] = set()
+for _cat in FACT_CATEGORIES:
+    _CATEGORIZED_KEYS.update(_cat["keys"])  # type: ignore[arg-type]
+
+# ---------------------------------------------------------------------------
+# Human-readable display labels for settings keys
+# ---------------------------------------------------------------------------
+
 SETTING_LABELS: dict[str, str] = {
     # LLM / AI
     "llm_provider": "Provider",
@@ -187,6 +229,27 @@ class AppState(rx.State):
     # --- RAG stats ---
     rag_stats: dict[str, Any] = {}
 
+    # --- Entity store ---
+    entity_persons: list[dict[str, str]] = []
+    entity_stats: dict[str, str] = {}
+    entity_search: str = ""
+    entity_selected_id: int = 0
+    entity_detail: dict[str, Any] = {}
+    entity_tab: str = "people"
+    entity_loading: bool = False
+    entity_detail_loading: bool = False
+    entity_save_message: str = ""
+    entity_new_fact_key: str = ""
+    entity_new_fact_value: str = ""
+    entity_new_alias: str = ""
+    entity_editing_fact_key: str = ""
+    entity_editing_fact_value: str = ""
+    entity_all_facts: list[dict[str, str]] = []
+    entity_fact_keys: list[str] = []
+    entity_fact_key_filter: str = ""
+    entity_seed_status: str = ""
+    entity_seed_message: str = ""
+
     # =====================================================================
     # EXPLICIT SETTERS (avoid deprecated state_auto_setters)
     # =====================================================================
@@ -252,6 +315,31 @@ class AppState(rx.State):
         self.filter_date_to = ""
         self.selected_content_types = []
         self.sort_order = "relevance"
+
+    # --- Entity setters ---
+
+    def set_entity_search(self, value: str):
+        """Set entity search text."""
+        self.entity_search = value
+
+    def set_entity_tab(self, value: str):
+        """Set the active entity tab."""
+        self.entity_tab = value
+
+    def set_entity_new_fact_key(self, value: str):
+        self.entity_new_fact_key = value
+
+    def set_entity_new_fact_value(self, value: str):
+        self.entity_new_fact_value = value
+
+    def set_entity_new_alias(self, value: str):
+        self.entity_new_alias = value
+
+    def set_entity_editing_fact_value(self, value: str):
+        self.entity_editing_fact_value = value
+
+    def set_entity_fact_key_filter(self, value: str):
+        self.entity_fact_key_filter = value
 
     # =====================================================================
     # COMPUTED VARS
@@ -714,6 +802,145 @@ class AppState(rx.State):
             ("app", "cost_tracking_enabled"),
         ])
 
+    # ----- Entity computed vars -----
+
+    @rx.var(cache=True)
+    def entity_stats_persons(self) -> str:
+        return str(self.entity_stats.get("persons", "0"))
+
+    @rx.var(cache=True)
+    def entity_stats_aliases(self) -> str:
+        return str(self.entity_stats.get("aliases", "0"))
+
+    @rx.var(cache=True)
+    def entity_stats_facts(self) -> str:
+        return str(self.entity_stats.get("facts", "0"))
+
+    @rx.var(cache=True)
+    def entity_stats_relationships(self) -> str:
+        return str(self.entity_stats.get("relationships", "0"))
+
+    @rx.var(cache=True)
+    def entity_has_detail(self) -> bool:
+        return self.entity_selected_id > 0
+
+    @rx.var(cache=True)
+    def entity_detail_name(self) -> str:
+        return str(self.entity_detail.get("canonical_name", ""))
+
+    @rx.var(cache=True)
+    def entity_detail_phone(self) -> str:
+        return str(self.entity_detail.get("phone", "") or "")
+
+    @rx.var(cache=True)
+    def entity_detail_whatsapp(self) -> str:
+        return str(self.entity_detail.get("whatsapp_id", "") or "")
+
+    @rx.var(cache=True)
+    def entity_aliases_list(self) -> list[dict[str, str]]:
+        """Aliases from entity_detail with id, alias, script, source."""
+        aliases = self.entity_detail.get("aliases", [])
+        result: list[dict[str, str]] = []
+        for a in aliases:
+            result.append({
+                "id": str(a.get("id", "")),
+                "alias": str(a.get("alias", "")),
+                "script": str(a.get("script", "")),
+                "source": str(a.get("source", "")),
+            })
+        return result
+
+    @rx.var(cache=True)
+    def entity_relationships_list(self) -> list[dict[str, str]]:
+        """Relationships from entity_detail."""
+        rels = self.entity_detail.get("relationships", [])
+        result: list[dict[str, str]] = []
+        for r in rels:
+            result.append({
+                "type": str(r.get("relationship_type", "")),
+                "related_name": str(r.get("related_name", "")),
+                "confidence": str(r.get("confidence", "")),
+            })
+        return result
+
+    @rx.var(cache=True)
+    def entity_facts_grouped(self) -> list[dict[str, str]]:
+        """Facts grouped into flat list with category headers for rx.foreach.
+
+        Each item: {type: "header"|"fact", category, icon, key, label, value,
+                     confidence, source_type, fact_key}
+        """
+        facts_detail = self.entity_detail.get("facts_detail", [])
+        if not facts_detail:
+            return []
+
+        # Build fact lookup by key
+        fact_map: dict[str, dict] = {}
+        for f in facts_detail:
+            fact_map[f.get("fact_key", "")] = f
+
+        result: list[dict[str, str]] = []
+        used_keys: set[str] = set()
+
+        # Named categories
+        for cat in FACT_CATEGORIES:
+            cat_facts: list[dict[str, str]] = []
+            for key in cat["keys"]:  # type: ignore[union-attr]
+                if key in fact_map:
+                    f = fact_map[key]
+                    conf = f.get("confidence")
+                    conf_str = f"{float(conf) * 100:.0f}%" if conf is not None else ""
+                    cat_facts.append({
+                        "type": "fact",
+                        "category": str(cat["name"]),
+                        "icon": str(cat["icon"]),
+                        "key": key,
+                        "label": FACT_LABELS.get(key, key.replace("_", " ").title()),
+                        "value": str(f.get("fact_value", "")),
+                        "confidence": conf_str,
+                        "source_type": str(f.get("source_type", "")),
+                        "fact_key": key,
+                    })
+                    used_keys.add(key)
+            if cat_facts:
+                result.append({
+                    "type": "header",
+                    "category": str(cat["name"]),
+                    "icon": str(cat["icon"]),
+                    "key": "", "label": "", "value": "",
+                    "confidence": "", "source_type": "", "fact_key": "",
+                })
+                result.extend(cat_facts)
+
+        # "Other" category for uncategorized facts
+        other_facts: list[dict[str, str]] = []
+        for key, f in fact_map.items():
+            if key not in used_keys:
+                conf = f.get("confidence")
+                conf_str = f"{float(conf) * 100:.0f}%" if conf is not None else ""
+                other_facts.append({
+                    "type": "fact",
+                    "category": "Other",
+                    "icon": "file-text",
+                    "key": key,
+                    "label": FACT_LABELS.get(key, key.replace("_", " ").title()),
+                    "value": str(f.get("fact_value", "")),
+                    "confidence": conf_str,
+                    "source_type": str(f.get("source_type", "")),
+                    "fact_key": key,
+                })
+        if other_facts:
+            result.append({
+                "type": "header",
+                "category": "Other",
+                "icon": "file-text",
+                "key": "", "label": "", "value": "",
+                "confidence": "", "source_type": "", "fact_key": "",
+            })
+            result.extend(other_facts)
+
+        return result
+
     # =====================================================================
     # LIFECYCLE EVENTS
     # =====================================================================
@@ -731,6 +958,13 @@ class AppState(rx.State):
         await self.on_load()
         await self._load_settings()
         await self._load_cost_data()
+
+    async def on_entities_load(self):
+        """Called when entities page loads."""
+        await self.on_load()
+        await self._load_entity_list()
+        stats = await api_client.fetch_entity_stats()
+        self.entity_stats = {k: str(v) for k, v in stats.items()}
 
     # =====================================================================
     # CONVERSATION MANAGEMENT
@@ -1477,6 +1711,211 @@ class AppState(rx.State):
             self.settings_save_message = "❌ Invalid JSON file"
         except Exception as e:
             self.settings_save_message = f"❌ Import error: {str(e)}"
+
+    # =====================================================================
+    # ENTITY STORE
+    # =====================================================================
+
+    async def _load_entity_list(self, query: str | None = None):
+        """Fetch person list from backend."""
+        self.entity_loading = True
+        raw = await api_client.fetch_entities(query=query or None)
+        self.entity_persons = [
+            {k: str(v) if v is not None else "" for k, v in p.items()}
+            for p in raw
+        ]
+        self.entity_loading = False
+
+    async def search_entities(self):
+        """Search entities using current entity_search value."""
+        q = self.entity_search.strip()
+        await self._load_entity_list(q if q else None)
+
+    async def select_entity(self, person_id: str):
+        """Load full person detail for the side panel."""
+        pid = int(person_id)
+        self.entity_selected_id = pid
+        self.entity_detail_loading = True
+        self.entity_editing_fact_key = ""
+        yield
+        data = await api_client.fetch_entity(pid)
+        if "error" not in data:
+            self.entity_detail = data
+        else:
+            self.entity_save_message = f"❌ {data['error']}"
+        self.entity_detail_loading = False
+
+    def close_entity_detail(self):
+        """Close the detail side panel."""
+        self.entity_selected_id = 0
+        self.entity_detail = {}
+        self.entity_editing_fact_key = ""
+        self.entity_new_fact_key = ""
+        self.entity_new_fact_value = ""
+        self.entity_new_alias = ""
+
+    async def delete_entity(self):
+        """Delete the currently selected person."""
+        if self.entity_selected_id <= 0:
+            return
+        pid = self.entity_selected_id
+        result = await api_client.delete_entity(pid)
+        if "error" in result:
+            self.entity_save_message = f"❌ {result['error']}"
+        else:
+            self.entity_save_message = "✅ Person deleted"
+            self.close_entity_detail()
+            await self._load_entity_list()
+            stats = await api_client.fetch_entity_stats()
+            self.entity_stats = {k: str(v) for k, v in stats.items()}
+
+    async def add_entity_fact(self):
+        """Add a new fact to the selected person."""
+        key = self.entity_new_fact_key.strip()
+        value = self.entity_new_fact_value.strip()
+        if not key or not value or self.entity_selected_id <= 0:
+            return
+        result = await api_client.add_entity_fact(
+            self.entity_selected_id, key, value,
+        )
+        if "error" in result:
+            self.entity_save_message = f"❌ {result['error']}"
+        else:
+            self.entity_save_message = f"✅ Fact '{key}' saved"
+            self.entity_new_fact_key = ""
+            self.entity_new_fact_value = ""
+            # Refresh detail
+            data = await api_client.fetch_entity(self.entity_selected_id)
+            if "error" not in data:
+                self.entity_detail = data
+            stats = await api_client.fetch_entity_stats()
+            self.entity_stats = {k: str(v) for k, v in stats.items()}
+
+    async def save_entity_fact_edit(self):
+        """Save an inline fact edit."""
+        key = self.entity_editing_fact_key.strip()
+        value = self.entity_editing_fact_value.strip()
+        if not key or not value or self.entity_selected_id <= 0:
+            return
+        result = await api_client.add_entity_fact(
+            self.entity_selected_id, key, value,
+        )
+        if "error" in result:
+            self.entity_save_message = f"❌ {result['error']}"
+        else:
+            self.entity_save_message = f"✅ Fact '{key}' updated"
+        self.entity_editing_fact_key = ""
+        self.entity_editing_fact_value = ""
+        # Refresh detail
+        data = await api_client.fetch_entity(self.entity_selected_id)
+        if "error" not in data:
+            self.entity_detail = data
+
+    def start_edit_fact(self, fact_key: str, current_value: str):
+        """Enter inline edit mode for a fact."""
+        self.entity_editing_fact_key = fact_key
+        self.entity_editing_fact_value = current_value
+
+    def cancel_edit_fact(self):
+        """Cancel inline fact editing."""
+        self.entity_editing_fact_key = ""
+        self.entity_editing_fact_value = ""
+
+    async def delete_entity_fact(self, fact_key: str):
+        """Delete a fact from the selected person."""
+        if self.entity_selected_id <= 0:
+            return
+        result = await api_client.delete_entity_fact(
+            self.entity_selected_id, fact_key,
+        )
+        if "error" in result:
+            self.entity_save_message = f"❌ {result['error']}"
+        else:
+            self.entity_save_message = f"✅ Fact deleted"
+        # Refresh detail
+        data = await api_client.fetch_entity(self.entity_selected_id)
+        if "error" not in data:
+            self.entity_detail = data
+        stats = await api_client.fetch_entity_stats()
+        self.entity_stats = {k: str(v) for k, v in stats.items()}
+
+    async def add_entity_alias(self):
+        """Add a new alias to the selected person."""
+        alias = self.entity_new_alias.strip()
+        if not alias or self.entity_selected_id <= 0:
+            return
+        result = await api_client.add_entity_alias(
+            self.entity_selected_id, alias,
+        )
+        if "error" in result:
+            self.entity_save_message = f"❌ {result['error']}"
+        else:
+            self.entity_save_message = f"✅ Alias '{alias}' added"
+            self.entity_new_alias = ""
+        # Refresh detail
+        data = await api_client.fetch_entity(self.entity_selected_id)
+        if "error" not in data:
+            self.entity_detail = data
+        stats = await api_client.fetch_entity_stats()
+        self.entity_stats = {k: str(v) for k, v in stats.items()}
+
+    async def delete_entity_alias(self, alias_id: str):
+        """Delete an alias from the selected person."""
+        if self.entity_selected_id <= 0:
+            return
+        result = await api_client.delete_entity_alias(
+            self.entity_selected_id, int(alias_id),
+        )
+        if "error" in result:
+            self.entity_save_message = f"❌ {result['error']}"
+        else:
+            self.entity_save_message = "✅ Alias deleted"
+        # Refresh detail
+        data = await api_client.fetch_entity(self.entity_selected_id)
+        if "error" not in data:
+            self.entity_detail = data
+        stats = await api_client.fetch_entity_stats()
+        self.entity_stats = {k: str(v) for k, v in stats.items()}
+
+    async def seed_entities(self):
+        """Seed entity store from WhatsApp contacts."""
+        self.entity_seed_status = "seeding"
+        self.entity_seed_message = "⏳ Seeding from WhatsApp contacts…"
+        yield
+        result = await api_client.seed_entities()
+        if "error" in result:
+            self.entity_seed_status = "error"
+            self.entity_seed_message = f"❌ {result['error']}"
+        else:
+            r = result.get("result", {})
+            created = r.get("created", 0)
+            updated = r.get("updated", 0)
+            skipped = r.get("skipped", 0)
+            self.entity_seed_status = "complete"
+            self.entity_seed_message = (
+                f"✅ Seeded: {created} created, {updated} updated, {skipped} skipped"
+            )
+            await self._load_entity_list()
+            stats = await api_client.fetch_entity_stats()
+            self.entity_stats = {k: str(v) for k, v in stats.items()}
+
+    async def load_all_entity_facts(self):
+        """Load all facts across all persons for the All Facts tab."""
+        key_filter = self.entity_fact_key_filter or None
+        data = await api_client.fetch_all_entity_facts(key=key_filter)
+        raw_facts = data.get("facts", [])
+        self.entity_all_facts = [
+            {k: str(v) if v is not None else "" for k, v in f.items()}
+            for f in raw_facts
+        ]
+        keys = data.get("available_keys", [])
+        self.entity_fact_keys = [str(k) for k in keys]
+
+    async def refresh_entities(self):
+        """Refresh entity list and stats."""
+        await self._load_entity_list()
+        stats = await api_client.fetch_entity_stats()
+        self.entity_stats = {k: str(v) for k, v in stats.items()}
 
 
 # =========================================================================

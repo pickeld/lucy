@@ -7,22 +7,13 @@ Usage:
     cd ui-reflex && reflex run
 """
 
-import os
-
 import reflex as rx
 
 from .state import AppState
 from .components.layout import layout
 from .components.chat_area import chat_area
 from .components.settings_page import settings_page
-
-# Backend API URL for embedding the entities UI in an iframe.
-# PUBLIC_API_URL is the browser-reachable address (differs from API_URL in Docker,
-# where API_URL is an internal hostname like "http://app:8765" that browsers can't resolve).
-_PUBLIC_API_URL = os.environ.get(
-    "PUBLIC_API_URL",
-    os.environ.get("API_URL", "http://localhost:8765"),
-)
+from .components.entities_page import entities_page
 
 
 # =========================================================================
@@ -40,19 +31,8 @@ def settings() -> rx.Component:
 
 
 def entities() -> rx.Component:
-    """Entities page — sidebar + entity management UI (iframe to Flask backend)."""
-    return layout(
-        rx.el.iframe(
-            src=f"{_PUBLIC_API_URL}/entities/ui",
-            width="100%",
-            height="100%",
-            style={
-                "border": "none",
-                "flex": "1",
-                "min_height": "calc(100vh - 40px)",
-            },
-        )
-    )
+    """Entities page — sidebar + native entity management UI."""
+    return layout(entities_page())
 
 
 # =========================================================================
@@ -86,5 +66,5 @@ app.add_page(
     entities,
     route="/entities",
     title="Entities — RAG Assistant",
-    on_load=AppState.on_load,
+    on_load=AppState.on_entities_load,
 )

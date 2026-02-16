@@ -1113,6 +1113,34 @@ def add_entity_alias(person_id: int):
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
+@app.route("/entities/<int:person_id>/facts/<fact_key>", methods=["DELETE"])
+def delete_entity_fact(person_id: int, fact_key: str):
+    """Delete a single fact for a person entity."""
+    try:
+        deleted = entity_db.delete_fact(person_id, fact_key)
+        if not deleted:
+            return jsonify({"error": "Fact not found"}), 404
+        return jsonify({"status": "ok", "person_id": person_id, "key": fact_key}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Entity delete fact error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/entities/<int:person_id>/aliases/<int:alias_id>", methods=["DELETE"])
+def delete_entity_alias_by_id(person_id: int, alias_id: int):
+    """Delete a single alias for a person entity by alias row ID."""
+    try:
+        deleted = entity_db.delete_alias(alias_id)
+        if not deleted:
+            return jsonify({"error": "Alias not found"}), 404
+        return jsonify({"status": "ok", "person_id": person_id, "alias_id": alias_id}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Entity delete alias error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
 @app.route("/entities/resolve/<name>", methods=["GET"])
 def resolve_entity_name(name: str):
     """Resolve a name to matching person entities (for disambiguation)."""
