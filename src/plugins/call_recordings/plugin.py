@@ -86,14 +86,21 @@ class CallRecordingsPlugin(ChannelPlugin):
                 "/app/data/call_recordings",
                 "call_recordings",
                 "text",
-                "Local directory path or Dropbox folder path to scan for recordings",
+                "Local directory path, or Dropbox folder path (e.g. /call_recordings)",
             ),
             (
-                "call_recordings_dropbox_token",
+                "call_recordings_dropbox_app_key",
                 "",
                 "call_recordings",
                 "secret",
-                "Dropbox API access token (required when source is Dropbox)",
+                "Dropbox App Key (from dropbox.com/developers/apps)",
+            ),
+            (
+                "call_recordings_dropbox_app_secret",
+                "",
+                "call_recordings",
+                "secret",
+                "Dropbox App Secret",
             ),
             (
                 "call_recordings_whisper_model",
@@ -142,7 +149,9 @@ class CallRecordingsPlugin(ChannelPlugin):
         return {
             "call_recordings_source_type": "CALL_RECORDINGS_SOURCE_TYPE",
             "call_recordings_source_path": "CALL_RECORDINGS_SOURCE_PATH",
-            "call_recordings_dropbox_token": "CALL_RECORDINGS_DROPBOX_TOKEN",
+            "call_recordings_dropbox_app_key": "CALL_RECORDINGS_DROPBOX_APP_KEY",
+            "call_recordings_dropbox_app_secret": "CALL_RECORDINGS_DROPBOX_APP_SECRET",
+            "call_recordings_dropbox_refresh_token": "CALL_RECORDINGS_DROPBOX_REFRESH_TOKEN",
             "call_recordings_whisper_model": "CALL_RECORDINGS_WHISPER_MODEL",
             "call_recordings_file_extensions": "CALL_RECORDINGS_FILE_EXTENSIONS",
             "call_recordings_max_files": "CALL_RECORDINGS_MAX_FILES",
@@ -190,20 +199,24 @@ class CallRecordingsPlugin(ChannelPlugin):
 
         # Create scanner
         if source_type == "dropbox":
-            token = (
-                settings_db.get_setting_value("call_recordings_dropbox_token") or ""
-            )
-            if not token:
+            app_key = settings_db.get_setting_value("call_recordings_dropbox_app_key") or ""
+            app_secret = settings_db.get_setting_value("call_recordings_dropbox_app_secret") or ""
+            refresh_token = settings_db.get_setting_value("call_recordings_dropbox_refresh_token") or ""
+
+            if not refresh_token:
                 logger.warning(
-                    "Call Recordings: Dropbox token not configured — "
-                    "plugin will be inactive until token is set"
+                    "Call Recordings: Dropbox not authorized — "
+                    "complete authorization in the Settings UI"
                 )
-                return
-            self._scanner = DropboxFileScanner(
-                access_token=token,
-                folder_path=source_path,
-                extensions=extensions,
-            )
+                # Still create transcriber + RAG so upload works
+            else:
+                self._scanner = DropboxFileScanner(
+                    folder_path=source_path,
+                    extensions=extensions,
+                    app_key=app_key,
+                    app_secret=app_secret,
+                    refresh_token=refresh_token,
+                )
             logger.info(
                 f"Call Recordings: Using Dropbox source at '{source_path}'"
             )
@@ -329,23 +342,26 @@ class CallRecordingsPlugin(ChannelPlugin):
             )
 
             if source_type == "dropbox":
-                token = (
-                    settings_db.get_setting_value("call_recordings_dropbox_token")
-                    or ""
-                )
-                if not token:
+                app_key = settings_db.get_setting_value("call_recordings_dropbox_app_key") or ""
+                app_secret = settings_db.get_setting_value("call_recordings_dropbox_app_secret") or ""
+                refresh_token = settings_db.get_setting_value("call_recordings_dropbox_refresh_token") or ""
+
+                if not refresh_token:
                     return (
                         jsonify(
                             {
                                 "status": "error",
-                                "message": "Dropbox token not configured",
+                                "message": "Dropbox not authorized — click 'Authorize Dropbox' first",
                             }
                         ),
                         400,
                     )
                 try:
                     test_scanner = DropboxFileScanner(
-                        access_token=token, folder_path=source_path
+                        folder_path=source_path,
+                        app_key=app_key,
+                        app_secret=app_secret,
+                        refresh_token=refresh_token,
                     )
                     if test_scanner.test_connection():
                         return (
@@ -406,6 +422,117 @@ class CallRecordingsPlugin(ChannelPlugin):
                         ),
                         500,
                     )
+
+        @bp.route("/dropbox/auth/url", methods=["GET"])
+        def dropbox_auth_url():
+            """Generate Dropbox OAuth2 authorization URL.
+
+            Reads app_key and app_secret from settings_db.
+            Returns a URL the user must visit to authorize the app.
+            """
+            import settings_db
+
+            app_key = settings_db.get_setting_value("call_recordings_dropbox_app_key") or ""
+            app_secret = settings_db.get_setting_value("call_recordings_dropbox_app_secret") or ""
+
+            if not app_key or not app_secret:
+                return jsonify({
+                    "status": "error",
+                    "message": "Dropbox App Key and App Secret must be configured first",
+                }), 400
+
+            try:
+                from dropbox import DropboxOAuth2FlowNoRedirect
+
+                auth_flow = DropboxOAuth2FlowNoRedirect(
+                    consumer_key=app_key,
+                    consumer_secret=app_secret,
+                    token_access_type="offline",
+                )
+                auth_url = auth_flow.start()
+
+                return jsonify({
+                    "status": "ok",
+                    "auth_url": auth_url,
+                }), 200
+            except ImportError:
+                return jsonify({
+                    "status": "error",
+                    "message": "dropbox package not installed",
+                }), 500
+            except Exception as e:
+                logger.error(f"Dropbox auth URL generation failed: {e}")
+                return jsonify({
+                    "status": "error",
+                    "message": str(e),
+                }), 500
+
+        @bp.route("/dropbox/auth/callback", methods=["POST"])
+        def dropbox_auth_callback():
+            """Exchange Dropbox authorization code for tokens.
+
+            Expects JSON body: {"code": "..."}
+            Stores the refresh_token in settings_db.
+            """
+            import settings_db
+
+            data = request.json or {}
+            code = data.get("code", "").strip()
+
+            if not code:
+                return jsonify({
+                    "status": "error",
+                    "message": "Authorization code is required",
+                }), 400
+
+            app_key = settings_db.get_setting_value("call_recordings_dropbox_app_key") or ""
+            app_secret = settings_db.get_setting_value("call_recordings_dropbox_app_secret") or ""
+
+            if not app_key or not app_secret:
+                return jsonify({
+                    "status": "error",
+                    "message": "App Key and App Secret not configured",
+                }), 400
+
+            try:
+                from dropbox import DropboxOAuth2FlowNoRedirect
+
+                auth_flow = DropboxOAuth2FlowNoRedirect(
+                    consumer_key=app_key,
+                    consumer_secret=app_secret,
+                    token_access_type="offline",
+                )
+                oauth_result = auth_flow.finish(code)
+
+                refresh_token = oauth_result.refresh_token
+                if not refresh_token:
+                    return jsonify({
+                        "status": "error",
+                        "message": "No refresh token received — try again",
+                    }), 400
+
+                # Store the refresh token
+                settings_db.set_setting(
+                    "call_recordings_dropbox_refresh_token", refresh_token
+                )
+
+                logger.info("Dropbox authorized successfully — refresh token stored")
+
+                return jsonify({
+                    "status": "authorized",
+                    "message": "Dropbox authorized successfully",
+                }), 200
+            except ImportError:
+                return jsonify({
+                    "status": "error",
+                    "message": "dropbox package not installed",
+                }), 500
+            except Exception as e:
+                logger.error(f"Dropbox auth callback failed: {e}")
+                return jsonify({
+                    "status": "error",
+                    "message": f"Authorization failed: {e}",
+                }), 500
 
         @bp.route("/upload", methods=["POST"])
         def upload():

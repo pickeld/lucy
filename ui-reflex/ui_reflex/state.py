@@ -132,7 +132,8 @@ SETTING_LABELS: dict[str, str] = {
     # Call Recordings plugin
     "call_recordings_source_type": "Source Type",
     "call_recordings_source_path": "Source Path",
-    "call_recordings_dropbox_token": "Dropbox Token",
+    "call_recordings_dropbox_app_key": "Dropbox App Key",
+    "call_recordings_dropbox_app_secret": "Dropbox App Secret",
     "call_recordings_whisper_model": "Whisper Model Size",
     "call_recordings_file_extensions": "Audio File Extensions",
     "call_recordings_max_files": "Max Files per Sync",
@@ -241,6 +242,12 @@ class AppState(rx.State):
 
     # --- Call Recordings upload state ---
     call_recordings_upload_message: str = ""
+
+    # --- Call Recordings Dropbox auth state ---
+    call_recordings_dbx_auth_url: str = ""
+    call_recordings_dbx_auth_status: str = ""
+    call_recordings_dbx_auth_message: str = ""
+    call_recordings_dbx_auth_code: str = ""
 
     # --- Tab state ---
     settings_tab: str = "ai"   # Active main tab
@@ -1804,6 +1811,59 @@ class AppState(rx.State):
                 self.call_recordings_upload_message = msg
         except Exception as e:
             self.call_recordings_upload_message = f"❌ Upload error: {str(e)}"
+
+    # ----- Call Recordings Dropbox auth -----
+
+    def set_call_recordings_dbx_auth_code(self, value: str):
+        """Set the Dropbox auth code input."""
+        self.call_recordings_dbx_auth_code = value
+
+    async def call_recordings_dbx_start_auth(self):
+        """Request a Dropbox OAuth2 authorization URL."""
+        self.call_recordings_dbx_auth_status = "pending"
+        self.call_recordings_dbx_auth_message = "Generating authorization URL…"
+        self.call_recordings_dbx_auth_url = ""
+        yield
+
+        result = await api_client.call_recordings_dropbox_auth_url()
+        if "error" in result:
+            self.call_recordings_dbx_auth_status = "error"
+            self.call_recordings_dbx_auth_message = f"❌ {result['error']}"
+        elif result.get("auth_url"):
+            self.call_recordings_dbx_auth_status = "pending"
+            self.call_recordings_dbx_auth_url = result["auth_url"]
+            self.call_recordings_dbx_auth_message = (
+                "Open the URL below in your browser, approve access, "
+                "then paste the authorization code."
+            )
+        else:
+            self.call_recordings_dbx_auth_status = "error"
+            self.call_recordings_dbx_auth_message = "❌ Unexpected response"
+
+    async def call_recordings_dbx_submit_code(self):
+        """Submit the Dropbox authorization code."""
+        code = self.call_recordings_dbx_auth_code.strip()
+        if not code:
+            self.call_recordings_dbx_auth_message = "❌ Enter the authorization code"
+            return
+
+        self.call_recordings_dbx_auth_status = "pending"
+        self.call_recordings_dbx_auth_message = "⏳ Exchanging code for tokens…"
+        yield
+
+        result = await api_client.call_recordings_dropbox_auth_callback(code)
+        if "error" in result:
+            self.call_recordings_dbx_auth_status = "error"
+            self.call_recordings_dbx_auth_message = f"❌ {result['error']}"
+        elif result.get("status") == "authorized":
+            self.call_recordings_dbx_auth_status = "success"
+            self.call_recordings_dbx_auth_message = "✅ Dropbox authorized successfully!"
+            self.call_recordings_dbx_auth_url = ""
+            self.call_recordings_dbx_auth_code = ""
+            await self._load_settings()
+        else:
+            self.call_recordings_dbx_auth_status = "error"
+            self.call_recordings_dbx_auth_message = f"❌ Unexpected: {result}"
 
     async def reset_category(self, category: str):
         """Reset a settings category to defaults."""
