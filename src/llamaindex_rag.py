@@ -356,30 +356,28 @@ class ArchiveRetriever(BaseRetriever):
             logger.debug(f"Entity fact injection failed (non-critical): {e}")
         
         # =====================================================================
-        # Phase 2: Cohere multilingual reranking (optional)
+        # Cohere multilingual reranking
         # Re-scores results using a cross-encoder model that natively
         # understands Hebrew, dramatically improving retrieval precision.
+        # Requires cohere_api_key to be set in settings.
         # =====================================================================
         try:
-            if settings.get("rag_rerank_enabled", "false").lower() == "true":
-                cohere_key = settings.get("cohere_api_key", "")
-                if cohere_key:
-                    from llama_index.postprocessor.cohere_rerank import CohereRerank
-                    
-                    rerank_top_n = int(settings.get("rag_rerank_top_n", "10"))
-                    rerank_model = settings.get("rag_rerank_model", "rerank-multilingual-v3.0")
-                    reranker = CohereRerank(
-                        api_key=cohere_key,
-                        top_n=rerank_top_n,
-                        model=rerank_model,
-                    )
-                    pre_rerank = len(results)
-                    results = reranker.postprocess_nodes(results, query_bundle)
-                    logger.info(
-                        f"Cohere rerank ({rerank_model}): {pre_rerank} → {len(results)} results"
-                    )
-                else:
-                    logger.debug("Reranking enabled but cohere_api_key not set — skipping")
+            cohere_key = settings.get("cohere_api_key", "")
+            if cohere_key:
+                from llama_index.postprocessor.cohere_rerank import CohereRerank
+                
+                rerank_top_n = int(settings.get("rag_rerank_top_n", "10"))
+                rerank_model = settings.get("rag_rerank_model", "rerank-multilingual-v3.0")
+                reranker = CohereRerank(
+                    api_key=cohere_key,
+                    top_n=rerank_top_n,
+                    model=rerank_model,
+                )
+                pre_rerank = len(results)
+                results = reranker.postprocess_nodes(results, query_bundle)
+                logger.info(
+                    f"Cohere rerank ({rerank_model}): {pre_rerank} → {len(results)} results"
+                )
         except ImportError:
             logger.warning(
                 "llama-index-postprocessor-cohere-rerank not installed. "
@@ -389,24 +387,22 @@ class ArchiveRetriever(BaseRetriever):
             logger.debug(f"Cohere reranking failed (non-critical): {e}")
         
         # =====================================================================
-        # Phase 5: LlamaIndex NodePostprocessor chain (optional)
-        # Replaces manual score filtering with composable postprocessors.
+        # NodePostprocessor chain — composable score filtering
         # =====================================================================
         try:
-            if settings.get("rag_postprocessor_chain_enabled", "false").lower() == "true":
-                postprocessors = [
-                    SimilarityPostprocessor(
-                        similarity_cutoff=float(settings.get("rag_min_score", "0.2"))
-                    ),
-                ]
-                for pp in postprocessors:
-                    pre_pp = len(results)
-                    results = pp.postprocess_nodes(results, query_bundle)
-                    if len(results) < pre_pp:
-                        logger.debug(
-                            f"Postprocessor {pp.__class__.__name__}: "
-                            f"{pre_pp} → {len(results)} results"
-                        )
+            postprocessors = [
+                SimilarityPostprocessor(
+                    similarity_cutoff=float(settings.get("rag_min_score", "0.2"))
+                ),
+            ]
+            for pp in postprocessors:
+                pre_pp = len(results)
+                results = pp.postprocess_nodes(results, query_bundle)
+                if len(results) < pre_pp:
+                    logger.debug(
+                        f"Postprocessor {pp.__class__.__name__}: "
+                        f"{pre_pp} → {len(results)} results"
+                    )
         except Exception as e:
             logger.debug(f"Postprocessor chain failed (non-critical): {e}")
         
@@ -492,7 +488,6 @@ class LlamaIndexRAG:
     VECTOR_SIZE = int(settings.get("rag_vector_size", "1024"))
     MINIMUM_SIMILARITY_SCORE = float(settings.rag_min_score)
     MAX_CONTEXT_TOKENS = int(settings.rag_max_context_tokens)
-    RRF_K = int(settings.get("rag_rrf_k", "60"))
     
     def __new__(cls):
         """Singleton pattern to ensure one RAG instance."""
@@ -1918,60 +1913,6 @@ class LlamaIndexRAG:
             logger.debug(f"Full-text search failed (indexes may not exist): {e}")
             return []
     
-    @staticmethod
-    def _reciprocal_rank_fusion(
-        vector_results: List[NodeWithScore],
-        fulltext_results: List[NodeWithScore],
-        k: int = 10,
-        rrf_k: int = 60
-    ) -> List[NodeWithScore]:
-        """Merge vector and full-text search results using Reciprocal Rank Fusion.
-        
-        RRF combines results from multiple retrieval methods by scoring each
-        result based on its rank position in each list, then sorting by combined
-        score. This avoids the need to normalize incompatible score scales
-        (cosine similarity vs full-text match).
-        
-        Formula: RRF_score(d) = sum(1 / (rrf_k + rank_i(d))) for each list i
-        
-        Args:
-            vector_results: Results from vector similarity search
-            fulltext_results: Results from full-text metadata search
-            k: Maximum number of results to return
-            rrf_k: Smoothing constant (default 60, standard in literature)
-            
-        Returns:
-            Merged and re-ranked list of NodeWithScore
-        """
-        # Map node_id -> (rrf_score, best_node_with_score)
-        scores: Dict[str, float] = {}
-        node_map: Dict[str, NodeWithScore] = {}
-        
-        for rank, result in enumerate(vector_results):
-            node_id = result.node.id_ if result.node else None
-            if not node_id:
-                continue
-            scores[node_id] = scores.get(node_id, 0.0) + 1.0 / (rrf_k + rank + 1)
-            node_map[node_id] = result
-        
-        for rank, result in enumerate(fulltext_results):
-            node_id = result.node.id_ if result.node else None
-            if not node_id:
-                continue
-            scores[node_id] = scores.get(node_id, 0.0) + 1.0 / (rrf_k + rank + 1)
-            if node_id not in node_map:
-                node_map[node_id] = result
-        
-        # Sort by RRF score descending, return top-k with RRF score
-        sorted_ids = sorted(scores.keys(), key=lambda nid: scores[nid], reverse=True)[:k]
-        
-        merged = []
-        for node_id in sorted_ids:
-            original = node_map[node_id]
-            merged.append(NodeWithScore(node=original.node, score=scores[node_id]))
-        
-        return merged
-    
     def _metadata_search(
         self,
         k: int = 20,
@@ -2484,34 +2425,33 @@ class LlamaIndexRAG:
             # generates multiple query variants for better recall.
             # =================================================================
             try:
-                if settings.get("rag_query_fusion_enabled", "false").lower() == "true":
-                    from llama_index.core.retrievers import QueryFusionRetriever
-                    
-                    self._ensure_llm_configured()
-                    must_conditions = self._build_filter_conditions(**_fkw)
-                    qdrant_filters = Filter(must=must_conditions) if must_conditions else None
-                    
-                    vector_ret = VectorOnlyRetriever(rag=self, k=k, qdrant_filter=qdrant_filters)
-                    fulltext_ret = FulltextOnlyRetriever(rag=self, k=k, filter_kwargs=_fkw)
-                    
-                    num_queries = int(settings.get("rag_query_fusion_num_queries", "3"))
-                    fusion = QueryFusionRetriever(
-                        retrievers=[vector_ret, fulltext_ret],
-                        similarity_top_k=k,
-                        num_queries=num_queries,
-                        mode="reciprocal_rerank",
-                        llm=Settings.llm,
-                    )
-                    fusion_results = fusion.retrieve(query)
-                    logger.info(
-                        f"QueryFusionRetriever ({num_queries} query variants): "
-                        f"{len(fusion_results)} results for '{query[:50]}...'"
-                    )
-                    return fusion_results
+                from llama_index.core.retrievers import QueryFusionRetriever
+                
+                self._ensure_llm_configured()
+                must_conditions = self._build_filter_conditions(**_fkw)
+                qdrant_filters = Filter(must=must_conditions) if must_conditions else None
+                
+                vector_ret = VectorOnlyRetriever(rag=self, k=k, qdrant_filter=qdrant_filters)
+                fulltext_ret = FulltextOnlyRetriever(rag=self, k=k, filter_kwargs=_fkw)
+                
+                num_queries = int(settings.get("rag_query_fusion_num_queries", "3"))
+                fusion = QueryFusionRetriever(
+                    retrievers=[vector_ret, fulltext_ret],
+                    similarity_top_k=k,
+                    num_queries=num_queries,
+                    mode="reciprocal_rerank",
+                    llm=Settings.llm,
+                )
+                fusion_results = fusion.retrieve(query)
+                logger.info(
+                    f"QueryFusionRetriever ({num_queries} query variants): "
+                    f"{len(fusion_results)} results for '{query[:50]}...'"
+                )
+                return fusion_results
             except ImportError:
-                logger.debug("QueryFusionRetriever not available — using manual RRF")
+                logger.debug("QueryFusionRetriever not available — using vector-only fallback")
             except Exception as e:
-                logger.debug(f"QueryFusionRetriever failed, falling back to manual RRF: {e}")
+                logger.debug(f"QueryFusionRetriever failed, falling back to vector-only: {e}")
             
             # Build Qdrant filter conditions
             must_conditions = self._build_filter_conditions(**_fkw)
@@ -2526,20 +2466,19 @@ class LlamaIndexRAG:
             # =================================================================
             hyde_embedding = None
             try:
-                if settings.get("rag_hyde_enabled", "false").lower() == "true":
-                    self._ensure_llm_configured()
-                    from llama_index.core.indices.query.query_transform import HyDEQueryTransform
-                    
-                    hyde = HyDEQueryTransform(llm=Settings.llm, include_original=True)
-                    hyde_bundle = hyde.run(query)
-                    # Use the HyDE-generated embedding if available
-                    if hasattr(hyde_bundle, 'embedding') and hyde_bundle.embedding:
-                        hyde_embedding = hyde_bundle.embedding
-                        logger.info(f"HyDE generated hypothetical answer for query: {query[:50]}...")
-                    elif hasattr(hyde_bundle, 'query_str') and hyde_bundle.query_str:
-                        # Embed the hypothetical document text
-                        hyde_embedding = Settings.embed_model.get_query_embedding(hyde_bundle.query_str)
-                        logger.info(f"HyDE transformed query: {hyde_bundle.query_str[:80]}...")
+                self._ensure_llm_configured()
+                from llama_index.core.indices.query.query_transform import HyDEQueryTransform
+                
+                hyde = HyDEQueryTransform(llm=Settings.llm, include_original=True)
+                hyde_bundle = hyde.run(query)
+                # Use the HyDE-generated embedding if available
+                if hasattr(hyde_bundle, 'embedding') and hyde_bundle.embedding:
+                    hyde_embedding = hyde_bundle.embedding
+                    logger.info(f"HyDE generated hypothetical answer for query: {query[:50]}...")
+                elif hasattr(hyde_bundle, 'query_str') and hyde_bundle.query_str:
+                    # Embed the hypothetical document text
+                    hyde_embedding = Settings.embed_model.get_query_embedding(hyde_bundle.query_str)
+                    logger.info(f"HyDE transformed query: {hyde_bundle.query_str[:80]}...")
             except ImportError:
                 logger.debug("HyDE query transform not available")
             except Exception as e:
@@ -2581,50 +2520,12 @@ class LlamaIndexRAG:
                 
                 valid_results.append(NodeWithScore(node=node, score=result.score))
             
-            # Apply minimum similarity score threshold to vector results
-            pre_filter_count = len(valid_results)
-            valid_results = [
-                r for r in valid_results
-                if r.score is not None and r.score >= self.MINIMUM_SIMILARITY_SCORE
-            ]
-            if pre_filter_count > len(valid_results):
-                logger.debug(
-                    f"Score threshold filtered {pre_filter_count - len(valid_results)} "
-                    f"results below {self.MINIMUM_SIMILARITY_SCORE}"
-                )
+            # Score filtering and hybrid fulltext+vector fusion are now
+            # handled by QueryFusionRetriever (primary path above) and
+            # SimilarityPostprocessor in the _retrieve() postprocessor chain.
+            # This vector-only path is the fallback when QueryFusion fails.
             
-            # Hybrid search: also do full-text search on metadata and merge results.
-            # When filter_sender is set, the sender field fulltext search is
-            # automatically skipped inside _fulltext_search (exact match already
-            # applied via filter conditions), but chat_name and message searches
-            # still run — so we no longer disable metadata search entirely.
-            if include_metadata_search:
-                fulltext_results = self._fulltext_search(
-                    query=query,
-                    k=k,
-                    filter_chat_name=filter_chat_name,
-                    filter_sender=filter_sender,
-                    filter_days=filter_days,
-                    filter_sources=filter_sources,
-                    filter_date_from=filter_date_from,
-                    filter_date_to=filter_date_to,
-                    filter_content_types=filter_content_types,
-                )
-                
-                # Merge using Reciprocal Rank Fusion for fair ranking
-                if fulltext_results:
-                    valid_results = self._reciprocal_rank_fusion(
-                        vector_results=valid_results,
-                        fulltext_results=fulltext_results,
-                        k=k,
-                        rrf_k=self.RRF_K
-                    )
-                    logger.info(
-                        f"RRF merged {len(fulltext_results)} fulltext + vector results "
-                        f"→ {len(valid_results)} final"
-                    )
-            
-            logger.info(f"RAG search for '{query[:50]}...' returned {len(valid_results)} valid results")
+            logger.info(f"RAG search for '{query[:50]}...' returned {len(valid_results)} results (vector-only fallback)")
             return valid_results
             
         except Exception as e:
