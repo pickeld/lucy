@@ -290,6 +290,7 @@ class DocumentSyncer:
             return {"status": "already_running"}
         
         self._syncing = True
+        self._sync_run_id = str(uuid.uuid4())  # Unique per sync run for GC
         synced = 0
         skipped = 0
         errors = 0
@@ -463,6 +464,10 @@ class DocumentSyncer:
                             "document_type": doc.get("document_type_name", ""),
                             "created": created_str,
                             "modified": doc.get("modified", ""),
+                            # Sync metadata for garbage collection & change detection
+                            "sync_run_id": self._sync_run_id,
+                            "last_modified_ts": doc.get("modified", ""),
+                            "indexed_at": int(time.time()),
                         }
                         
                         # Extract all numeric sequences (≥5 digits) from the

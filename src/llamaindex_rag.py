@@ -3332,6 +3332,65 @@ class LlamaIndexRAG:
             logger.error(f"Failed to get RAG stats: {e}")
             return {"error": str(e)}
     
+    def create_snapshot(self) -> Optional[Dict[str, Any]]:
+        """Create a Qdrant collection snapshot for backup.
+        
+        Snapshots capture the full collection state (vectors, payloads,
+        indexes) and can be used to restore the collection on the same
+        or a different Qdrant instance.
+        
+        Returns:
+            Dict with snapshot metadata (name, creation_time, size),
+            or None if snapshot creation failed
+        """
+        try:
+            snapshot_info = self.qdrant_client.create_snapshot(
+                collection_name=self.COLLECTION_NAME
+            )
+            
+            # Get collection stats for context
+            stats = self.get_stats()
+            total_points = stats.get("total_documents", "unknown")
+            
+            result = {
+                "snapshot_name": getattr(snapshot_info, "name", str(snapshot_info)),
+                "collection": self.COLLECTION_NAME,
+                "points_count": total_points,
+                "created_at": datetime.now().isoformat(),
+            }
+            
+            logger.info(
+                f"Created Qdrant snapshot: {result['snapshot_name']} "
+                f"({total_points} points)"
+            )
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to create snapshot: {e}")
+            return None
+    
+    def list_snapshots(self) -> List[Dict[str, Any]]:
+        """List all available snapshots for the collection.
+        
+        Returns:
+            List of snapshot info dicts
+        """
+        try:
+            snapshots = self.qdrant_client.list_snapshots(
+                collection_name=self.COLLECTION_NAME
+            )
+            return [
+                {
+                    "name": getattr(s, "name", str(s)),
+                    "creation_time": getattr(s, "creation_time", None),
+                    "size": getattr(s, "size", None),
+                }
+                for s in snapshots
+            ]
+        except Exception as e:
+            logger.error(f"Failed to list snapshots: {e}")
+            return []
+    
     def delete_by_source(self, source_value: str) -> int:
         """Delete all points matching a specific source value.
         

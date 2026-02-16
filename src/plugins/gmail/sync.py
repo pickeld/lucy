@@ -494,6 +494,7 @@ class EmailSyncer:
             return {"status": "already_running"}
 
         self._syncing = True
+        self._sync_run_id = str(uuid.uuid4())  # Unique per sync run for GC
         synced = 0
         skipped = 0
         errors = 0
@@ -609,6 +610,9 @@ class EmailSyncer:
                             "attachment_names": ",".join(
                                 a.filename for a in parsed.attachments[:10]
                             ),
+                            # Sync metadata for garbage collection & change detection
+                            "sync_run_id": self._sync_run_id,
+                            "indexed_at": int(time.time()),
                         }
 
                         # Chunk and index email body
