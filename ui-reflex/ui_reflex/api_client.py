@@ -613,6 +613,112 @@ async def upload_call_recordings(file_data: list[tuple[str, bytes]]) -> dict[str
         return {"error": str(e)}
 
 
+async def fetch_call_recording_files(status: str | None = None) -> dict[str, Any]:
+    """Fetch all tracked recording files with status and metadata.
+
+    Args:
+        status: Optional status filter (pending, transcribing, transcribed, approved, error)
+    """
+    try:
+        params: dict[str, Any] = {}
+        if status:
+            params["status"] = status
+        resp = await _get_client().get(
+            "/plugins/call_recordings/files", params=params, timeout=15,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        return {"files": [], "counts": {}, "error": f"HTTP {resp.status_code}"}
+    except httpx.ConnectError:
+        return {"files": [], "counts": {}, "error": "Cannot reach API server"}
+    except Exception as e:
+        logger.error(f"Error fetching recording files: {e}")
+        return {"files": [], "counts": {}, "error": str(e)}
+
+
+async def update_recording_metadata(
+    content_hash: str,
+    contact_name: str | None = None,
+    phone_number: str | None = None,
+) -> dict[str, Any]:
+    """Update metadata for a recording file."""
+    try:
+        payload: dict[str, Any] = {}
+        if contact_name is not None:
+            payload["contact_name"] = contact_name
+        if phone_number is not None:
+            payload["phone_number"] = phone_number
+        resp = await _get_client().put(
+            f"/plugins/call_recordings/files/{content_hash}/metadata",
+            json=payload,
+            timeout=10,
+        )
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error updating recording metadata: {e}")
+        return {"error": str(e)}
+
+
+async def transcribe_recording(content_hash: str) -> dict[str, Any]:
+    """Trigger transcription for a single recording."""
+    try:
+        resp = await _get_client().post(
+            f"/plugins/call_recordings/files/{content_hash}/transcribe",
+            timeout=600,
+        )
+        return resp.json()
+    except httpx.ReadTimeout:
+        return {"error": "Transcription timed out — it may still be running"}
+    except Exception as e:
+        logger.error(f"Error transcribing recording: {e}")
+        return {"error": str(e)}
+
+
+async def approve_recording(content_hash: str) -> dict[str, Any]:
+    """Approve a transcribed recording and index it into Qdrant."""
+    try:
+        resp = await _get_client().post(
+            f"/plugins/call_recordings/files/{content_hash}/approve",
+            timeout=120,
+        )
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error approving recording: {e}")
+        return {"error": str(e)}
+
+
+async def delete_recording(content_hash: str, remove_disk: bool = True) -> dict[str, Any]:
+    """Delete a recording file from tracking and optionally from disk."""
+    try:
+        params = {"disk": "true" if remove_disk else "false"}
+        resp = await _get_client().delete(
+            f"/plugins/call_recordings/files/{content_hash}",
+            params=params,
+            timeout=10,
+        )
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error deleting recording: {e}")
+        return {"error": str(e)}
+
+
+async def scan_call_recordings(auto_transcribe: bool = True) -> dict[str, Any]:
+    """Scan for new recording files and optionally auto-transcribe."""
+    try:
+        params = {"auto_transcribe": "true" if auto_transcribe else "false"}
+        resp = await _get_client().post(
+            "/plugins/call_recordings/scan",
+            params=params,
+            timeout=600,
+        )
+        return resp.json()
+    except httpx.ReadTimeout:
+        return {"error": "Scan timed out — it may still be running"}
+    except Exception as e:
+        logger.error(f"Error scanning recordings: {e}")
+        return {"error": str(e)}
+
+
 # =========================================================================
 # ENTITY STORE
 # =========================================================================

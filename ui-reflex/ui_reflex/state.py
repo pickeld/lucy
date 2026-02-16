@@ -239,6 +239,11 @@ class AppState(rx.State):
     # --- Call Recordings upload state ---
     call_recordings_upload_message: str = ""
 
+    # --- Call Recordings files table ---
+    call_recordings_files: list[dict[str, str]] = []
+    call_recordings_files_loading: bool = False
+    call_recordings_counts: dict[str, str] = {}
+    call_recordings_scan_message: str = ""
 
     # --- Tab state ---
     settings_tab: str = "ai"   # Active main tab
