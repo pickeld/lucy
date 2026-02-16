@@ -150,9 +150,15 @@ def _section_card(
 
 
 def _people_tab() -> rx.Component:
-    """People tab — toolbar + conditional master-detail layout."""
+    """People tab — toolbar + merge bar + conditional master-detail layout."""
     return rx.flex(
         _toolbar(),
+        # Merge action bar (shown when merge mode is active)
+        rx.cond(
+            AppState.entity_merge_mode,
+            _merge_action_bar(),
+            rx.fragment(),
+        ),
         rx.cond(
             AppState.entity_has_detail,
             # Two-column: person list (left) + detail panel (right)
@@ -170,8 +176,45 @@ def _people_tab() -> rx.Component:
     )
 
 
+def _merge_action_bar() -> rx.Component:
+    """Bar showing merge selection count and merge execute button."""
+    return rx.flex(
+        rx.flex(
+            rx.icon("merge", size=16, class_name="text-purple-500"),
+            rx.text(
+                rx.cond(
+                    AppState.entity_merge_count > 0,
+                    AppState.entity_merge_count.to(str) + " selected",  # type: ignore[union-attr]
+                    "Click persons to select for merge",
+                ),
+                class_name="text-sm text-gray-600",
+            ),
+            align="center",
+            gap="2",
+        ),
+        rx.text(
+            "First selected = merge target (keeps name)",
+            class_name="text-xs text-gray-400 italic",
+        ),
+        rx.button(
+            rx.icon("git-merge", size=14, class_name="mr-1"),
+            "Merge Selected",
+            on_click=AppState.execute_merge,
+            disabled=~AppState.entity_can_merge,
+            size="2",
+            class_name="bg-purple-500 text-white hover:bg-purple-600 disabled:opacity-50",
+        ),
+        justify="between",
+        align="center",
+        class_name=(
+            "w-full px-4 py-2 bg-purple-50 border border-purple-200 "
+            "rounded-lg"
+        ),
+    )
+
+
 def _toolbar() -> rx.Component:
-    """Search bar + seed + refresh + cleanup buttons."""
+    """Search bar + seed + refresh + cleanup + merge buttons."""
     return rx.flex(
         rx.el.input(
             placeholder="Search persons…",
@@ -212,6 +255,19 @@ def _toolbar() -> rx.Component:
             variant="outline",
             size="2",
             color_scheme="red",
+        ),
+        # Merge mode toggle
+        rx.button(
+            rx.icon("merge", size=14, class_name="mr-1"),
+            rx.cond(
+                AppState.entity_merge_mode,
+                "Cancel Merge",
+                "Merge",
+            ),
+            on_click=AppState.toggle_merge_mode,
+            variant=rx.cond(AppState.entity_merge_mode, "solid", "outline"),
+            size="2",
+            color_scheme=rx.cond(AppState.entity_merge_mode, "purple", "gray"),
         ),
         gap="2",
         align="center",
@@ -268,8 +324,45 @@ def _person_grid_full() -> rx.Component:
 
 
 def _person_card(person: dict) -> rx.Component:
-    """Single person card for the grid."""
+    """Single person card for the grid — with merge checkbox when in merge mode."""
+    is_selected_for_merge = AppState.entity_merge_selection.contains(person["id"])
+    merge_index = _merge_index_label(person["id"])
+
     return rx.box(
+        # Merge mode: checkbox overlay
+        rx.cond(
+            AppState.entity_merge_mode,
+            rx.flex(
+                rx.cond(
+                    is_selected_for_merge,
+                    rx.flex(
+                        rx.icon("check", size=14, class_name="text-white"),
+                        class_name=(
+                            "w-6 h-6 rounded-full bg-purple-500 "
+                            "flex items-center justify-center shrink-0"
+                        ),
+                    ),
+                    rx.box(
+                        class_name=(
+                            "w-6 h-6 rounded-full border-2 border-gray-300 "
+                            "shrink-0"
+                        ),
+                    ),
+                ),
+                rx.cond(
+                    is_selected_for_merge,
+                    rx.text(
+                        merge_index,
+                        class_name="text-xs text-purple-500 font-bold",
+                    ),
+                    rx.fragment(),
+                ),
+                align="center",
+                gap="1",
+                class_name="absolute top-2 right-2",
+            ),
+            rx.fragment(),
+        ),
         rx.text(
             person["canonical_name"],
             class_name="text-sm font-semibold text-gray-800 truncate",
@@ -308,11 +401,38 @@ def _person_card(person: dict) -> rx.Component:
             gap="3",
             class_name="mt-2",
         ),
-        on_click=AppState.select_entity(person["id"]),
-        class_name=(
-            "settings-card cursor-pointer hover:border-accent "
-            "transition-all duration-150 hover:-translate-y-0.5"
+        on_click=rx.cond(
+            AppState.entity_merge_mode,
+            AppState.toggle_merge_selection(person["id"]),
+            AppState.select_entity(person["id"]),
         ),
+        class_name=rx.cond(
+            is_selected_for_merge,
+            (
+                "settings-card cursor-pointer border-purple-400 bg-purple-50 "
+                "transition-all duration-150 hover:-translate-y-0.5 relative"
+            ),
+            (
+                "settings-card cursor-pointer hover:border-accent "
+                "transition-all duration-150 hover:-translate-y-0.5 relative"
+            ),
+        ),
+    )
+
+
+def _merge_index_label(person_id: rx.Var) -> rx.Var:
+    """Compute a label like '① target' or '②' for merge selection order.
+
+    Uses a simple conditional since rx.foreach doesn't support index tracking.
+    """
+    return rx.cond(
+        AppState.entity_merge_selection.length() > 0,  # type: ignore[union-attr]
+        rx.cond(
+            AppState.entity_merge_selection[0] == person_id,
+            "① target",
+            "②+",
+        ),
+        "",
     )
 
 
@@ -336,46 +456,87 @@ def _person_list_column() -> rx.Component:
 
 
 def _person_list_item(person: dict) -> rx.Component:
-    """Compact person item for the side list."""
+    """Compact person item for the side list — with merge checkbox."""
     is_selected = AppState.entity_selected_id == person["id"].to(int)
+    is_merge_selected = AppState.entity_merge_selection.contains(person["id"])
+
     return rx.box(
-        rx.text(
-            person["canonical_name"],
-            class_name="text-sm font-medium text-gray-800 truncate",
-        ),
         rx.flex(
-            rx.flex(
-                rx.icon("file-text", size=11, class_name="text-gray-400"),
-                rx.text(
-                    person["fact_count"],
-                    class_name="text-xs text-gray-400",
+            # Merge checkbox (when in merge mode)
+            rx.cond(
+                AppState.entity_merge_mode,
+                rx.cond(
+                    is_merge_selected,
+                    rx.flex(
+                        rx.icon("check", size=10, class_name="text-white"),
+                        class_name=(
+                            "w-5 h-5 rounded-full bg-purple-500 "
+                            "flex items-center justify-center shrink-0"
+                        ),
+                    ),
+                    rx.box(
+                        class_name=(
+                            "w-5 h-5 rounded-full border-2 border-gray-300 "
+                            "shrink-0"
+                        ),
+                    ),
                 ),
-                align="center",
-                gap="1",
+                rx.fragment(),
             ),
-            rx.flex(
-                rx.icon("tag", size=11, class_name="text-gray-400"),
+            rx.box(
                 rx.text(
-                    person["alias_count"],
-                    class_name="text-xs text-gray-400",
+                    person["canonical_name"],
+                    class_name="text-sm font-medium text-gray-800 truncate",
                 ),
-                align="center",
-                gap="1",
+                rx.flex(
+                    rx.flex(
+                        rx.icon("file-text", size=11, class_name="text-gray-400"),
+                        rx.text(
+                            person["fact_count"],
+                            class_name="text-xs text-gray-400",
+                        ),
+                        align="center",
+                        gap="1",
+                    ),
+                    rx.flex(
+                        rx.icon("tag", size=11, class_name="text-gray-400"),
+                        rx.text(
+                            person["alias_count"],
+                            class_name="text-xs text-gray-400",
+                        ),
+                        align="center",
+                        gap="1",
+                    ),
+                    gap="3",
+                    class_name="mt-0.5",
+                ),
+                class_name="flex-1 min-w-0",
             ),
-            gap="3",
-            class_name="mt-0.5",
+            align="center",
+            gap="2",
         ),
-        on_click=AppState.select_entity(person["id"]),
+        on_click=rx.cond(
+            AppState.entity_merge_mode,
+            AppState.toggle_merge_selection(person["id"]),
+            AppState.select_entity(person["id"]),
+        ),
         class_name=rx.cond(
-            is_selected,
+            is_merge_selected,
             (
-                "px-3 py-2 rounded-lg border border-accent bg-green-50 "
+                "px-3 py-2 rounded-lg border border-purple-400 bg-purple-50 "
                 "cursor-pointer"
             ),
-            (
-                "px-3 py-2 rounded-lg border border-gray-200 bg-white "
-                "cursor-pointer hover:border-gray-300 hover:bg-gray-50 "
-                "transition-colors duration-150"
+            rx.cond(
+                is_selected,
+                (
+                    "px-3 py-2 rounded-lg border border-accent bg-green-50 "
+                    "cursor-pointer"
+                ),
+                (
+                    "px-3 py-2 rounded-lg border border-gray-200 bg-white "
+                    "cursor-pointer hover:border-gray-300 hover:bg-gray-50 "
+                    "transition-colors duration-150"
+                ),
             ),
         ),
     )
@@ -423,7 +584,7 @@ def _person_detail_panel() -> rx.Component:
 
 
 def _detail_header() -> rx.Component:
-    """Person name, close button, delete button."""
+    """Person name, bilingual name button, close button, delete button."""
     return rx.flex(
         rx.heading(
             AppState.entity_detail_name,
@@ -431,6 +592,17 @@ def _detail_header() -> rx.Component:
             class_name="text-gray-800",
         ),
         rx.flex(
+            # Bilingual name merge button
+            rx.tooltip(
+                rx.icon_button(
+                    rx.icon("languages", size=14),
+                    on_click=AppState.update_entity_display_name,
+                    variant="outline",
+                    size="1",
+                    class_name="text-blue-500 hover:text-blue-700",
+                ),
+                content="Merge Hebrew + English names",
+            ),
             rx.button(
                 rx.icon("trash-2", size=14, class_name="mr-1"),
                 "Delete",

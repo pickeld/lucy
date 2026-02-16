@@ -248,14 +248,24 @@ def _store_extracted_entities(
         if not name or not isinstance(name, str):
             continue
 
-        # Get or create person
+        # Extract email from facts for identifier-based dedup
+        facts = entity.get("facts", {})
+        extracted_email = None
+        if isinstance(facts, dict):
+            extracted_email = facts.get("email")
+            if extracted_email and isinstance(extracted_email, str):
+                extracted_email = extracted_email.strip()
+            else:
+                extracted_email = None
+
+        # Get or create person — uses phone→email→name cascade
         person_id = entity_db.get_or_create_person(
             canonical_name=name,
             whatsapp_id=sender_whatsapp_id if len(entities) == 1 else None,
+            email=extracted_email,
         )
 
         # Store facts
-        facts = entity.get("facts", {})
         if isinstance(facts, dict):
             for key, value in facts.items():
                 if value and isinstance(value, str) and value.strip():

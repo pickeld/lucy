@@ -7,6 +7,9 @@ messages, Paperless documents, and other sources. Provides:
 - Multi-script name aliases for cross-script disambiguation (שירן ↔ Shiran)
 - Key-value facts (birth_date, city, job, etc.) with confidence scores
 - Person-to-person relationships (friend, spouse, parent, etc.)
+- Entity deduplication by phone (primary), email (secondary), name (tertiary)
+- Entity merging: combine duplicate persons into one record
+- Automatic Hebrew+English display name merging
 
 Database location: data/settings.db (shared with settings_db, conversations_db)
 """
@@ -114,6 +117,7 @@ def init_entity_db() -> None:
     """Create entity tables if they don't exist.
 
     Safe to call multiple times — uses IF NOT EXISTS.
+    Also runs migrations (e.g., adding email column).
     """
     conn = _get_connection()
     try:
@@ -123,6 +127,7 @@ def init_entity_db() -> None:
                 canonical_name TEXT NOT NULL,
                 whatsapp_id TEXT,
                 phone TEXT,
+                email TEXT,
                 is_group BOOLEAN DEFAULT FALSE,
                 confidence REAL DEFAULT 0.5,
                 first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -131,6 +136,13 @@ def init_entity_db() -> None:
                 UNIQUE(canonical_name)
             )
         """)
+
+        # Migration: add email column if missing (for existing DBs)
+        try:
+            conn.execute("SELECT email FROM persons LIMIT 1")
+        except sqlite3.OperationalError:
+            conn.execute("ALTER TABLE persons ADD COLUMN email TEXT")
+            logger.info("Migration: added email column to persons table")
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS person_aliases (
@@ -183,6 +195,12 @@ def init_entity_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_persons_name ON persons(canonical_name)"
         )
         conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_persons_phone ON persons(phone)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_persons_email ON persons(email)"
+        )
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_aliases_alias ON person_aliases(alias COLLATE NOCASE)"
         )
         conn.execute(
@@ -202,27 +220,219 @@ def init_entity_db() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Person CRUD
+# Display name helpers — Hebrew + English merging
 # ---------------------------------------------------------------------------
+
+def _build_display_name(conn: sqlite3.Connection, person_id: int) -> Optional[str]:
+    """Build a bilingual display name from a person's aliases.
+
+    If a person has both Hebrew and Latin aliases, combine them:
+        "Shiran Waintrob / שירן ויינטרוב"
+
+    Only returns a new display name if both scripts are present
+    and the canonical name doesn't already contain both scripts.
+
+    Args:
+        conn: Active SQLite connection
+        person_id: Person to build display name for
+
+    Returns:
+        New display name string, or None if no change needed
+    """
+    row = conn.execute(
+        "SELECT canonical_name FROM persons WHERE id = ?", (person_id,)
+    ).fetchone()
+    if not row:
+        return None
+
+    current_name = row["canonical_name"]
+    current_script = _detect_script(current_name)
+
+    # Already bilingual — no change needed
+    if current_script == "mixed":
+        return None
+
+    # Gather aliases by script
+    alias_rows = conn.execute(
+        "SELECT alias, script FROM person_aliases WHERE person_id = ?",
+        (person_id,),
+    ).fetchall()
+
+    hebrew_names: list[str] = []
+    latin_names: list[str] = []
+
+    for a in alias_rows:
+        alias_text = a["alias"]
+        alias_script = a["script"]
+        # Skip numeric/phone aliases
+        if alias_text.replace("+", "").replace("-", "").replace(" ", "").isdigit():
+            continue
+        if alias_script == "hebrew":
+            hebrew_names.append(alias_text)
+        elif alias_script == "latin":
+            latin_names.append(alias_text)
+
+    if not hebrew_names or not latin_names:
+        return None  # Need both scripts
+
+    # Pick the longest name from each script (likely the full name)
+    best_hebrew = max(hebrew_names, key=len)
+    best_latin = max(latin_names, key=len)
+
+    # Build: "Latin Name / Hebrew Name"
+    return f"{best_latin} / {best_hebrew}"
+
+
+def update_display_name(person_id: int) -> Optional[str]:
+    """Recalculate and update the display name for a person.
+
+    Checks if the person has aliases in both Hebrew and Latin scripts
+    and updates canonical_name to show both (e.g., "Shiran / שירן").
+
+    Args:
+        person_id: The person to update
+
+    Returns:
+        New display name if updated, None if no change
+    """
+    conn = _get_connection()
+    try:
+        new_name = _build_display_name(conn, person_id)
+        if new_name:
+            # Check that no other person already has this exact name
+            existing = conn.execute(
+                "SELECT id FROM persons WHERE canonical_name = ? AND id != ?",
+                (new_name, person_id),
+            ).fetchone()
+            if not existing:
+                conn.execute(
+                    "UPDATE persons SET canonical_name = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?",
+                    (new_name, person_id),
+                )
+                conn.commit()
+                logger.info(f"Updated display name for person {person_id}: {new_name}")
+                return new_name
+        return None
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Person CRUD — identifier-based dedup (phone → email → name)
+# ---------------------------------------------------------------------------
+
+def _normalize_phone(phone: str) -> str:
+    """Normalize a phone number for comparison.
+
+    Strips whitespace, dashes, parens, and leading + or 0.
+    E.g., "+972-50-123-4567" → "97250123456"
+    """
+    if not phone:
+        return ""
+    cleaned = re.sub(r'[\s\-\(\)\+]', '', phone)
+    # Strip leading zeros (e.g., 0501234567 → 501234567)
+    cleaned = cleaned.lstrip('0')
+    return cleaned
+
+
+def find_person_by_phone(phone: str) -> Optional[int]:
+    """Find a person ID by phone number (normalized comparison).
+
+    Args:
+        phone: Phone number to search for
+
+    Returns:
+        Person ID, or None
+    """
+    if not phone:
+        return None
+
+    normalized = _normalize_phone(phone)
+    if not normalized:
+        return None
+
+    conn = _get_connection()
+    try:
+        # Check persons.phone column
+        rows = conn.execute("SELECT id, phone FROM persons WHERE phone IS NOT NULL").fetchall()
+        for r in rows:
+            if _normalize_phone(r["phone"]) == normalized:
+                return r["id"]
+
+        # Check aliases with numeric script (phone aliases)
+        alias_rows = conn.execute(
+            "SELECT person_id, alias FROM person_aliases WHERE script = 'numeric'"
+        ).fetchall()
+        for a in alias_rows:
+            if _normalize_phone(a["alias"]) == normalized:
+                return a["person_id"]
+
+        return None
+    finally:
+        conn.close()
+
+
+def find_person_by_email(email: str) -> Optional[int]:
+    """Find a person ID by email address (case-insensitive).
+
+    Searches both persons.email column and the 'email' fact.
+
+    Args:
+        email: Email address to search for
+
+    Returns:
+        Person ID, or None
+    """
+    if not email:
+        return None
+
+    email_lower = email.strip().lower()
+    conn = _get_connection()
+    try:
+        # Check persons.email column
+        row = conn.execute(
+            "SELECT id FROM persons WHERE LOWER(email) = ?",
+            (email_lower,),
+        ).fetchone()
+        if row:
+            return row["id"]
+
+        # Check person_facts for email fact
+        fact_row = conn.execute(
+            "SELECT person_id FROM person_facts WHERE fact_key = 'email' AND LOWER(fact_value) = ?",
+            (email_lower,),
+        ).fetchone()
+        if fact_row:
+            return fact_row["person_id"]
+
+        return None
+    finally:
+        conn.close()
+
 
 def get_or_create_person(
     canonical_name: str,
     whatsapp_id: Optional[str] = None,
     phone: Optional[str] = None,
+    email: Optional[str] = None,
     is_group: bool = False,
 ) -> int:
-    """Get a person ID by canonical_name, or create a new record.
+    """Get a person ID using identifier cascade, or create a new record.
 
-    If the person already exists (by canonical_name), updates whatsapp_id/phone
-    if they are provided and currently NULL, and updates last_seen.
+    Lookup priority:
+    1. Phone number (primary unique ID)
+    2. Email address (secondary unique ID)
+    3. Canonical name (tertiary, legacy)
 
-    Also auto-creates aliases from the canonical name parts and any
-    name variants (first name, full name in detected scripts).
+    If found by any identifier, updates other fields if currently NULL
+    and updates last_seen. Also auto-creates aliases and attempts to
+    build a bilingual display name (Hebrew + English).
 
     Args:
         canonical_name: Primary display name (e.g., "Shiran Waintrob")
         whatsapp_id: WhatsApp ID (e.g., "972501234567@c.us")
         phone: Phone number (e.g., "+972501234567")
+        email: Email address
         is_group: Whether this is a group entity
 
     Returns:
@@ -230,14 +440,30 @@ def get_or_create_person(
     """
     conn = _get_connection()
     try:
-        # Try to find existing person
-        row = conn.execute(
-            "SELECT id FROM persons WHERE canonical_name = ?",
-            (canonical_name,),
-        ).fetchone()
+        person_id: Optional[int] = None
 
-        if row:
-            person_id = row["id"]
+        # 1. Try phone (primary identifier)
+        if phone and not is_group:
+            pid = find_person_by_phone(phone)
+            if pid is not None:
+                person_id = pid
+
+        # 2. Try email (secondary identifier)
+        if person_id is None and email and not is_group:
+            pid = find_person_by_email(email)
+            if pid is not None:
+                person_id = pid
+
+        # 3. Try canonical name (tertiary / legacy)
+        if person_id is None:
+            row = conn.execute(
+                "SELECT id FROM persons WHERE canonical_name = ?",
+                (canonical_name,),
+            ).fetchone()
+            if row:
+                person_id = row["id"]
+
+        if person_id is not None:
             # Update fields if they're provided and currently NULL
             updates = []
             params: list = []
@@ -247,6 +473,9 @@ def get_or_create_person(
             if phone:
                 updates.append("phone = COALESCE(phone, ?)")
                 params.append(phone)
+            if email:
+                updates.append("email = COALESCE(email, ?)")
+                params.append(email)
             updates.append("last_seen = CURRENT_TIMESTAMP")
             params.append(person_id)
             conn.execute(
@@ -254,23 +483,59 @@ def get_or_create_person(
                 params,
             )
             conn.commit()
+
+            # Add the incoming name as alias if it's different from canonical
+            existing_name = conn.execute(
+                "SELECT canonical_name FROM persons WHERE id = ?", (person_id,)
+            ).fetchone()
+            if existing_name and existing_name["canonical_name"] != canonical_name:
+                _safe_add_alias(conn, person_id, canonical_name)
+                conn.commit()
+
+            # Try to build bilingual display name
+            new_display = _build_display_name(conn, person_id)
+            if new_display:
+                dup = conn.execute(
+                    "SELECT id FROM persons WHERE canonical_name = ? AND id != ?",
+                    (new_display, person_id),
+                ).fetchone()
+                if not dup:
+                    conn.execute(
+                        "UPDATE persons SET canonical_name = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?",
+                        (new_display, person_id),
+                    )
+                    conn.commit()
         else:
             # Create new person
             cursor = conn.execute(
-                """INSERT INTO persons (canonical_name, whatsapp_id, phone, is_group)
-                   VALUES (?, ?, ?, ?)""",
-                (canonical_name, whatsapp_id, phone, is_group),
+                """INSERT INTO persons (canonical_name, whatsapp_id, phone, email, is_group)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (canonical_name, whatsapp_id, phone, email, is_group),
             )
             person_id = cursor.lastrowid
             conn.commit()
 
             # Auto-create aliases from canonical name
-            _auto_create_aliases(conn, person_id, canonical_name)
-            conn.commit()
+            if person_id is not None:
+                _auto_create_aliases(conn, person_id, canonical_name)
+                conn.commit()
 
-        return person_id
+        return person_id  # type: ignore[return-value]
     finally:
         conn.close()
+
+
+def _safe_add_alias(conn: sqlite3.Connection, person_id: int, alias: str) -> None:
+    """Add an alias within an existing connection, ignoring duplicates."""
+    script = _detect_script(alias)
+    try:
+        conn.execute(
+            """INSERT OR IGNORE INTO person_aliases (person_id, alias, script, source)
+               VALUES (?, ?, ?, ?)""",
+            (person_id, alias, script, "auto"),
+        )
+    except sqlite3.IntegrityError:
+        pass
 
 
 def _auto_create_aliases(
@@ -314,11 +579,14 @@ def _auto_create_aliases(
 def get_person(person_id: int) -> Optional[Dict[str, Any]]:
     """Get a person with all facts and aliases.
 
+    Also computes a display_name that merges Hebrew + English aliases
+    alongside the canonical_name.
+
     Args:
         person_id: The person's database ID
 
     Returns:
-        Dict with person data, facts, aliases, and relationships, or None
+        Dict with person data, facts, aliases, relationships, and display_name
     """
     conn = _get_connection()
     try:
@@ -336,6 +604,9 @@ def get_person(person_id: int) -> Optional[Dict[str, Any]]:
             (person_id,),
         ).fetchall()
         person["aliases"] = [dict(a) for a in alias_rows]
+
+        # Build bilingual display name from aliases
+        person["display_name"] = _compute_display_name(person["canonical_name"], person["aliases"])
 
         # Fetch facts
         fact_rows = conn.execute(
@@ -359,6 +630,42 @@ def get_person(person_id: int) -> Optional[Dict[str, Any]]:
         return person
     finally:
         conn.close()
+
+
+def _compute_display_name(canonical_name: str, aliases: List[Dict[str, Any]]) -> str:
+    """Compute a bilingual display name from canonical name + aliases.
+
+    If the person has both Hebrew and Latin aliases, returns:
+        "English Name / Hebrew Name"
+    Otherwise returns the canonical name as-is.
+
+    This is a read-only computation — does NOT update the DB.
+    """
+    current_script = _detect_script(canonical_name)
+    if current_script == "mixed":
+        return canonical_name  # Already bilingual
+
+    hebrew_names: list[str] = []
+    latin_names: list[str] = []
+
+    for a in aliases:
+        alias_text = a.get("alias", "")
+        alias_script = a.get("script", "")
+        # Skip numeric/phone aliases
+        if alias_text.replace("+", "").replace("-", "").replace(" ", "").isdigit():
+            continue
+        if alias_script == "hebrew":
+            hebrew_names.append(alias_text)
+        elif alias_script == "latin":
+            latin_names.append(alias_text)
+
+    if not hebrew_names or not latin_names:
+        return canonical_name  # Can't make bilingual
+
+    best_hebrew = max(hebrew_names, key=len)
+    best_latin = max(latin_names, key=len)
+
+    return f"{best_latin} / {best_hebrew}"
 
 
 def get_person_by_name(name: str) -> Optional[Dict[str, Any]]:
@@ -821,12 +1128,18 @@ def get_all_persons_summary() -> List[Dict[str, Any]]:
             pid = p["id"]
             person = dict(p)
 
-            # Aliases
+            # Aliases (fetch with script for display_name computation)
             aliases = conn.execute(
                 "SELECT alias, script FROM person_aliases WHERE person_id = ?",
                 (pid,),
             ).fetchall()
+            alias_dicts = [{"alias": a["alias"], "script": a["script"]} for a in aliases]
             person["aliases"] = [a["alias"] for a in aliases]
+
+            # Compute bilingual display name
+            person["display_name"] = _compute_display_name(
+                person["canonical_name"], alias_dicts,
+            )
 
             # Key facts (just key-value, no metadata)
             facts = conn.execute(
@@ -1062,6 +1375,319 @@ def seed_from_whatsapp_contacts(contacts: List[Dict[str, Any]]) -> Dict[str, int
         f"Entity seeding complete: {created} created, {updated} updated, {skipped} skipped"
     )
     return {"created": created, "updated": updated, "skipped": skipped}
+
+
+# ---------------------------------------------------------------------------
+# Entity merging
+# ---------------------------------------------------------------------------
+
+def merge_persons(
+    target_id: int,
+    source_ids: List[int],
+) -> Dict[str, Any]:
+    """Merge multiple person records into one target person.
+
+    The target person keeps its canonical_name and core fields.
+    From each source person, we absorb:
+    - All aliases (re-pointed to target)
+    - All facts (only if target doesn't have that fact_key yet,
+      or source has higher confidence)
+    - All relationships (re-pointed to target)
+    - Phone/email/whatsapp_id (if target's are NULL)
+
+    Source persons are deleted after merge.
+
+    Args:
+        target_id: The person ID to keep (merge target)
+        source_ids: List of person IDs to merge INTO the target
+
+    Returns:
+        Dict with merge summary: aliases_moved, facts_moved, relationships_moved,
+        sources_deleted, new_display_name
+    """
+    if not source_ids:
+        return {"error": "No source IDs provided"}
+
+    # Remove target from sources if accidentally included
+    source_ids = [sid for sid in source_ids if sid != target_id]
+    if not source_ids:
+        return {"error": "No source IDs to merge (all were the target)"}
+
+    conn = _get_connection()
+    try:
+        # Verify target exists
+        target = conn.execute(
+            "SELECT id, canonical_name, phone, email, whatsapp_id FROM persons WHERE id = ?",
+            (target_id,),
+        ).fetchone()
+        if not target:
+            return {"error": f"Target person {target_id} not found"}
+
+        aliases_moved = 0
+        facts_moved = 0
+        rels_moved = 0
+        sources_deleted = 0
+
+        for source_id in source_ids:
+            source = conn.execute(
+                "SELECT id, canonical_name, phone, email, whatsapp_id FROM persons WHERE id = ?",
+                (source_id,),
+            ).fetchone()
+            if not source:
+                continue
+
+            # 1. Move aliases — re-point to target, skip duplicates
+            source_aliases = conn.execute(
+                "SELECT id, alias, script, source FROM person_aliases WHERE person_id = ?",
+                (source_id,),
+            ).fetchall()
+            for alias_row in source_aliases:
+                try:
+                    conn.execute(
+                        """INSERT OR IGNORE INTO person_aliases (person_id, alias, script, source)
+                           VALUES (?, ?, ?, ?)""",
+                        (target_id, alias_row["alias"], alias_row["script"], alias_row["source"]),
+                    )
+                    aliases_moved += 1
+                except sqlite3.IntegrityError:
+                    pass
+
+            # Also add source's canonical_name as an alias on the target
+            try:
+                source_name = source["canonical_name"]
+                source_script = _detect_script(source_name)
+                conn.execute(
+                    """INSERT OR IGNORE INTO person_aliases (person_id, alias, script, source)
+                       VALUES (?, ?, ?, ?)""",
+                    (target_id, source_name, source_script, "merge"),
+                )
+            except sqlite3.IntegrityError:
+                pass
+
+            # 2. Move facts — only if target doesn't have them or source has higher confidence
+            source_facts = conn.execute(
+                "SELECT fact_key, fact_value, confidence, source_type, source_ref "
+                "FROM person_facts WHERE person_id = ?",
+                (source_id,),
+            ).fetchall()
+            for fact_row in source_facts:
+                existing = conn.execute(
+                    "SELECT confidence FROM person_facts WHERE person_id = ? AND fact_key = ?",
+                    (target_id, fact_row["fact_key"]),
+                ).fetchone()
+                if not existing:
+                    # Target doesn't have this fact — add it
+                    conn.execute(
+                        """INSERT INTO person_facts
+                           (person_id, fact_key, fact_value, confidence, source_type, source_ref)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (target_id, fact_row["fact_key"], fact_row["fact_value"],
+                         fact_row["confidence"], fact_row["source_type"], fact_row["source_ref"]),
+                    )
+                    facts_moved += 1
+                elif fact_row["confidence"] > existing["confidence"]:
+                    # Source has higher confidence — overwrite
+                    conn.execute(
+                        """UPDATE person_facts
+                           SET fact_value = ?, confidence = ?, source_type = ?,
+                               source_ref = ?, extracted_at = CURRENT_TIMESTAMP
+                           WHERE person_id = ? AND fact_key = ?""",
+                        (fact_row["fact_value"], fact_row["confidence"],
+                         fact_row["source_type"], fact_row["source_ref"],
+                         target_id, fact_row["fact_key"]),
+                    )
+                    facts_moved += 1
+
+            # 3. Move relationships — re-point to target
+            source_rels = conn.execute(
+                "SELECT related_person_id, relationship_type, confidence, source_ref "
+                "FROM person_relationships WHERE person_id = ?",
+                (source_id,),
+            ).fetchall()
+            for rel_row in source_rels:
+                related_id = rel_row["related_person_id"]
+                # Don't create self-referencing relationship
+                if related_id == target_id:
+                    continue
+                try:
+                    conn.execute(
+                        """INSERT OR IGNORE INTO person_relationships
+                           (person_id, related_person_id, relationship_type, confidence, source_ref)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (target_id, related_id, rel_row["relationship_type"],
+                         rel_row["confidence"], rel_row["source_ref"]),
+                    )
+                    rels_moved += 1
+                except sqlite3.IntegrityError:
+                    pass
+
+            # Also re-point reverse relationships (where source was the related_person)
+            conn.execute(
+                """UPDATE person_relationships
+                   SET related_person_id = ?
+                   WHERE related_person_id = ? AND person_id != ?""",
+                (target_id, source_id, target_id),
+            )
+
+            # 4. Absorb identifiers if target's are NULL
+            if not target["phone"] and source["phone"]:
+                conn.execute(
+                    "UPDATE persons SET phone = ? WHERE id = ?",
+                    (source["phone"], target_id),
+                )
+            if not target["email"] and source["email"]:
+                conn.execute(
+                    "UPDATE persons SET email = ? WHERE id = ?",
+                    (source["email"], target_id),
+                )
+            if not target["whatsapp_id"] and source["whatsapp_id"]:
+                conn.execute(
+                    "UPDATE persons SET whatsapp_id = ? WHERE id = ?",
+                    (source["whatsapp_id"], target_id),
+                )
+
+            # 5. Delete source person (cascades aliases, facts, relationships)
+            conn.execute("DELETE FROM persons WHERE id = ?", (source_id,))
+            sources_deleted += 1
+
+        # Update target's last_updated
+        conn.execute(
+            "UPDATE persons SET last_updated = CURRENT_TIMESTAMP WHERE id = ?",
+            (target_id,),
+        )
+
+        # Try to build bilingual display name after merge
+        new_display = _build_display_name(conn, target_id)
+        if new_display:
+            dup = conn.execute(
+                "SELECT id FROM persons WHERE canonical_name = ? AND id != ?",
+                (new_display, target_id),
+            ).fetchone()
+            if not dup:
+                conn.execute(
+                    "UPDATE persons SET canonical_name = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?",
+                    (new_display, target_id),
+                )
+
+        conn.commit()
+
+        # Read final display name
+        final_row = conn.execute(
+            "SELECT canonical_name FROM persons WHERE id = ?", (target_id,)
+        ).fetchone()
+        final_name = final_row["canonical_name"] if final_row else ""
+
+        logger.info(
+            f"Entity merge: {sources_deleted} persons merged into {target_id} "
+            f"({aliases_moved} aliases, {facts_moved} facts, {rels_moved} rels)"
+        )
+        return {
+            "target_id": target_id,
+            "aliases_moved": aliases_moved,
+            "facts_moved": facts_moved,
+            "relationships_moved": rels_moved,
+            "sources_deleted": sources_deleted,
+            "display_name": final_name,
+        }
+    finally:
+        conn.close()
+
+
+def find_merge_candidates(limit: int = 50) -> List[Dict[str, Any]]:
+    """Find potential duplicate persons that could be merged.
+
+    Looks for persons sharing the same phone number, email, or
+    similar names (same first name in different scripts).
+
+    Args:
+        limit: Maximum number of candidate groups to return
+
+    Returns:
+        List of merge candidate groups, each with 'reason' and 'persons'
+    """
+    conn = _get_connection()
+    try:
+        candidates: list[Dict[str, Any]] = []
+        seen_groups: set[frozenset[int]] = set()
+
+        # 1. Same phone number
+        phone_rows = conn.execute(
+            """SELECT phone, GROUP_CONCAT(id) as ids, COUNT(*) as cnt
+               FROM persons WHERE phone IS NOT NULL AND phone != ''
+               GROUP BY phone HAVING cnt > 1 LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        for row in phone_rows:
+            ids = [int(x) for x in row["ids"].split(",")]
+            key = frozenset(ids)
+            if key not in seen_groups:
+                seen_groups.add(key)
+                persons = _get_mini_persons(conn, ids)
+                candidates.append({
+                    "reason": f"Same phone: {row['phone']}",
+                    "persons": persons,
+                })
+
+        # 2. Same email
+        email_rows = conn.execute(
+            """SELECT email, GROUP_CONCAT(id) as ids, COUNT(*) as cnt
+               FROM persons WHERE email IS NOT NULL AND email != ''
+               GROUP BY LOWER(email) HAVING cnt > 1 LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        for row in email_rows:
+            ids = [int(x) for x in row["ids"].split(",")]
+            key = frozenset(ids)
+            if key not in seen_groups:
+                seen_groups.add(key)
+                persons = _get_mini_persons(conn, ids)
+                candidates.append({
+                    "reason": f"Same email: {row['email']}",
+                    "persons": persons,
+                })
+
+        # 3. Same email via facts
+        email_fact_rows = conn.execute(
+            """SELECT fact_value, GROUP_CONCAT(person_id) as ids, COUNT(*) as cnt
+               FROM person_facts WHERE fact_key = 'email'
+               GROUP BY LOWER(fact_value) HAVING cnt > 1 LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        for row in email_fact_rows:
+            ids = [int(x) for x in row["ids"].split(",")]
+            key = frozenset(ids)
+            if key not in seen_groups:
+                seen_groups.add(key)
+                persons = _get_mini_persons(conn, ids)
+                candidates.append({
+                    "reason": f"Same email (fact): {row['fact_value']}",
+                    "persons": persons,
+                })
+
+        return candidates[:limit]
+    finally:
+        conn.close()
+
+
+def _get_mini_persons(conn: sqlite3.Connection, ids: List[int]) -> List[Dict[str, Any]]:
+    """Get minimal person info for a list of IDs (used in merge candidates)."""
+    result: list[Dict[str, Any]] = []
+    for pid in ids:
+        row = conn.execute(
+            "SELECT id, canonical_name, phone, email, whatsapp_id FROM persons WHERE id = ?",
+            (pid,),
+        ).fetchone()
+        if row:
+            p = dict(row)
+            # Count facts and aliases
+            p["alias_count"] = conn.execute(
+                "SELECT COUNT(*) as cnt FROM person_aliases WHERE person_id = ?", (pid,)
+            ).fetchone()["cnt"]
+            p["fact_count"] = conn.execute(
+                "SELECT COUNT(*) as cnt FROM person_facts WHERE person_id = ?", (pid,)
+            ).fetchone()["cnt"]
+            result.append(p)
+    return result
 
 
 # ---------------------------------------------------------------------------

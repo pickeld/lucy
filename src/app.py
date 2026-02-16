@@ -1245,6 +1245,85 @@ def cleanup_entities():
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
+@app.route("/entities/merge", methods=["POST"])
+def merge_entities():
+    """Merge multiple person entities into one.
+    
+    Body: {"target_id": 42, "source_ids": [10, 15, 23]}
+    
+    The target keeps its canonical name. All aliases, facts, and
+    relationships from sources are absorbed into the target.
+    Source persons are deleted after merge.
+    """
+    try:
+        data = request.json or {}
+        target_id = data.get("target_id")
+        source_ids = data.get("source_ids", [])
+        
+        if not target_id:
+            return jsonify({"error": "Missing 'target_id'"}), 400
+        if not source_ids:
+            return jsonify({"error": "Missing 'source_ids' list"}), 400
+        
+        result = entity_db.merge_persons(
+            target_id=int(target_id),
+            source_ids=[int(s) for s in source_ids],
+        )
+        
+        if "error" in result:
+            return jsonify({"error": result["error"]}), 400
+        
+        result["stats"] = entity_db.get_stats()
+        return jsonify({"status": "ok", **result}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Entity merge error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/entities/merge-candidates", methods=["GET"])
+def merge_candidates():
+    """Find potential duplicate persons that could be merged.
+    
+    Returns groups of persons sharing phone numbers, emails, or similar names.
+    """
+    try:
+        limit = request.args.get("limit", 50, type=int)
+        candidates = entity_db.find_merge_candidates(limit=limit)
+        return jsonify({"candidates": candidates, "count": len(candidates)}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Merge candidates error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/entities/<int:person_id>/display-name", methods=["POST"])
+def update_entity_display_name(person_id: int):
+    """Recalculate and update the bilingual display name for a person.
+    
+    Checks if the person has aliases in both Hebrew and Latin scripts
+    and updates canonical_name to show both (e.g., "Shiran / שירן").
+    """
+    try:
+        new_name = entity_db.update_display_name(person_id)
+        if new_name:
+            return jsonify({
+                "status": "ok",
+                "person_id": person_id,
+                "display_name": new_name,
+            }), 200
+        else:
+            return jsonify({
+                "status": "no_change",
+                "person_id": person_id,
+                "message": "No bilingual name possible (need both Hebrew and Latin aliases)",
+            }), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Display name update error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
 @app.route("/entities/ui", methods=["GET"])
 def entities_ui():
     """Serve the entity management web UI."""

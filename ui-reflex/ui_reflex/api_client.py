@@ -665,6 +665,54 @@ async def cleanup_entities() -> dict[str, Any]:
         return {"error": str(e)}
 
 
+async def merge_entities(
+    target_id: int, source_ids: list[int],
+) -> dict[str, Any]:
+    """Merge multiple person entities into one target.
+
+    Args:
+        target_id: The person ID to keep (merge target)
+        source_ids: List of person IDs to absorb into the target
+    """
+    try:
+        resp = await _get_client().post(
+            "/entities/merge",
+            json={"target_id": target_id, "source_ids": source_ids},
+            timeout=30,
+        )
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error merging entities: {e}")
+        return {"error": str(e)}
+
+
+async def fetch_merge_candidates(limit: int = 50) -> dict[str, Any]:
+    """Fetch potential duplicate persons that could be merged."""
+    try:
+        resp = await _get_client().get(
+            "/entities/merge-candidates",
+            params={"limit": limit},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        logger.error(f"Error fetching merge candidates: {e}")
+    return {"candidates": [], "count": 0}
+
+
+async def update_entity_display_name(person_id: int) -> dict[str, Any]:
+    """Recalculate bilingual display name for a person."""
+    try:
+        resp = await _get_client().post(
+            f"/entities/{person_id}/display-name", timeout=10,
+        )
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error updating entity display name: {e}")
+        return {"error": str(e)}
+
+
 async def fetch_all_entity_facts(
     key: str | None = None,
 ) -> dict[str, Any]:

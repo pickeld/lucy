@@ -250,6 +250,10 @@ class AppState(rx.State):
     entity_seed_status: str = ""
     entity_seed_message: str = ""
 
+    # --- Entity merge ---
+    entity_merge_mode: bool = False
+    entity_merge_selection: list[str] = []  # person IDs as strings
+
     # =====================================================================
     # EXPLICIT SETTERS (avoid deprecated state_auto_setters)
     # =====================================================================
@@ -340,6 +344,21 @@ class AppState(rx.State):
 
     def set_entity_fact_key_filter(self, value: str):
         self.entity_fact_key_filter = value
+
+    def toggle_merge_mode(self):
+        """Toggle entity merge selection mode on/off."""
+        self.entity_merge_mode = not self.entity_merge_mode
+        if not self.entity_merge_mode:
+            self.entity_merge_selection = []
+
+    def toggle_merge_selection(self, person_id: str):
+        """Toggle a person in/out of the merge selection."""
+        new_sel = list(self.entity_merge_selection)
+        if person_id in new_sel:
+            new_sel.remove(person_id)
+        else:
+            new_sel.append(person_id)
+        self.entity_merge_selection = new_sel
 
     # =====================================================================
     # COMPUTED VARS
@@ -821,11 +840,25 @@ class AppState(rx.State):
         return str(self.entity_stats.get("relationships", "0"))
 
     @rx.var(cache=True)
+    def entity_merge_count(self) -> int:
+        """Number of persons currently selected for merge."""
+        return len(self.entity_merge_selection)
+
+    @rx.var(cache=True)
+    def entity_can_merge(self) -> bool:
+        """Whether enough persons are selected to perform a merge (≥2)."""
+        return len(self.entity_merge_selection) >= 2
+
+    @rx.var(cache=True)
     def entity_has_detail(self) -> bool:
         return self.entity_selected_id > 0
 
     @rx.var(cache=True)
     def entity_detail_name(self) -> str:
+        """Display name — uses bilingual display_name if available."""
+        display = self.entity_detail.get("display_name", "")
+        if display:
+            return str(display)
         return str(self.entity_detail.get("canonical_name", ""))
 
     @rx.var(cache=True)
@@ -1745,9 +1778,12 @@ class AppState(rx.State):
             else:
                 fact_count = p.get("fact_count", 0)
 
+            # Use display_name (bilingual) if available, else canonical_name
+            display_name = str(p.get("display_name", "") or p.get("canonical_name", ""))
+
             processed.append({
                 "id": str(p.get("id", "")),
-                "canonical_name": str(p.get("canonical_name", "")),
+                "canonical_name": display_name,
                 "phone": str(p.get("phone", "") or ""),
                 "whatsapp_id": str(p.get("whatsapp_id", "") or ""),
                 "alias_count": str(alias_count),
@@ -1961,6 +1997,62 @@ class AppState(rx.State):
             await self._load_entity_list()
             stats = await api_client.fetch_entity_stats()
             self.entity_stats = {k: str(v) for k, v in stats.items()}
+
+    async def execute_merge(self):
+        """Merge selected persons — first selected becomes the target."""
+        if len(self.entity_merge_selection) < 2:
+            self.entity_save_message = "❌ Select at least 2 persons to merge"
+            return
+
+        target_id = int(self.entity_merge_selection[0])
+        source_ids = [int(s) for s in self.entity_merge_selection[1:]]
+
+        self.entity_save_message = "⏳ Merging…"
+        yield
+
+        result = await api_client.merge_entities(target_id, source_ids)
+        if "error" in result:
+            self.entity_save_message = f"❌ {result['error']}"
+        else:
+            merged = result.get("sources_deleted", 0)
+            aliases = result.get("aliases_moved", 0)
+            facts = result.get("facts_moved", 0)
+            name = result.get("display_name", "")
+            self.entity_save_message = (
+                f"✅ Merged {merged + 1} persons into \"{name}\" "
+                f"({aliases} aliases, {facts} facts moved)"
+            )
+            self.entity_merge_selection = []
+            self.entity_merge_mode = False
+            # Close detail if the selected entity was a merge source
+            if self.entity_selected_id > 0 and str(self.entity_selected_id) in [str(s) for s in source_ids]:
+                self.close_entity_detail()
+            await self._load_entity_list()
+            stats = await api_client.fetch_entity_stats()
+            self.entity_stats = {k: str(v) for k, v in stats.items()}
+            # Reload detail if target was selected
+            if self.entity_selected_id == target_id:
+                data = await api_client.fetch_entity(target_id)
+                if "error" not in data:
+                    self.entity_detail = data
+
+    async def update_entity_display_name(self):
+        """Recalculate bilingual display name for the selected person."""
+        if self.entity_selected_id <= 0:
+            return
+        result = await api_client.update_entity_display_name(self.entity_selected_id)
+        if "error" in result:
+            self.entity_save_message = f"❌ {result['error']}"
+        elif result.get("status") == "ok":
+            new_name = result.get("display_name", "")
+            self.entity_save_message = f"✅ Display name updated: {new_name}"
+            # Refresh detail and list
+            data = await api_client.fetch_entity(self.entity_selected_id)
+            if "error" not in data:
+                self.entity_detail = data
+            await self._load_entity_list()
+        else:
+            self.entity_save_message = result.get("message", "No change needed")
 
 
 # =========================================================================
