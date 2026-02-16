@@ -69,9 +69,8 @@ services:
       - ./.env:/app/.env:ro   # Mount real .env (read-only, first-run seed)
       - ./data:/app/data      # SQLite settings database persistence
       - whisper_cache:/root/.cache  # Persist Whisper model downloads across restarts
-      # Call Recordings: mount host directory into container.
-      # Change the left side to your actual recordings folder path.
-      - /Users/dpickel/Library/CloudStorage/Dropbox/call_recordings:/app/data/call_recordings:ro
+      # Call Recordings: mount Dropbox folder for audio files (read-write for uploads)
+      - /Users/dpickel/Library/CloudStorage/Dropbox/call_recordings:/app/data/call_recordings
     depends_on:
       redis:
         condition: service_started

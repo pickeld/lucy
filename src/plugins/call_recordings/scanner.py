@@ -250,20 +250,31 @@ def _parse_filename_metadata(filename: str) -> Dict[str, Optional[str]]:
 def compute_file_hash(file_path: str) -> str:
     """Compute SHA256 hash of a file's content.
 
+    Falls back to a metadata-based hash (path + size + mtime) when the
+    file cannot be read — e.g. Dropbox CloudStorage file-lock errors
+    (``[Errno 35] Resource deadlock avoided`` on macOS).
+
     Args:
         file_path: Path to the file
 
     Returns:
         Hex-encoded SHA256 hash string
     """
-    sha256 = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        while True:
-            data = f.read(_HASH_BUFFER_SIZE)
-            if not data:
-                break
-            sha256.update(data)
-    return sha256.hexdigest()
+    try:
+        sha256 = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            while True:
+                data = f.read(_HASH_BUFFER_SIZE)
+                if not data:
+                    break
+                sha256.update(data)
+        return sha256.hexdigest()
+    except OSError as e:
+        # Fallback: hash based on path + size + mtime (for locked/online-only files)
+        logger.debug(f"Content hash failed for {file_path} ({e}), using metadata hash")
+        stat = os.stat(file_path)
+        meta_str = f"{file_path}:{stat.st_size}:{stat.st_mtime}"
+        return hashlib.sha256(meta_str.encode()).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -304,9 +315,17 @@ class LocalFileScanner:
                 continue
 
             try:
-                stat = path.stat()
+                try:
+                    stat = path.stat()
+                except OSError:
+                    logger.debug(f"Cannot stat {path}, skipping")
+                    continue
                 content_hash = compute_file_hash(str(path))
-                file_meta = _extract_audio_metadata(str(path))
+                # Audio metadata extraction is non-critical — skip on lock errors
+                try:
+                    file_meta = _extract_audio_metadata(str(path))
+                except OSError:
+                    file_meta = AudioFileMetadata()
 
                 files.append(
                     AudioFile(
