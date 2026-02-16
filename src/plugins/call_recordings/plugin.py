@@ -105,13 +105,6 @@ class CallRecordingsPlugin(ChannelPlugin):
                 "int",
                 "Sync interval in seconds (0 = manual only)",
             ),
-            (
-                "call_recordings_default_participants",
-                "",
-                "call_recordings",
-                "text",
-                "Default participant names (comma-separated) when not detectable from file",
-            ),
         ]
 
     def get_select_options(self) -> Dict[str, List[str]]:
@@ -126,7 +119,6 @@ class CallRecordingsPlugin(ChannelPlugin):
             "call_recordings_file_extensions": "CALL_RECORDINGS_FILE_EXTENSIONS",
             "call_recordings_max_files": "CALL_RECORDINGS_MAX_FILES",
             "call_recordings_sync_interval": "CALL_RECORDINGS_SYNC_INTERVAL",
-            "call_recordings_default_participants": "CALL_RECORDINGS_DEFAULT_PARTICIPANTS",
         }
 
     def get_category_meta(self) -> Dict[str, Dict[str, str]]:
@@ -222,13 +214,9 @@ class CallRecordingsPlugin(ChannelPlugin):
             force = request.args.get("force", "").lower() in ("true", "1", "yes")
 
             max_files = int(settings.get("call_recordings_max_files", "100"))
-            default_participants = settings.get(
-                "call_recordings_default_participants", ""
-            )
 
             result = plugin._syncer.sync_recordings(
                 max_files=max_files,
-                default_participants=default_participants,
                 force=force,
             )
 

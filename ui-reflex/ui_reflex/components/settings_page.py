@@ -500,18 +500,10 @@ def _paperless_actions() -> rx.Component:
 
 
 def _call_recordings_actions() -> rx.Component:
-    """Call Recordings test, sync, and upload buttons."""
+    """Call Recordings sync and upload buttons."""
     return rx.box(
         # Action buttons row
         rx.flex(
-            rx.button(
-                rx.icon("wifi", size=14, class_name="mr-1"),
-                "Test Connection",
-                on_click=AppState.test_call_recordings_connection,
-                loading=AppState.call_recordings_test_status == "testing",
-                size="2",
-                class_name="bg-blue-500 text-white hover:bg-blue-600",
-            ),
             rx.button(
                 rx.icon("refresh-cw", size=14, class_name="mr-1"),
                 "Sync Now",
@@ -524,14 +516,6 @@ def _call_recordings_actions() -> rx.Component:
             align="center",
         ),
         # Status messages
-        rx.cond(
-            AppState.call_recordings_test_message != "",
-            rx.text(
-                AppState.call_recordings_test_message,
-                class_name="text-sm mt-2",
-            ),
-            rx.fragment(),
-        ),
         rx.cond(
             AppState.call_recordings_sync_message != "",
             rx.text(

@@ -589,7 +589,13 @@ async def upload_call_recordings(file_data: list[tuple[str, bytes]]) -> dict[str
             files=files,
             timeout=120,
         )
-        data = resp.json()
+        # Guard against empty / non-JSON responses
+        try:
+            data = resp.json()
+        except Exception:
+            if resp.status_code == 200:
+                return {"error": "Server returned an empty response"}
+            return {"error": f"HTTP {resp.status_code} — non-JSON response"}
         if resp.status_code == 200:
             return data
         else:

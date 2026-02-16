@@ -83,15 +83,12 @@ class CallRecordingSyncer:
     def sync_recordings(
         self,
         max_files: int = 100,
-        default_participants: str = "",
         force: bool = False,
     ) -> dict:
         """Sync call recordings from the configured source to RAG.
 
         Args:
             max_files: Maximum files to process per sync run
-            default_participants: Comma-separated default participant names
-                when not detectable from filename or metadata
             force: If True, skip dedup checks (re-index everything)
 
         Returns:
@@ -155,7 +152,6 @@ class CallRecordingSyncer:
                 try:
                     result = self._process_single_file(
                         audio_file=audio_file,
-                        default_participants=default_participants,
                         force=force,
                     )
 
@@ -196,14 +192,12 @@ class CallRecordingSyncer:
     def _process_single_file(
         self,
         audio_file: AudioFile,
-        default_participants: str,
         force: bool,
     ) -> str:
         """Process a single audio file through the full pipeline.
 
         Args:
             audio_file: The audio file to process
-            default_participants: Default participant names
             force: Skip dedup checks
 
         Returns:
@@ -236,7 +230,6 @@ class CallRecordingSyncer:
             metadata = self._resolve_metadata(
                 audio_file=audio_file,
                 transcription=transcription,
-                default_participants=default_participants,
             )
 
             # Create nodes and index
@@ -296,7 +289,6 @@ class CallRecordingSyncer:
         self,
         audio_file: AudioFile,
         transcription: TranscriptionResult,
-        default_participants: str,
     ) -> Dict:
         """Resolve recording metadata from multiple sources.
 
@@ -304,12 +296,10 @@ class CallRecordingSyncer:
         1. Audio file embedded tags (ID3/MP4 via mutagen)
         2. Filename pattern parsing
         3. Transcription result (language, duration)
-        4. Default settings fallback
 
         Args:
             audio_file: The audio file with file_metadata
             transcription: The Whisper transcription result
-            default_participants: Comma-separated default participant names
 
         Returns:
             Dict with resolved metadata fields
@@ -337,15 +327,7 @@ class CallRecordingSyncer:
                 if p.strip()
             ]
 
-        # 3. From default settings
-        if not participants and default_participants:
-            participants = [
-                p.strip()
-                for p in default_participants.split(",")
-                if p.strip()
-            ]
-
-        # 4. Ultimate fallback
+        # 3. Ultimate fallback
         if not participants:
             participants = ["Unknown"]
 

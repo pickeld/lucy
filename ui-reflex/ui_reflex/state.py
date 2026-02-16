@@ -135,7 +135,6 @@ SETTING_LABELS: dict[str, str] = {
     "call_recordings_file_extensions": "Audio File Extensions",
     "call_recordings_max_files": "Max Files per Sync",
     "call_recordings_sync_interval": "Sync Interval (seconds)",
-    "call_recordings_default_participants": "Default Participants",
 }
 
 
@@ -661,11 +660,16 @@ class AppState(rx.State):
         result: list[dict[str, str]] = []
         for key, info in settings.items():
             options_list = opts.get(key, [])
+            setting_type = info.get("type", "text")
+            # Guard: if a select setting has no options, render as text
+            # to avoid Radix UI Select.Item empty-value crash
+            if setting_type == "select" and not options_list:
+                setting_type = "text"
             result.append({
                 "key": key,
                 "label": SETTING_LABELS.get(key, key.replace("_", " ").title()),
                 "value": str(info.get("value", "")),
-                "setting_type": info.get("type", "text"),
+                "setting_type": setting_type,
                 "description": info.get("description", ""),
                 "category": category,
                 "options": "|".join(options_list) if options_list else "",
