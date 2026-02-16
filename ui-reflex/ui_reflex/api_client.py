@@ -570,6 +570,38 @@ async def start_call_recordings_sync(force: bool = False) -> dict[str, Any]:
         return {"error": str(e)}
 
 
+async def upload_call_recordings(file_data: list[tuple[str, bytes]]) -> dict[str, Any]:
+    """Upload audio files to the call recordings plugin.
+
+    Args:
+        file_data: List of (filename, file_bytes) tuples.
+
+    Returns:
+        Dict with saved count, filenames, and errors.
+    """
+    try:
+        files = [
+            ("files", (name, data))
+            for name, data in file_data
+        ]
+        resp = await _get_client().post(
+            "/plugins/call_recordings/upload",
+            files=files,
+            timeout=120,
+        )
+        data = resp.json()
+        if resp.status_code == 200:
+            return data
+        else:
+            msg = data.get("error") or f"HTTP {resp.status_code}"
+            return {"error": msg}
+    except httpx.ConnectError:
+        return {"error": "Cannot reach API server"}
+    except Exception as e:
+        logger.error(f"Error uploading call recordings: {e}")
+        return {"error": str(e)}
+
+
 # =========================================================================
 # ENTITY STORE
 # =========================================================================

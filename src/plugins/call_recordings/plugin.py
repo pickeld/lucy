@@ -407,6 +407,86 @@ class CallRecordingsPlugin(ChannelPlugin):
                         500,
                     )
 
+        @bp.route("/upload", methods=["POST"])
+        def upload():
+            """Upload one or more audio files for transcription and indexing.
+
+            Accepts multipart/form-data with one or more 'files' fields.
+            Files are saved to the configured source path directory and
+            will be picked up by the next sync run automatically.
+
+            Returns:
+                JSON with upload results: saved count, filenames, errors.
+            """
+            import os
+            import settings_db
+
+            source_path = (
+                settings_db.get_setting_value("call_recordings_source_path")
+                or "/app/data/call_recordings"
+            )
+            extensions_str = (
+                settings_db.get_setting_value("call_recordings_file_extensions")
+                or "mp3,wav,m4a,ogg,flac"
+            )
+            allowed_extensions = {
+                ext.strip().lower().lstrip(".")
+                for ext in extensions_str.split(",")
+                if ext.strip()
+            }
+
+            # Ensure the upload directory exists
+            os.makedirs(source_path, exist_ok=True)
+
+            files = request.files.getlist("files")
+            if not files:
+                return jsonify({"error": "No files provided"}), 400
+
+            saved = []
+            errors = []
+
+            for f in files:
+                if not f.filename:
+                    continue
+
+                # Validate extension
+                ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else ""
+                if ext not in allowed_extensions:
+                    errors.append(
+                        f"{f.filename}: unsupported format "
+                        f"(allowed: {', '.join(sorted(allowed_extensions))})"
+                    )
+                    continue
+
+                # Save to source path (avoid overwriting existing files)
+                import werkzeug.utils
+                safe_name = werkzeug.utils.secure_filename(f.filename)
+                dest = os.path.join(source_path, safe_name)
+
+                # If file already exists, add a numeric suffix
+                if os.path.exists(dest):
+                    base, dot_ext = os.path.splitext(safe_name)
+                    counter = 1
+                    while os.path.exists(dest):
+                        dest = os.path.join(
+                            source_path, f"{base}_{counter}{dot_ext}"
+                        )
+                        counter += 1
+
+                try:
+                    f.save(dest)
+                    saved.append(safe_name)
+                    logger.info(f"Uploaded recording: {safe_name} → {dest}")
+                except Exception as e:
+                    errors.append(f"{f.filename}: {str(e)}")
+
+            return jsonify({
+                "status": "ok",
+                "saved": len(saved),
+                "filenames": saved,
+                "errors": errors,
+            }), 200
+
         @bp.route("/files", methods=["GET"])
         def list_files():
             """List discovered audio files with their processing status.

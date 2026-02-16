@@ -500,8 +500,9 @@ def _paperless_actions() -> rx.Component:
 
 
 def _call_recordings_actions() -> rx.Component:
-    """Call Recordings test connection and sync buttons."""
+    """Call Recordings test, sync, and upload buttons."""
     return rx.box(
+        # Action buttons row
         rx.flex(
             rx.button(
                 rx.icon("wifi", size=14, class_name="mr-1"),
@@ -522,6 +523,7 @@ def _call_recordings_actions() -> rx.Component:
             gap="3",
             align="center",
         ),
+        # Status messages
         rx.cond(
             AppState.call_recordings_test_message != "",
             rx.text(
@@ -537,6 +539,60 @@ def _call_recordings_actions() -> rx.Component:
                 class_name="text-sm mt-2",
             ),
             rx.fragment(),
+        ),
+        # Upload area
+        rx.box(
+            rx.text(
+                "Upload Recordings",
+                class_name="text-sm font-medium text-gray-700 mb-2",
+            ),
+            rx.text(
+                "Upload audio files directly — no Docker mount needed. "
+                "Files are saved to the container and processed on next sync.",
+                class_name="text-xs text-gray-400 mb-3",
+            ),
+            rx.upload(
+                rx.flex(
+                    rx.icon("upload-cloud", size=24, class_name="text-gray-400"),
+                    rx.text(
+                        "Drop audio files here or click to browse",
+                        class_name="text-sm text-gray-500",
+                    ),
+                    rx.text(
+                        "Supported: MP3, WAV, M4A, OGG, FLAC",
+                        class_name="text-xs text-gray-400",
+                    ),
+                    direction="column",
+                    align="center",
+                    gap="1",
+                    class_name="py-6",
+                ),
+                id="call_recordings_upload",
+                accept={
+                    "audio/*": [
+                        ".mp3", ".wav", ".m4a", ".ogg", ".flac",
+                        ".wma", ".aac", ".opus", ".webm",
+                    ],
+                },
+                max_files=20,
+                on_drop=AppState.upload_call_recordings(  # type: ignore[arg-type]
+                    rx.upload_files(upload_id="call_recordings_upload"),
+                ),
+                border="2px dashed",
+                border_color="gray.200",
+                border_radius="lg",
+                class_name="w-full cursor-pointer hover:border-gray-400 "
+                "transition-colors",
+            ),
+            rx.cond(
+                AppState.call_recordings_upload_message != "",
+                rx.text(
+                    AppState.call_recordings_upload_message,
+                    class_name="text-sm mt-2",
+                ),
+                rx.fragment(),
+            ),
+            class_name="mt-4 pt-4 border-t border-gray-100",
         ),
         class_name="mt-4 pt-4 border-t border-gray-200",
     )

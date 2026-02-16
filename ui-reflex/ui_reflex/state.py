@@ -239,6 +239,9 @@ class AppState(rx.State):
     call_recordings_sync_status: str = ""   # "", "syncing", "complete", "error"
     call_recordings_sync_message: str = ""
 
+    # --- Call Recordings upload state ---
+    call_recordings_upload_message: str = ""
+
     # --- Tab state ---
     settings_tab: str = "ai"   # Active main tab
     plugin_tab: str = ""       # Active plugin sub-tab (empty = first plugin)
@@ -1765,6 +1768,42 @@ class AppState(rx.State):
         else:
             self.call_recordings_sync_status = "error"
             self.call_recordings_sync_message = f"❌ Unexpected response: {result}"
+
+    # ----- Call Recordings upload -----
+
+    async def upload_call_recordings(self, files: list[rx.UploadFile]):
+        """Upload audio files to the call recordings plugin.
+
+        Files are sent to the backend which saves them to the configured
+        source path. After upload, automatically triggers a sync.
+        """
+        if not files:
+            self.call_recordings_upload_message = "❌ No files selected"
+            return
+
+        self.call_recordings_upload_message = f"⏳ Uploading {len(files)} file(s)…"
+        yield
+
+        try:
+            file_data: list[tuple[str, bytes]] = []
+            for f in files:
+                content = await f.read()
+                file_data.append((f.filename or "recording.mp3", content))
+
+            result = await api_client.upload_call_recordings(file_data)
+
+            if "error" in result:
+                self.call_recordings_upload_message = f"❌ {result['error']}"
+            else:
+                saved = result.get("saved", 0)
+                errors = result.get("errors", [])
+                filenames = result.get("filenames", [])
+                msg = f"✅ Uploaded {saved} file(s): {', '.join(filenames)}"
+                if errors:
+                    msg += f" — Errors: {'; '.join(errors)}"
+                self.call_recordings_upload_message = msg
+        except Exception as e:
+            self.call_recordings_upload_message = f"❌ Upload error: {str(e)}"
 
     async def reset_category(self, category: str):
         """Reset a settings category to defaults."""
