@@ -142,22 +142,34 @@ def _parse_filename_metadata(filename: str) -> Dict[str, Optional[str]]:
     # Strip extension
     stem = Path(filename).stem
 
-    # ---- Priority pattern: Call_recording_PHONE_DDMMYY_HHMMSS ----
+    # ---- Priority pattern: Call_recording_IDENTIFIER_DDMMYY_HHMMSS ----
+    # IDENTIFIER is either a phone number (digits) or a contact name (letters/underscores)
+    # Examples:
+    #   Call_recording_0545479819_260209_104905.m4a  → phone
+    #   Call_recording_Amir_Adar_260209_174436.m4a   → contact name
     call_rec_match = re.match(
         r"(?i)call[_\-\s]*recording[_\-\s]*"
-        r"(\d{7,15})"           # phone number (7-15 digits)
+        r"(.+?)"                # identifier (phone or name)
         r"[_\-\s]"
         r"(\d{6})"              # DDMMYY
         r"[_\-\s]"
-        r"(\d{6})",             # HHMMSS
+        r"(\d{6})$",            # HHMMSS (must be at end)
         stem,
     )
     if call_rec_match:
-        phone = call_rec_match.group(1)
+        identifier = call_rec_match.group(1).strip("_- ")
         date_raw = call_rec_match.group(2)  # DDMMYY
         time_raw = call_rec_match.group(3)  # HHMMSS
 
-        result["phone_number"] = phone
+        # Determine if identifier is a phone number or a name
+        if re.match(r"^\d{7,15}$", identifier):
+            # It's a phone number
+            result["phone_number"] = identifier
+            result["participants"] = identifier
+        else:
+            # It's a contact name — replace underscores with spaces
+            contact_name = identifier.replace("_", " ").strip()
+            result["participants"] = contact_name
 
         # Parse DDMMYY → YYYY-MM-DD
         try:
@@ -179,7 +191,6 @@ def _parse_filename_metadata(filename: str) -> Dict[str, Optional[str]]:
         except (ValueError, IndexError):
             pass
 
-        result["participants"] = phone
         return result
 
     # ---- Generic date patterns ----

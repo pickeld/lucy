@@ -124,18 +124,32 @@ class CallRecordingSyncer:
                 # Resolve metadata from file tags + filename
                 filename_meta = _parse_filename_metadata(af.filename)
 
-                # Extract phone number from filename
+                # Extract phone number and participants from filename
                 phone_number = filename_meta.get("phone_number") or ""
+                fn_participants = filename_meta.get("participants") or ""
 
-                # Look up contact name from entity store by phone
+                # Resolve contact name:
+                # 1. If phone detected → look up entity store
+                # 2. If name detected from filename → use directly
                 contact_name = ""
                 if phone_number:
                     contact_name = self._lookup_contact_by_phone(phone_number)
+                elif fn_participants and not fn_participants.replace(" ", "").isdigit():
+                    # Filename had a name (not a phone number)
+                    contact_name = fn_participants
 
                 # Auto-detect participants from tags or filename
                 participants = self._resolve_participants(af)
                 if contact_name and participants == ["Unknown"]:
                     participants = [contact_name]
+
+                # Use date+time from filename if available
+                modified_at = af.modified_at.isoformat()
+                if filename_meta.get("date_str"):
+                    ts = filename_meta["date_str"]
+                    if filename_meta.get("time_str"):
+                        ts += f"T{filename_meta['time_str']}"
+                    modified_at = ts
 
                 # Register in DB (idempotent — skips if already tracked)
                 row = recording_db.upsert_file(
@@ -144,7 +158,7 @@ class CallRecordingSyncer:
                     file_path=af.path,
                     file_size=af.size,
                     extension=af.extension,
-                    modified_at=af.modified_at.isoformat(),
+                    modified_at=modified_at,
                     participants=participants,
                     contact_name=contact_name or (participants[0] if participants[0] != "Unknown" else ""),
                     phone_number=phone_number,
