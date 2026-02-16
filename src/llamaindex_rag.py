@@ -514,8 +514,10 @@ class LlamaIndexRAG:
     
     # Sparse+dense hybrid retrieval (see plans/rag-hybrid-retrieval-upgrade.md §1.3)
     HYBRID_ENABLED = settings.get("rag_hybrid_enabled", "false").lower() == "true"
-    DENSE_VECTOR_NAME = "dense"    # Named vector for OpenAI embeddings
-    SPARSE_VECTOR_NAME = "sparse"  # Named vector for BM25-style sparse vectors
+    # LlamaIndex QdrantVectorStore prepends "text-" to vector_name, so we
+    # must use "text-dense" as the actual Qdrant vector name to match.
+    DENSE_VECTOR_NAME = "text-dense"  # Named vector for OpenAI embeddings
+    SPARSE_VECTOR_NAME = "sparse"     # Named vector for BM25-style sparse vectors
     
     def __new__(cls):
         """Singleton pattern to ensure one RAG instance."""
@@ -3462,15 +3464,33 @@ class LlamaIndexRAG:
             LlamaIndexRAG._index = None
             LlamaIndexRAG._ingestion_pipeline = None
             
-            # Recreate collection with current VECTOR_SIZE
-            self.qdrant_client.create_collection(
-                collection_name=self.COLLECTION_NAME,
-                vectors_config=VectorParams(
-                    size=self.VECTOR_SIZE,
-                    distance=Distance.COSINE
+            # Recreate collection with current VECTOR_SIZE (+ sparse if hybrid enabled)
+            if self.HYBRID_ENABLED:
+                self.qdrant_client.create_collection(
+                    collection_name=self.COLLECTION_NAME,
+                    vectors_config={
+                        self.DENSE_VECTOR_NAME: VectorParams(
+                            size=self.VECTOR_SIZE,
+                            distance=Distance.COSINE,
+                        ),
+                    },
+                    sparse_vectors_config={
+                        self.SPARSE_VECTOR_NAME: SparseVectorParams(),
+                    },
                 )
-            )
-            logger.info(f"Recreated collection: {self.COLLECTION_NAME} (dims={self.VECTOR_SIZE})")
+                logger.info(
+                    f"Recreated HYBRID collection: {self.COLLECTION_NAME} "
+                    f"(dense={self.VECTOR_SIZE}d + sparse)"
+                )
+            else:
+                self.qdrant_client.create_collection(
+                    collection_name=self.COLLECTION_NAME,
+                    vectors_config=VectorParams(
+                        size=self.VECTOR_SIZE,
+                        distance=Distance.COSINE
+                    )
+                )
+                logger.info(f"Recreated collection: {self.COLLECTION_NAME} (dims={self.VECTOR_SIZE})")
             
             # Recreate indexes
             self._ensure_text_indexes()
