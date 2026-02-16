@@ -11,6 +11,7 @@ Paperless-NG, etc.) via the plugin architecture.
 Qdrant Dashboard: http://localhost:6333/dashboard
 """
 
+import hashlib
 import json
 import os
 import uuid
@@ -58,6 +59,25 @@ from qdrant_client.models import (
 from config import settings
 from utils.logger import logger
 from utils.redis_conn import get_redis_client
+
+
+def deterministic_node_id(source: str, source_id: str, chunk_index: int = 0) -> str:
+    """Generate a deterministic UUID-format ID from source metadata.
+    
+    Using deterministic IDs makes re-ingestion idempotent: re-syncing
+    the same content produces the same point ID in Qdrant, turning
+    inserts into upserts instead of creating duplicates.
+    
+    Args:
+        source: Data source (e.g., "paperless", "gmail", "whatsapp")
+        source_id: Source-specific unique identifier
+        chunk_index: Chunk index within the document (0 for single-chunk)
+        
+    Returns:
+        UUID-format string derived from the input fields
+    """
+    key = f"{source}:{source_id}:{chunk_index}"
+    return str(uuid.UUID(hashlib.md5(key.encode("utf-8")).hexdigest()))
 
 
 def format_timestamp(timestamp: str, timezone: str = "") -> str:
@@ -247,12 +267,18 @@ class ArchiveRetriever(BaseRetriever):
     def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         """Retrieve relevant messages/documents using hybrid search.
         
-        Runs semantic + full-text hybrid search first. Then:
-        1. Expands context by fetching surrounding messages from the same chats
-        2. Supplements with the most recent messages for temporal awareness
+        Pipeline order (optimized — see plans/rag-hybrid-retrieval-upgrade.md §2.1):
         
-        If search returns no results, falls back to timestamp-ordered
-        retrieval (language-agnostic recency fallback).
+        1. Hybrid search (dense + fulltext, fused via QueryFusionRetriever)
+        2. **Cohere rerank** — prune to top-N most relevant before expansion
+        3. Context expansion (±30min surrounding messages from reranked hits)
+        4. Document chunk expansion (Paperless siblings of reranked hits)
+        5. Per-chat recency supplement (only from chats in reranked results)
+        6. Entity fact injection
+        7. Token budget trim
+        
+        Reranking before expansion means only high-quality seed results
+        get expanded, reducing noise and saving Qdrant queries.
         
         Always returns at least one node so the chat engine's synthesizer
         can generate a proper response (it returns "Empty Response" on empty input).
@@ -294,6 +320,38 @@ class ArchiveRetriever(BaseRetriever):
             **_fkw,
         )
         
+        # =====================================================================
+        # Step 1: Cohere multilingual reranking (BEFORE expansion)
+        # =====================================================================
+        # Reranking before expansion ensures that only high-quality seed
+        # results get expanded, reducing noise from irrelevant context
+        # messages and saving Qdrant queries.  The reranker sees the raw
+        # search candidates and selects the most relevant subset.
+        try:
+            cohere_key = settings.get("cohere_api_key", "")
+            if cohere_key and results:
+                from llama_index.postprocessor.cohere_rerank import CohereRerank
+                
+                rerank_top_n = int(settings.get("rag_rerank_top_n", "10"))
+                rerank_model = settings.get("rag_rerank_model", "rerank-v3.5")
+                reranker = CohereRerank(
+                    api_key=cohere_key,
+                    top_n=rerank_top_n,
+                    model=rerank_model,
+                )
+                pre_rerank = len(results)
+                results = reranker.postprocess_nodes(results, query_bundle)
+                logger.info(
+                    f"Cohere rerank ({rerank_model}): {pre_rerank} → {len(results)} results"
+                )
+        except ImportError:
+            logger.warning(
+                "llama-index-postprocessor-cohere-rerank not installed. "
+                "Install with: pip install llama-index-postprocessor-cohere-rerank"
+            )
+        except Exception as e:
+            logger.debug(f"Cohere reranking failed (non-critical): {e}")
+        
         # Early budget tracking: compute budget once and skip expansions
         # if we're already close to the limit, avoiding wasteful Qdrant
         # queries for context that will just be trimmed away.
@@ -302,22 +360,28 @@ class ArchiveRetriever(BaseRetriever):
         def _current_chars(nodes: List[NodeWithScore]) -> int:
             return sum(len(getattr(n.node, "text", "") or "") for n in nodes if n.node)
         
-        # Context expansion: fetch surrounding messages from the same chats
-        # so that replies and nearby messages are included as context.
+        # =====================================================================
+        # Step 2: Context expansion (on reranked results only)
+        # =====================================================================
+        # Fetch surrounding messages from the same chats so that replies
+        # and nearby messages are included as context.
         if results and _current_chars(results) < max_context_chars * 0.8:
             results = self._rag.expand_context(results, max_total=self._k * 2)
         
-        # Document chunk expansion: when a Paperless document chunk is found,
-        # fetch ALL sibling chunks from the same document so the LLM sees the
-        # complete document content, not just the chunk that matched the query.
-        # Skip if we're already near the budget limit.
+        # =====================================================================
+        # Step 3: Document chunk expansion (on reranked results only)
+        # =====================================================================
+        # When a Paperless document chunk is found, fetch ALL sibling chunks
+        # from the same document so the LLM sees the complete content.
         if results and _current_chars(results) < max_context_chars * 0.8:
             results = self._rag.expand_document_chunks(results, max_total=self._k * 3)
         
-        # Per-chat recency supplement: fetch recent messages only from
-        # chats that already appear in the semantic search results.
-        # This prevents unrelated recent messages (e.g. voice recordings
-        # from a test chat) from polluting the context.
+        # =====================================================================
+        # Step 4: Per-chat recency supplement
+        # =====================================================================
+        # Fetch recent messages only from chats that appear in the
+        # (now reranked) search results.  This prevents unrelated recent
+        # messages from polluting the context.
         if results:
             chat_names_in_results: set = set()
             for nws in results:
@@ -345,10 +409,12 @@ class ArchiveRetriever(BaseRetriever):
                         existing_ids.add(nws.node.id_)
                         results.append(nws)
         
-        # Entity fact injection: when the query mentions a known person,
-        # inject their stored facts as a high-priority context node so the
-        # LLM can answer factual questions (age, birth date, etc.) directly
-        # without needing to find the information in retrieved messages.
+        # =====================================================================
+        # Step 5: Entity fact injection
+        # =====================================================================
+        # When the query mentions a known person, inject their stored facts
+        # as a high-priority context node so the LLM can answer factual
+        # questions (age, birth date, etc.) directly.
         try:
             entity_nodes = self._inject_entity_facts(query_bundle.query_str)
             if entity_nodes:
@@ -356,65 +422,6 @@ class ArchiveRetriever(BaseRetriever):
                 logger.info(f"Injected {len(entity_nodes)} entity fact node(s)")
         except Exception as e:
             logger.debug(f"Entity fact injection failed (non-critical): {e}")
-        
-        # =====================================================================
-        # Cohere multilingual reranking
-        # Re-scores results using a cross-encoder model that natively
-        # understands Hebrew, dramatically improving retrieval precision.
-        # Requires cohere_api_key to be set in settings.
-        # =====================================================================
-        try:
-            cohere_key = settings.get("cohere_api_key", "")
-            if cohere_key:
-                from llama_index.postprocessor.cohere_rerank import CohereRerank
-                
-                rerank_top_n = int(settings.get("rag_rerank_top_n", "10"))
-                rerank_model = settings.get("rag_rerank_model", "rerank-multilingual-v3.0")
-                reranker = CohereRerank(
-                    api_key=cohere_key,
-                    top_n=rerank_top_n,
-                    model=rerank_model,
-                )
-                pre_rerank = len(results)
-                results = reranker.postprocess_nodes(results, query_bundle)
-                logger.info(
-                    f"Cohere rerank ({rerank_model}): {pre_rerank} → {len(results)} results"
-                )
-        except ImportError:
-            logger.warning(
-                "llama-index-postprocessor-cohere-rerank not installed. "
-                "Install with: pip install llama-index-postprocessor-cohere-rerank"
-            )
-        except Exception as e:
-            logger.debug(f"Cohere reranking failed (non-critical): {e}")
-        
-        # =====================================================================
-        # Score-based filtering
-        # =====================================================================
-        # NOTE: SimilarityPostprocessor is intentionally NOT applied here.
-        #
-        # At this point, node scores come from heterogeneous sources:
-        #   - Dense vector cosine similarity (0-1)
-        #   - Fulltext heuristic constants (0.75-0.95)
-        #   - Recency decay scores (0.3-0.5)
-        #   - Entity fact scores (1.0)
-        #   - Context expansion scores (0.5)
-        #
-        # If Cohere reranking ran, all scores are replaced with cross-encoder
-        # relevance scores (0-1), which ARE comparable — but applying a
-        # similarity cutoff after reranking is counterproductive because the
-        # reranker already selected the top-N most relevant results.
-        #
-        # If Cohere reranking did NOT run, scores are mixed types and a
-        # single cutoff cannot meaningfully filter them.
-        #
-        # Instead, minimum similarity filtering is applied earlier:
-        #   - VectorOnlyRetriever._retrieve() filters dense results by
-        #     MINIMUM_SIMILARITY_SCORE before they enter the fusion pipeline
-        #   - The search() fallback path also applies the score threshold
-        #     to vector results before merging with fulltext
-        #
-        # See: plans/rag-hybrid-retrieval-upgrade.md §1.1
         
         # Ensure at least one node so the synthesizer doesn't return "Empty Response"
         if not results:
@@ -819,22 +826,17 @@ class LlamaIndexRAG:
             logger.debug(f"Could not create message index (may exist): {e}")
         
         try:
-            # Create text index on 'numbers' field for reverse ID/number lookups.
+            # Create keyword index on 'numbers' field for reverse ID/number lookups.
             # Paperless documents store extracted numeric sequences (≥5 digits)
-            # in this field as space-separated values, enabling queries like
+            # as a JSON array of strings, enabling exact-match queries like
             # "למי שייכת תעודה הזהות 227839586?" to find the matching document.
+            # Keyword index is faster and more exact than tokenized text matching.
             self.qdrant_client.create_payload_index(
                 collection_name=self.COLLECTION_NAME,
                 field_name="numbers",
-                field_schema=TextIndexParams(
-                    type=TextIndexType.TEXT,
-                    tokenizer=TokenizerType.WORD,
-                    min_token_len=5,
-                    max_token_len=20,
-                    lowercase=True
-                )
+                field_schema=PayloadSchemaType.KEYWORD,
             )
-            logger.info("Created text index on 'numbers' field")
+            logger.info("Created keyword index on 'numbers' field")
         except Exception as e:
             logger.debug(f"Could not create numbers index (may exist): {e}")
     
@@ -1100,7 +1102,9 @@ class LlamaIndexRAG:
                     "senders": list({m["sender"] for m in messages}),
                     "source_id": f"chunk:{chat_id}:{first_ts}:{last_ts}",
                 },
-                id_=str(uuid.uuid4()),
+                id_=deterministic_node_id(
+                    "whatsapp", f"chunk:{chat_id}:{first_ts}:{last_ts}", 0
+                ),
             )
             
             self.index.insert_nodes([chunk_node])
@@ -1715,6 +1719,11 @@ class LlamaIndexRAG:
         expanded = LlamaIndexRAG._expand_hebrew_tokens(unique)
         return expanded
     
+    # Fields that use keyword indexes (array of strings) instead of text indexes.
+    # These fields use MatchValue for exact matching rather than MatchText for
+    # tokenized text search.
+    _KEYWORD_ARRAY_FIELDS = {"numbers"}
+    
     def _fulltext_search_by_field(
         self,
         field_name: str,
@@ -1727,11 +1736,15 @@ class LlamaIndexRAG:
         
         Uses Qdrant's ``should`` filter so that a document matches if
         it contains **any** of the given tokens in the specified field.
-        This avoids the AND-logic limitation of ``MatchText`` when the
-        full query string contains words absent from the indexed field.
+        
+        For text-indexed fields (sender, chat_name, message), uses ``MatchText``
+        for tokenized full-text matching.
+        
+        For keyword-indexed array fields (numbers), uses ``MatchValue``
+        for exact element matching, which is faster and more precise.
         
         Args:
-            field_name: Qdrant payload field to search (sender, chat_name, message)
+            field_name: Qdrant payload field to search
             tokens: List of keyword tokens to match (OR logic)
             score: Score to assign to matches from this field
             k: Max results
@@ -1744,11 +1757,19 @@ class LlamaIndexRAG:
             return []
         
         try:
-            # Build OR conditions: match ANY of the tokens in this field
-            should_conditions = [
-                FieldCondition(key=field_name, match=MatchText(text=token))
-                for token in tokens
-            ]
+            # Build OR conditions: match ANY of the tokens in this field.
+            # Keyword array fields (e.g., numbers) use exact MatchValue;
+            # text-indexed fields use tokenized MatchText.
+            if field_name in self._KEYWORD_ARRAY_FIELDS:
+                should_conditions = [
+                    FieldCondition(key=field_name, match=MatchValue(value=token))
+                    for token in tokens
+                ]
+            else:
+                should_conditions = [
+                    FieldCondition(key=field_name, match=MatchText(text=token))
+                    for token in tokens
+                ]
             
             qdrant_filter = Filter(
                 must=must_conditions or None,
@@ -2931,10 +2952,20 @@ class LlamaIndexRAG:
         # questions, so it doesn't say "no results" when the answer was already
         # provided in a previous turn.
         context_prompt = (
-            "Here are the relevant messages from the archive:\n"
+            "Here are the relevant messages and documents from the archive:\n"
             "-----\n"
             "{context_str}\n"
             "-----\n"
+            "CITATION RULES:\n"
+            "- Each retrieved item above starts with its source (WhatsApp, Gmail, "
+            "Paperless, etc.), date, and sender.\n"
+            "- When citing information from a specific retrieved item, mention the "
+            "source and approximate date so the user can verify. For example: "
+            "'According to a WhatsApp message from David on 15/01/2024...'\n"
+            "- If multiple sources provide the same information, cite the most "
+            "specific or most recent one.\n"
+            "- Only cite a source when you are explicitly referencing information "
+            "from it — do not add citations to general knowledge.\n\n"
             "IMPORTANT: Use BOTH the retrieved messages above AND the chat history "
             "to answer the user's question. If the retrieved messages don't contain "
             "new relevant information but you already discussed the topic in previous "

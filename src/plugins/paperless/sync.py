@@ -467,30 +467,33 @@ class DocumentSyncer:
                         
                         # Extract all numeric sequences (≥5 digits) from the
                         # full document content for reverse ID/number lookups.
-                        # Stored as space-separated string in 'numbers' metadata
-                        # field which has a fulltext index in Qdrant.
+                        # Stored as a JSON array of strings in 'numbers' metadata
+                        # field which has a keyword index in Qdrant for exact matching.
                         all_numbers = sorted(set(
                             _RE_NUMERIC_SEQUENCES.findall(content)
                         ))
-                        numbers_str = " ".join(all_numbers) if all_numbers else ""
+                        numbers_list = all_numbers if all_numbers else []
                         
                         # Build all chunk nodes, then batch-embed in one API call
                         chunk_nodes = []
                         for idx, chunk in enumerate(chunks):
                             chunk_meta = dict(base_metadata)
                             chunk_meta["message"] = chunk
-                            if numbers_str:
-                                chunk_meta["numbers"] = numbers_str
+                            if numbers_list:
+                                chunk_meta["numbers"] = numbers_list
                             if len(chunks) > 1:
                                 chunk_meta["chunk_index"] = str(idx)
                                 chunk_meta["chunk_total"] = str(len(chunks))
                             
                             embedding_text = f"Document: {title}\n\n{chunk}"
                             
+                            # Deterministic ID: re-syncing the same doc produces
+                            # the same point ID → upsert instead of duplicate
+                            from llamaindex_rag import deterministic_node_id
                             chunk_nodes.append(TextNode(
                                 text=embedding_text,
                                 metadata=chunk_meta,
-                                id_=str(uuid.uuid4()),
+                                id_=deterministic_node_id("paperless", source_id, idx),
                             ))
                         
                         # Batch insert via IngestionPipeline (with embedding cache)

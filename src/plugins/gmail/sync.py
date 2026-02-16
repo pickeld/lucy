@@ -638,10 +638,13 @@ class EmailSyncer:
                                 f"{chunk}"
                             )
 
+                            # Deterministic ID: re-syncing the same email produces
+                            # the same point ID → upsert instead of duplicate
+                            from llamaindex_rag import deterministic_node_id
                             chunk_nodes.append(TextNode(
                                 text=embedding_text,
                                 metadata=chunk_meta,
-                                id_=str(uuid.uuid4()),
+                                id_=deterministic_node_id("gmail", source_id, idx),
                             ))
 
                         # Batch insert via IngestionPipeline (with embedding cache)
@@ -714,6 +717,8 @@ class EmailSyncer:
                                             att_meta["chunk_index"] = str(aidx)
                                             att_meta["chunk_total"] = str(len(att_chunks))
 
+                                        from llamaindex_rag import deterministic_node_id
+                                        att_source_id = f"gmail:{msg_id}:att:{att.filename}"
                                         att_node = TextNode(
                                             text=(
                                                 f"Email Attachment: {att.filename}\n"
@@ -721,7 +726,7 @@ class EmailSyncer:
                                                 f"{achunk}"
                                             ),
                                             metadata=att_meta,
-                                            id_=str(uuid.uuid4()),
+                                            id_=deterministic_node_id("gmail", att_source_id, aidx),
                                         )
                                         self.rag.ingest_nodes([att_node])
                                         attachment_count += 1
