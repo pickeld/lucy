@@ -570,44 +570,6 @@ async def start_call_recordings_sync(force: bool = False) -> dict[str, Any]:
         return {"error": str(e)}
 
 
-async def call_recordings_dropbox_auth_url() -> dict[str, Any]:
-    """Get Dropbox OAuth2 authorization URL."""
-    try:
-        resp = await _get_client().get(
-            "/plugins/call_recordings/dropbox/auth/url", timeout=10
-        )
-        data = resp.json()
-        if resp.status_code == 200:
-            return data
-        else:
-            msg = data.get("message") or data.get("error") or "Failed"
-            return {"error": msg}
-    except httpx.ConnectError:
-        return {"error": "Cannot reach API server"}
-    except Exception as e:
-        return {"error": str(e)}
-
-
-async def call_recordings_dropbox_auth_callback(code: str) -> dict[str, Any]:
-    """Submit Dropbox authorization code."""
-    try:
-        resp = await _get_client().post(
-            "/plugins/call_recordings/dropbox/auth/callback",
-            json={"code": code},
-            timeout=30,
-        )
-        data = resp.json()
-        if resp.status_code == 200:
-            return data
-        else:
-            msg = data.get("message") or data.get("error") or "Authorization failed"
-            return {"error": msg}
-    except httpx.ConnectError:
-        return {"error": "Cannot reach API server"}
-    except Exception as e:
-        return {"error": str(e)}
-
-
 async def upload_call_recordings(file_data: list[tuple[str, bytes]]) -> dict[str, Any]:
     """Upload audio files to the call recordings plugin.
 

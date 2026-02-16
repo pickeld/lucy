@@ -505,14 +505,6 @@ def _call_recordings_actions() -> rx.Component:
         # Action buttons row
         rx.flex(
             rx.button(
-                rx.icon("key-round", size=14, class_name="mr-1"),
-                "Authorize Dropbox",
-                on_click=AppState.call_recordings_dbx_start_auth,
-                loading=AppState.call_recordings_dbx_auth_status == "pending",
-                size="2",
-                class_name="bg-purple-500 text-white hover:bg-purple-600",
-            ),
-            rx.button(
                 rx.icon("wifi", size=14, class_name="mr-1"),
                 "Test Connection",
                 on_click=AppState.test_call_recordings_connection,
@@ -530,60 +522,6 @@ def _call_recordings_actions() -> rx.Component:
             ),
             gap="3",
             align="center",
-            wrap="wrap",
-        ),
-        # Dropbox auth URL + code input (shown when auth is pending)
-        rx.cond(
-            AppState.call_recordings_dbx_auth_url != "",
-            rx.box(
-                rx.text(
-                    "Open this URL in your browser to authorize:",
-                    class_name="text-sm text-gray-600 mb-2",
-                ),
-                rx.box(
-                    rx.text(
-                        AppState.call_recordings_dbx_auth_url,
-                        class_name="text-xs text-blue-600 break-all",
-                    ),
-                    class_name="bg-gray-50 border border-gray-200 rounded p-2 mb-3",
-                ),
-                rx.text(
-                    "After approving, paste the authorization code below:",
-                    class_name="text-sm text-gray-600 mb-2",
-                ),
-                rx.flex(
-                    rx.el.input(
-                        type="text",
-                        placeholder="Paste authorization code here…",
-                        on_change=AppState.set_call_recordings_dbx_auth_code,
-                        class_name=(
-                            "flex-1 bg-white border border-gray-200 rounded-lg "
-                            "px-3 py-2 text-sm text-gray-700 "
-                            "outline-none focus:border-accent"
-                        ),
-                    ),
-                    rx.button(
-                        rx.icon("check", size=14, class_name="mr-1"),
-                        "Submit Code",
-                        on_click=AppState.call_recordings_dbx_submit_code,
-                        size="2",
-                        class_name="bg-green-500 text-white hover:bg-green-600 shrink-0",
-                    ),
-                    gap="2",
-                    align="center",
-                ),
-                class_name="mt-3",
-            ),
-            rx.fragment(),
-        ),
-        # Dropbox auth status message
-        rx.cond(
-            AppState.call_recordings_dbx_auth_message != "",
-            rx.text(
-                AppState.call_recordings_dbx_auth_message,
-                class_name="text-sm mt-2",
-            ),
-            rx.fragment(),
         ),
         # Status messages
         rx.cond(
