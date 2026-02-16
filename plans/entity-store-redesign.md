@@ -14,7 +14,7 @@ The current Entity Store page at `/entities` is an **iframe** embedding a standa
 Rebuild the entity store as a **native Reflex component** that:
 - Matches the settings page's design language (light theme, card-based, tabbed)
 - Behaves like settings (Reflex component, not a separate page)
-- Presents person facts in an intuitive, profile-card style layout
+- Uses a master-detail side panel layout for browsing + viewing person details
 - Groups facts semantically so you can quickly understand who someone is
 
 ## Architecture
@@ -29,22 +29,25 @@ graph TD
 
     B --> G[Header: back + title + stats badges]
     B --> H[Tabs: People | All Facts]
-    H --> I[People tab: search + person cards]
+    H --> I[People tab: master-detail side panel]
     H --> J[All Facts tab: filterable table]
-    I --> K[Person detail: profile + facts + aliases + relationships]
+    I --> K[Left: person card list]
+    I --> L[Right: detail panel with grouped facts]
 ```
 
 ## Files to Modify
 
 | File | Change |
 |------|--------|
-| `ui-reflex/ui_reflex/api_client.py` | Add 8 entity API functions |
-| `ui-reflex/ui_reflex/state.py` | Add entity state vars + ~12 event handlers |
-| `ui-reflex/ui_reflex/components/entities_page.py` | **New file** — full entity page component |
+| `src/entity_db.py` | Add `delete_fact()`, `delete_alias()`, `update_fact()` DB functions |
+| `src/app.py` | Add DELETE `/entities/<id>/facts/<key>`, DELETE `/entities/<id>/aliases/<alias_id>`, PUT `/entities/<id>/facts` endpoints |
+| `ui-reflex/ui_reflex/api_client.py` | Add ~11 entity API functions (including delete/update fact, delete alias) |
+| `ui-reflex/ui_reflex/state.py` | Add entity state vars + ~18 event handlers |
+| `ui-reflex/ui_reflex/components/entities_page.py` | **New file** — full entity page component with inline edit/delete |
 | `ui-reflex/ui_reflex/ui_reflex.py` | Replace iframe with native component |
 | `ui-reflex/ui_reflex/components/__init__.py` | Export new component if needed |
 
-No backend changes needed — all Flask `/entities/*` endpoints already exist.
+**Backend changes needed** — delete fact/alias and update fact endpoints do not exist yet.
 
 ---
 
@@ -55,34 +58,41 @@ No backend changes needed — all Flask `/entities/*` endpoints already exist.
 Add these async functions matching existing Flask routes:
 
 ```python
-# Entity endpoints
+# Entity endpoints — existing backend routes
 async def fetch_entities(query: str | None = None) -> list[dict]
     # GET /entities?q=...
-    # Returns: {"persons": [...], "count": N}
 
 async def fetch_entity_stats() -> dict
     # GET /entities/stats
-    # Returns: {"persons": N, "aliases": N, "facts": N, "relationships": N}
 
 async def fetch_entity(person_id: int) -> dict
     # GET /entities/{person_id}
-    # Returns: full person with aliases, facts_detail, relationships
 
 async def delete_entity(person_id: int) -> dict
     # DELETE /entities/{person_id}
 
 async def add_entity_fact(person_id: int, key: str, value: str) -> dict
-    # POST /entities/{person_id}/facts  body: {key, value}
+    # POST /entities/{person_id}/facts
 
 async def add_entity_alias(person_id: int, alias: str) -> dict
-    # POST /entities/{person_id}/aliases  body: {alias}
+    # POST /entities/{person_id}/aliases
 
 async def seed_entities() -> dict
-    # POST /entities/seed  body: {confirm: true}
+    # POST /entities/seed
 
 async def fetch_all_facts(key: str | None = None) -> dict
     # GET /entities/facts/all?key=...
-    # Returns: {"facts": [...], "available_keys": [...]}
+
+# Entity endpoints — NEW backend routes needed for inline edit/delete
+async def update_entity_fact(person_id: int, key: str, value: str) -> dict
+    # PUT /entities/{person_id}/facts  body: {key, value}
+    # (reuses set_fact which is already upsert)
+
+async def delete_entity_fact(person_id: int, fact_key: str) -> dict
+    # DELETE /entities/{person_id}/facts/{fact_key}
+
+async def delete_entity_alias(person_id: int, alias_id: int) -> dict
+    # DELETE /entities/{person_id}/aliases/{alias_id}
 ```
 
 ### 2. State (`state.py`)
@@ -91,15 +101,15 @@ New state variables:
 
 ```python
 # --- Entity store ---
-entity_persons: list[dict[str, str]] = []      # Person list for grid
-entity_stats: dict[str, str] = {}               # Stats counters
-entity_search: str = ""                          # Search input
-entity_selected_id: int = 0                      # Currently selected person ID
-entity_detail: dict[str, Any] = {}               # Full person detail
-entity_tab: str = "people"                       # Active tab
-entity_loading: bool = False                     # Loading spinner
-entity_detail_loading: bool = False              # Detail loading
-entity_save_message: str = ""                    # Toast/status message
+entity_persons: list[dict[str, str]] = []
+entity_stats: dict[str, str] = {}
+entity_search: str = ""
+entity_selected_id: int = 0
+entity_detail: dict[str, Any] = {}
+entity_tab: str = "people"
+entity_loading: bool = False
+entity_detail_loading: bool = False
+entity_save_message: str = ""
 
 # For add fact/alias forms
 entity_new_fact_key: str = ""
@@ -108,14 +118,14 @@ entity_new_alias: str = ""
 
 # All facts view
 entity_all_facts: list[dict[str, str]] = []
-entity_fact_keys: list[str] = []                 # Available keys for filter
-entity_fact_key_filter: str = ""                 # Selected key filter
+entity_fact_keys: list[str] = []
+entity_fact_key_filter: str = ""
 ```
 
 New event handlers:
 
 ```python
-async def on_entities_load()         # Page load — fetch persons + stats
+async def on_entities_load()         # Page load
 async def load_entities(query?)      # Fetch/search person list
 async def load_entity_stats()        # Fetch stats
 async def select_entity(person_id)   # Load full person detail
@@ -138,9 +148,8 @@ Key computed vars:
 ```python
 @rx.var
 def entity_facts_grouped(self) -> list[dict]
-    # Groups facts from entity_detail into semantic categories:
+    # Groups facts into semantic categories:
     # Identity, Location, Work, Family, Contact, Other
-    # Each group: {category, icon, facts: [{key, value, confidence, source}]}
 
 @rx.var
 def entity_aliases_list(self) -> list[dict]
@@ -153,67 +162,102 @@ def entity_relationships_list(self) -> list[dict]
 
 ### 3. Entity Page Component (`entities_page.py`)
 
-Layout matches settings page exactly:
+#### Master-Detail Side Panel Layout
+
+When a person is selected, the People tab splits into a **two-column layout**:
+the person list compresses to the left (~40%), and a detail panel appears on the
+right (~60%). When no person is selected, the person grid takes the full width.
+
+**No person selected — full-width grid:**
 
 ```
-┌─────────────────────────────────────────────┐
-│ ← Entity Store     Stats: 5154 👤 210 📋 14 🔗│
-├─────────────────────────────────────────────┤
-│  👤 People  │  📋 All Facts                  │
-├─────────────────────────────────────────────┤
-│                                              │
-│  [Search persons...]  [🌱 Seed] [🔄 Refresh]│
-│                                              │
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐       │
-│  │ Person 1 │ │ Person 2 │ │ Person 3 │      │
-│  │ aliases  │ │ aliases  │ │ aliases  │      │
-│  │ 3 facts  │ │ 5 facts  │ │ 0 facts  │      │
-│  └─────────┘ └─────────┘ └─────────┘       │
-│                                              │
-│  ═══════════════════════════════════════════ │
-│  PERSON DETAIL (when selected)               │
-│                                              │
-│  ┌─ 🏷️ Identity ──────────────────────────┐ │
-│  │ Gender: female    Born: 1994-03-15      │ │
-│  │ ID: 038041612                           │ │
-│  └─────────────────────────────────────────┘ │
-│                                              │
-│  ┌─ 💼 Work ──────────────────────────────┐  │
-│  │ Title: Product Manager                  │ │
-│  │ Employer: Wix                           │ │
-│  └─────────────────────────────────────────┘ │
-│                                              │
-│  ┌─ 📝 Aliases ───────────────────────────┐  │
-│  │ [Shiran ×] [שירן ×] [Shiran W ×]       │ │
-│  │ [Add alias...]  [+ Add]                 │ │
-│  └─────────────────────────────────────────┘ │
-│                                              │
-│  ┌─ 🔗 Relationships ────────────────────┐  │
-│  │ spouse → David Pickel                   │ │
-│  └─────────────────────────────────────────┘ │
-└─────────────────────────────────────────────┘
++--------------------------------------------------------------+
+| <- Entity Store          Stats: 5154 P  210 F  14 R          |
++--------------------------------------------------------------+
+|  P People  |  F All Facts                                    |
++--------------------------------------------------------------+
+|  [Search persons...]  [Seed from WhatsApp] [Refresh]         |
+|                                                               |
+|  +--------------+ +--------------+ +--------------+          |
+|  | Person 1      | | Person 2      | | Person 3      |       |
+|  | aliases       | | aliases       | | aliases       |       |
+|  | F 3  A 4      | | F 5  A 2      | | F 0  A 3      |       |
+|  +--------------+ +--------------+ +--------------+          |
+|  +--------------+ +--------------+ +--------------+          |
+|  | Person 4      | | Person 5      | | Person 6      |       |
+|  +--------------+ +--------------+ +--------------+          |
++--------------------------------------------------------------+
+```
+
+**Person selected — master-detail side panel:**
+
+```
++--------------------------------------------------------------+
+| <- Entity Store          Stats: 5154 P  210 F  14 R          |
++--------------------------------------------------------------+
+|  P People  |  F All Facts                                    |
++--------------------------+-----------------------------------+
+| [Search...]  [Seed] [R]  |  X Shiran Waintrob    [Delete]   |
+|                           |                                   |
+| +--------------------+   |  +- Identity ----------------+    |
+| |> Shiran Waintrob   |   |  | Gender: female            |    |
+| |  shiran / Shiran   |   |  | Birthday: 1994-03-15      |    |
+| |  F 5  A 4          |   |  +----------------------------+    |
+| +--------------------+   |                                   |
+| +--------------------+   |  +- Work --------------------+    |
+| |  Eden Peretz       |   |  | Job: Product Manager      |    |
+| |  F 0  A 3          |   |  | Employer: Wix             |    |
+| +--------------------+   |  +----------------------------+    |
+| +--------------------+   |                                   |
+| |  Michal            |   |  +- Aliases -----------------+    |
+| |  F 0  A 3          |   |  | [Shiran x] [shiran x]    |    |
+| +--------------------+   |  | [Add alias...] [+ Add]    |    |
+| ...                       |  +----------------------------+    |
+|                           |                                   |
+|                           |  +- Relationships ----------+    |
+|                           |  | spouse -> David Pickel    |    |
+|                           |  +----------------------------+    |
++--------------------------+-----------------------------------+
 ```
 
 #### Component Structure
 
 ```python
 def entities_page() -> rx.Component:
-    # Mirrors settings_page() structure exactly
+    # Mirrors settings_page() outer structure
     rx.box(
         rx.flex(
             _header()               # Back button + title + stat badges
             _status_message()       # Save/action confirmations
             rx.tabs.root(
                 rx.tabs.list(
-                    "👤 People"     # value="people"
-                    "📋 All Facts"  # value="facts"
+                    "People"        # value="people"
+                    "All Facts"     # value="facts"
                 )
                 rx.tabs.content(_people_tab())
                 rx.tabs.content(_facts_tab())
             )
         )
     )
+
+def _people_tab() -> rx.Component:
+    # Toolbar: search + seed + refresh
+    # Conditional two-column layout:
+    rx.cond(
+        AppState.entity_selected_id > 0,
+        # Two columns: narrow person list + detail panel
+        rx.flex(
+            _person_list_column(),   # ~40% width, scrollable
+            _person_detail_panel(),  # ~60% width, scrollable
+        ),
+        # Full width: person grid
+        _person_grid_full(),
+    )
 ```
+
+The **detail panel** uses a vertical card layout matching settings `_section_card()`
+pattern. It has a sticky header with the person name, close button, and delete.
+The panel content scrolls independently of the person list.
 
 #### Fact Category Grouping
 
@@ -221,44 +265,126 @@ Facts are grouped into semantic categories for intuitive reading:
 
 | Category | Icon | Fact Keys |
 |----------|------|-----------|
-| Identity | 🏷️ | gender, birth_date, id_number |
-| Location | 🏠 | city, address, country |
-| Work | 💼 | job_title, employer, industry |
-| Family | 👨‍👩‍👧 | marital_status + relationships |
-| Contact | 📧 | email, phone |
-| Business | 🏢 | is_business |
-| Other | 📝 | Everything else not in above categories |
+| Identity | tag | gender, birth_date, id_number |
+| Location | map-pin | city, address, country |
+| Work | briefcase | job_title, employer, industry |
+| Family | users | marital_status + relationships |
+| Contact | mail | email, phone |
+| Business | building | is_business |
+| Other | file-text | Everything else not in above categories |
 
 Each fact displays:
-- **Human-readable label** (birth_date → "Birthday", job_title → "Job Title")
+- **Human-readable label** (birth_date -> Birthday, job_title -> Job Title)
 - **Value** in readable format
 - **Confidence badge** (color-coded: green >0.7, yellow 0.4-0.7, red <0.4)
-- **Source icon** (💬 WhatsApp, 📄 Paperless, ✏️ Manual)
+- **Source icon** (message-circle for WhatsApp, file-text for Paperless, pencil for Manual)
 
 #### Person Card (in grid)
 
 ```
-┌───────────────────────────────┐
-│  Shiran Waintrob              │
-│  [שירן] [Shiran] [+2 more]   │
-│  📋 5 facts  📝 4 aliases     │
-│  📱 +972501234567             │
-└───────────────────────────────┘
++-------------------------------+
+|  Shiran Waintrob              |
+|  [shiran] [Shiran] [+2 more] |
+|  F 5 facts  A 4 aliases      |
+|  phone: +972501234567         |
++-------------------------------+
 ```
 
 Uses same card styling as settings `_section_card()` with hover effect.
 
-#### Person Detail Panel
+#### Person Detail Side Panel
 
-When a person card is clicked, a detail panel expands below the grid
-(similar to how the current HTML detail-panel works, but styled as
-settings cards).
+When a person card is clicked, the page transitions from full-width grid to a
+**two-column master-detail layout**. The person list compresses to ~40% width
+(single column of cards), and a detail panel slides in at ~60% width on the right.
 
-Each fact category is a `_section_card()`:
-- Facts rendered as key-value pairs with labels, not raw table rows
-- Confidence shown as a small colored dot
-- Source shown as an icon
-- Inline add fact/alias forms at the bottom of their sections
+Clicking the X close button or pressing Escape collapses back to full-width.
+
+The detail panel contains stacked `_section_card()` blocks:
+- **Header** — Person name, WhatsApp ID, phone, close/delete buttons
+- **Fact category cards** — Grouped facts with inline edit/delete (see below)
+- **Aliases card** — Removable bubbles (X to delete) + add input
+- **Relationships card** — Visual connection badges
+- **Add Fact form** — Key + value inputs at the bottom
+
+#### Inline Fact Edit and Delete
+
+Each fact row in the detail panel supports edit and delete:
+
+**Normal mode** (default):
+```
+| Birthday     1994-03-15     [green dot] [WA icon]  [pencil] [trash] |
+```
+
+**Edit mode** (after clicking pencil):
+```
+| Birthday     [1994-03-15____]                      [save]   [cancel] |
+```
+
+State tracking for inline edit:
+- `entity_editing_fact_key: str = ""` — which fact key is being edited (empty = none)
+- `entity_editing_fact_value: str = ""` — the new value being typed
+
+When pencil is clicked: enter edit mode, pre-fill current value.
+When save is clicked: call `update_entity_fact()` (reuses existing upsert POST endpoint).
+When trash is clicked: confirm, then call `delete_entity_fact()` (new DELETE endpoint).
+
+Each alias bubble has an X button that calls `delete_entity_alias()` (new DELETE endpoint).
+
+### 0. Backend Changes (entity_db.py + app.py)
+
+These DB functions and Flask endpoints need to be added before frontend work:
+
+**entity_db.py new functions:**
+
+```python
+def delete_fact(person_id: int, fact_key: str) -> bool:
+    """Delete a single fact by person_id and fact_key."""
+    conn = _get_connection()
+    try:
+        cursor = conn.execute(
+            "DELETE FROM person_facts WHERE person_id = ? AND fact_key = ?",
+            (person_id, fact_key),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+def delete_alias(alias_id: int) -> bool:
+    """Delete a single alias by its ID."""
+    conn = _get_connection()
+    try:
+        cursor = conn.execute(
+            "DELETE FROM person_aliases WHERE id = ?",
+            (alias_id,),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+```
+
+**app.py new endpoints:**
+
+```python
+@app.route("/entities/<int:person_id>/facts/<fact_key>", methods=["DELETE"])
+def delete_entity_fact(person_id, fact_key):
+    deleted = entity_db.delete_fact(person_id, fact_key)
+    if not deleted:
+        return jsonify({"error": "Fact not found"}), 404
+    return jsonify({"status": "ok"}), 200
+
+@app.route("/entities/<int:person_id>/aliases/<int:alias_id>", methods=["DELETE"])
+def delete_entity_alias_by_id(person_id, alias_id):
+    deleted = entity_db.delete_alias(alias_id)
+    if not deleted:
+        return jsonify({"error": "Alias not found"}), 404
+    return jsonify({"status": "ok"}), 200
+```
+
+Note: Fact update (edit) reuses the existing `POST /entities/<id>/facts` endpoint,
+which already does upsert via `entity_db.set_fact()`.
 
 ### 4. Route Update (`ui_reflex.py`)
 
@@ -271,8 +397,8 @@ def entities() -> rx.Component:
 app.add_page(
     entities,
     route="/entities",
-    title="Entities — RAG Assistant",
-    on_load=AppState.on_entities_load,  # New handler
+    title="Entities - RAG Assistant",
+    on_load=AppState.on_entities_load,
 )
 ```
 
@@ -305,22 +431,24 @@ FACT_LABELS: dict[str, str] = {
 
 ## Visual Comparison
 
-| Aspect | Current (iframe) | New (Reflex) |
-|--------|-----------------|-------------|
-| Theme | Dark (#0f0f23) | Light (white, matching settings) |
+| Aspect | Current iframe | New Reflex |
+|--------|---------------|------------|
+| Theme | Dark #0f0f23 | Light white, matching settings |
 | Framework | Vanilla JS + HTML | Reflex components |
 | Layout | Full-page iframe | Settings-style scrollable panel |
-| Navigation | Separate page feel | Integrated with sidebar, back button |
+| Detail view | Expands below grid | Side panel right of list |
+| Navigation | Separate page feel | Integrated sidebar + back button |
 | Person list | Dark grid cards | Light cards with settings-card styling |
 | Fact display | Raw table | Grouped category cards with labels |
-| Aliases | Plain inline spans | Colored bubbles (like paperless tags) |
+| Aliases | Plain inline spans | Colored bubbles like paperless tags |
 | Actions | Inline JS handlers | Reflex event handlers with state |
-| Responsiveness | Basic grid | Consistent with rest of UI |
 
 ## Implementation Order
 
-1. API client functions (no dependencies)
-2. State vars + handlers (depends on API client)
-3. Entity page component (depends on state)
-4. Route wiring (depends on component)
-5. Test in browser
+1. Backend: Add `delete_fact()` and `delete_alias()` to entity_db.py
+2. Backend: Add DELETE endpoints for facts and aliases to app.py
+3. Frontend: Add entity API client functions to api_client.py
+4. Frontend: Add entity state vars + event handlers to state.py
+5. Frontend: Create entities_page.py component with side panel + inline edit/delete
+6. Frontend: Update ui_reflex.py route to use native component
+7. Test in browser
