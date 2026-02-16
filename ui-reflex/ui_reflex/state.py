@@ -657,8 +657,12 @@ class AppState(rx.State):
         """
         settings = self.all_settings.get(category, {})
         opts = self.config_meta.get("select_options", {})
+        # Settings removed from the codebase but may still linger in the DB
+        _HIDDEN_KEYS = {"call_recordings_default_participants"}
         result: list[dict[str, str]] = []
         for key, info in settings.items():
+            if key in _HIDDEN_KEYS:
+                continue
             options_list = opts.get(key, [])
             setting_type = info.get("type", "text")
             # Guard: if a select setting has no options, render as text

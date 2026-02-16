@@ -590,6 +590,11 @@ async def upload_call_recordings(file_data: list[tuple[str, bytes]]) -> dict[str
             timeout=120,
         )
         # Guard against empty / non-JSON responses
+        if resp.status_code == 404:
+            return {
+                "error": "Upload endpoint not found — "
+                "is the Call Recordings plugin enabled?"
+            }
         try:
             data = resp.json()
         except Exception:

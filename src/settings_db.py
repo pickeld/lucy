@@ -441,6 +441,26 @@ def set_setting(key: str, value: str) -> bool:
         conn.close()
 
 
+def delete_setting(key: str) -> bool:
+    """Delete a setting from the database.
+
+    Used to clean up obsolete settings that have been removed from plugins.
+
+    Args:
+        key: The setting key to delete
+
+    Returns:
+        True if the setting was deleted, False if key not found
+    """
+    conn = _get_connection()
+    try:
+        cursor = conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
 def set_settings(updates: Dict[str, str]) -> List[str]:
     """Update multiple settings at once.
     

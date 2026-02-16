@@ -132,6 +132,9 @@ class CallRecordingsPlugin(ChannelPlugin):
         """Initialize the call recordings plugin."""
         import settings_db
 
+        # Clean up obsolete settings from prior versions
+        settings_db.delete_setting("call_recordings_default_participants")
+
         source_path = (
             settings_db.get_setting_value("call_recordings_source_path")
             or "/app/data/call_recordings"
