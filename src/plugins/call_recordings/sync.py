@@ -122,12 +122,20 @@ class CallRecordingSyncer:
 
             for af in audio_files:
                 # Resolve metadata from file tags + filename
-                file_meta = af.file_metadata
                 filename_meta = _parse_filename_metadata(af.filename)
+
+                # Extract phone number from filename
+                phone_number = filename_meta.get("phone_number") or ""
+
+                # Look up contact name from entity store by phone
+                contact_name = ""
+                if phone_number:
+                    contact_name = self._lookup_contact_by_phone(phone_number)
 
                 # Auto-detect participants from tags or filename
                 participants = self._resolve_participants(af)
-                contact_name = participants[0] if participants and participants[0] != "Unknown" else ""
+                if contact_name and participants == ["Unknown"]:
+                    participants = [contact_name]
 
                 # Register in DB (idempotent — skips if already tracked)
                 row = recording_db.upsert_file(
@@ -138,7 +146,8 @@ class CallRecordingSyncer:
                     extension=af.extension,
                     modified_at=af.modified_at.isoformat(),
                     participants=participants,
-                    contact_name=contact_name,
+                    contact_name=contact_name or (participants[0] if participants[0] != "Unknown" else ""),
+                    phone_number=phone_number,
                 )
 
                 if row.get("status") == "pending":
@@ -566,6 +575,36 @@ class CallRecordingSyncer:
     # -------------------------------------------------------------------------
     # Helpers
     # -------------------------------------------------------------------------
+
+    def _lookup_contact_by_phone(self, phone: str) -> str:
+        """Look up a contact name from the entity store by phone number.
+
+        Args:
+            phone: Phone number to search for
+
+        Returns:
+            Contact display name, or empty string if not found
+        """
+        if not phone:
+            return ""
+
+        try:
+            import entity_db
+
+            person_id = entity_db.find_person_by_phone(phone)
+            if person_id:
+                person = entity_db.get_person(person_id)
+                if person:
+                    display = person.get("display_name") or person.get("canonical_name") or ""
+                    if display:
+                        logger.info(
+                            f"Resolved phone {phone} → entity '{display}' (id={person_id})"
+                        )
+                        return str(display)
+        except Exception as e:
+            logger.debug(f"Entity lookup by phone failed for {phone}: {e}")
+
+        return ""
 
     def _resolve_participants(self, audio_file: AudioFile) -> List[str]:
         """Extract participant names from audio tags and filename."""

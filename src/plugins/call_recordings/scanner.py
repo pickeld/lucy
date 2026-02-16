@@ -116,9 +116,11 @@ def _first_tag(tags: Dict, key: str) -> Optional[str]:
 
 
 def _parse_filename_metadata(filename: str) -> Dict[str, Optional[str]]:
-    """Attempt to parse date and participant info from a filename.
+    """Attempt to parse date, time, phone, and participant info from a filename.
 
-    Common filename patterns:
+    Recognised filename patterns:
+    - ``Call_recording_0545479819_260209_104905.m4a``
+      (phone=0545479819, date=09/02/2026, time=10:49:05)
     - ``2024-01-15_John_Doe.mp3``
     - ``recording_20240115_143022.wav``
     - ``Call with Alice 2024-01-15.m4a``
@@ -128,14 +130,59 @@ def _parse_filename_metadata(filename: str) -> Dict[str, Optional[str]]:
         filename: The filename (without directory path)
 
     Returns:
-        Dict with optional 'date_str', 'participants' keys
+        Dict with optional keys: date_str, time_str, participants, phone_number
     """
-    result: Dict[str, Optional[str]] = {"date_str": None, "participants": None}
+    result: Dict[str, Optional[str]] = {
+        "date_str": None,
+        "time_str": None,
+        "participants": None,
+        "phone_number": None,
+    }
 
     # Strip extension
     stem = Path(filename).stem
 
-    # Try to extract date patterns
+    # ---- Priority pattern: Call_recording_PHONE_DDMMYY_HHMMSS ----
+    call_rec_match = re.match(
+        r"(?i)call[_\-\s]*recording[_\-\s]*"
+        r"(\d{7,15})"           # phone number (7-15 digits)
+        r"[_\-\s]"
+        r"(\d{6})"              # DDMMYY
+        r"[_\-\s]"
+        r"(\d{6})",             # HHMMSS
+        stem,
+    )
+    if call_rec_match:
+        phone = call_rec_match.group(1)
+        date_raw = call_rec_match.group(2)  # DDMMYY
+        time_raw = call_rec_match.group(3)  # HHMMSS
+
+        result["phone_number"] = phone
+
+        # Parse DDMMYY → YYYY-MM-DD
+        try:
+            dd = int(date_raw[0:2])
+            mm = int(date_raw[2:4])
+            yy = int(date_raw[4:6])
+            # Two-digit year: 00-49 → 2000-2049, 50-99 → 1950-1999
+            yyyy = 2000 + yy if yy < 50 else 1900 + yy
+            result["date_str"] = f"{yyyy:04d}-{mm:02d}-{dd:02d}"
+        except (ValueError, IndexError):
+            pass
+
+        # Parse HHMMSS → HH:MM:SS
+        try:
+            hh = time_raw[0:2]
+            mi = time_raw[2:4]
+            ss = time_raw[4:6]
+            result["time_str"] = f"{hh}:{mi}:{ss}"
+        except (ValueError, IndexError):
+            pass
+
+        result["participants"] = phone
+        return result
+
+    # ---- Generic date patterns ----
     # ISO-like: 2024-01-15 or 2024_01_15
     date_match = re.search(r"(\d{4})[-_](\d{2})[-_](\d{2})", stem)
     if date_match:
@@ -148,12 +195,23 @@ def _parse_filename_metadata(filename: str) -> Dict[str, Optional[str]]:
                 f"{compact_match.group(1)}-{compact_match.group(2)}-{compact_match.group(3)}"
             )
 
-    # Try to extract participant names
+    # ---- Extract phone number from generic filenames ----
+    # Look for 7-15 consecutive digits that could be a phone number
+    phone_match = re.search(r"(?<!\d)(\d{7,15})(?!\d)", stem)
+    if phone_match:
+        candidate = phone_match.group(1)
+        # Exclude date-like sequences (YYYYMMDD or DDMMYYYY)
+        if not re.match(r"(19|20)\d{6}$", candidate) and not re.match(r"\d{2}(0[1-9]|1[0-2])(19|20)\d{2}$", candidate):
+            result["phone_number"] = candidate
+
+    # ---- Extract participant names ----
     name_part = stem
     # Remove date strings
     name_part = re.sub(r"\d{4}[-_]?\d{2}[-_]?\d{2}", "", name_part)
     # Remove time strings (HH:MM:SS or HHMMSS)
     name_part = re.sub(r"\d{2}[-_:]?\d{2}[-_:]?\d{2}", "", name_part)
+    # Remove phone numbers (7+ digits)
+    name_part = re.sub(r"\d{7,15}", "", name_part)
     # Remove common prefixes/words
     for prefix in ("recording", "call", "rec", "call_with", "call-with", "with"):
         name_part = re.sub(rf"(?i)^{prefix}[_\-\s]*", "", name_part)
