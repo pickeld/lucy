@@ -46,6 +46,7 @@ from qdrant_client.models import (
     FieldCondition,
     Filter,
     Fusion,
+    FusionQuery,
     MatchText,
     MatchValue,
     NamedSparseVector,
@@ -881,7 +882,7 @@ class LlamaIndexRAG:
                         filter=qdrant_filters,
                     ),
                 ],
-                query=Fusion.RRF,
+                query=FusionQuery(fusion=Fusion.RRF),
                 limit=k * 2,
                 with_payload=True,
             ).points
