@@ -342,6 +342,13 @@ class WhatsAppPlugin(ChannelPlugin):
                 has_media = getattr(msg, "has_media", False)
                 media_type = getattr(msg, "media_type", None)
                 media_url = getattr(msg, "media_url", None)
+                media_path = getattr(msg, "saved_path", None)
+                
+                # Pass the handler's content_type so that even if media
+                # download failed (has_media=False), the correct type
+                # (voice, image, etc.) is preserved in Qdrant metadata.
+                handler_content_type = getattr(msg, "content_type", None)
+                ct_value = handler_content_type.value if handler_content_type else None
                 
                 self._rag.add_message(
                     thread_id=chat_id or "UNKNOWN",
@@ -354,6 +361,8 @@ class WhatsAppPlugin(ChannelPlugin):
                     has_media=has_media,
                     media_type=media_type,
                     media_url=media_url,
+                    media_path=media_path,
+                    message_content_type=ct_value,
                 )
                 logger.debug(f"Stored message: {chat_name} || {msg}")
                 

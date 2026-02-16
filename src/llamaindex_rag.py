@@ -253,8 +253,14 @@ class ArchiveRetriever(BaseRetriever):
                         )
                     
                     fact_text = "\n".join(fact_lines)
+                    # Format with consistent source header so the LLM
+                    # can cite entity facts like any other source.
+                    formatted_fact_text = (
+                        f"Entity Store | Person: {person['canonical_name']}:\n"
+                        f"{fact_text}"
+                    )
                     node = TextNode(
-                        text=fact_text,
+                        text=formatted_fact_text,
                         metadata={
                             "source": "entity_store",
                             "content_type": "entity_facts",
@@ -1285,6 +1291,8 @@ class LlamaIndexRAG:
             chunk_node = TextNode(
                 text=chunk_text,
                 metadata={
+                    "source": "whatsapp",
+                    "content_type": "conversation_chunk",
                     "source_type": "conversation_chunk",
                     "chat_id": chat_id,
                     "chat_name": chat_name,
@@ -1322,7 +1330,9 @@ class LlamaIndexRAG:
         timestamp: str,
         has_media: bool = False,
         media_type: Optional[str] = None,
-        media_url: Optional[str] = None
+        media_url: Optional[str] = None,
+        media_path: Optional[str] = None,
+        message_content_type: Optional[str] = None,
     ) -> bool:
         """Add a WhatsApp message to the vector store.
         
@@ -1345,18 +1355,31 @@ class LlamaIndexRAG:
             has_media: Whether message has media attachment
             media_type: MIME type of media if present
             media_url: URL to media file if present
+            media_path: Local file path to saved media (e.g. data/images/media_xxx.jpg)
+            message_content_type: Explicit content type override (e.g. "voice", "image").
+                When provided, bypasses auto-detection from has_media/media_type.
+                This preserves the correct type even when media download fails.
             
         Returns:
             True if successful, False otherwise
         """
         try:
             from models import WhatsAppMessageDocument
+            from models.base import ContentType as ModelContentType
             
             # Deduplication: skip if message already exists
             source_id = f"{chat_id}:{timestamp}"
             if self._message_exists(source_id):
                 logger.debug(f"Skipping duplicate message: {source_id}")
                 return True  # Not an error, just already stored
+            
+            # Resolve explicit content_type override to enum
+            ct_override = None
+            if message_content_type:
+                try:
+                    ct_override = ModelContentType(message_content_type)
+                except ValueError:
+                    logger.debug(f"Unknown content_type '{message_content_type}', using auto-detect")
             
             # Create document using standardized model
             doc = WhatsAppMessageDocument.from_webhook_payload(
@@ -1369,19 +1392,17 @@ class LlamaIndexRAG:
                 timestamp=timestamp,
                 has_media=has_media,
                 media_type=media_type,
-                media_url=media_url
+                media_url=media_url,
+                media_path=media_path,
+                message_content_type=ct_override,
             )
             
             # Convert to LlamaIndex TextNode with standardized schema
             node = doc.to_llama_index_node()
             
-            # Always embed every message individually.  The per-message
-            # embedding cost is negligible (~$0.000005 with text-embedding-3-large)
-            # and skipping short messages risks losing semantically important
-            # content — especially in Hebrew where a 60-char message can carry
-            # 10+ meaningful words.  Conversation chunking still provides
-            # additional context-rich embeddings on top of individual ones.
-            self.index.insert_nodes([node])
+            # Use IngestionPipeline for embedding cache + sparse vectors.
+            # Falls back to direct insert if pipeline is unavailable.
+            self.ingest_nodes([node])
             
             # Buffer for conversation chunking (creates context-rich chunks)
             self._buffer_message_for_chunking(
@@ -1550,25 +1571,25 @@ class LlamaIndexRAG:
         "manual": "Manual",
         "web_scrape": "Web",
         "api_import": "Import",
+        "entity_store": "Entity Store",
+        "system": "System",
     }
 
     @staticmethod
     def _extract_text_from_payload(payload: Dict[str, Any]) -> Optional[str]:
         """Extract display text from a Qdrant point payload.
         
-        Handles both WhatsApp messages (which have a 'message' metadata field)
-        and Paperless/other documents (which store text only in LlamaIndex's
-        internal '_node_content' JSON blob).
+        Handles multiple source types with source-specific formatting:
         
-        Each entry is formatted as::
+        - **WhatsApp messages**: ``WhatsApp | date | sender in chat: message``
+        - **Conversation chunks**: ``WhatsApp Conversation | chat | date_range:`` + multi-line
+        - **Paperless documents**: ``Paperless | date | Document 'title':`` + full text
+        - **Gmail emails**: ``Gmail | date | sender in subject: body``
+        - **Entity facts**: Already pre-formatted with ``Entity Store |`` header
+        - **Generic documents**: ``Source | date | sender/title:`` + text from _node_content
         
-            Source | date | item text
-        
-        so the LLM can clearly identify the source, date, and content.
-        
-        Priority:
-        1. Reconstruct from 'message' metadata (WhatsApp-style)
-        2. Extract from '_node_content' JSON (Paperless/generic documents)
+        Each entry starts with a source label so the LLM can identify
+        where the information came from and cite it properly.
         
         Args:
             payload: Qdrant point payload dict
@@ -1581,35 +1602,80 @@ class LlamaIndexRAG:
         message = payload.get("message", "")
         timestamp = payload.get("timestamp", 0)
         source = payload.get("source", "")
+        source_type = payload.get("source_type", "")
+        content_type = payload.get("content_type", "")
         
         # Resolve a human-readable source label
-        source_label = LlamaIndexRAG._SOURCE_LABELS.get(source, source.capitalize() if source else "Unknown")
+        source_label = LlamaIndexRAG._SOURCE_LABELS.get(
+            source, source.capitalize() if source else "Archive"
+        )
         
-        # For Paperless documents, prefer _node_content (full chunk text, up to
+        # -----------------------------------------------------------------
+        # Conversation chunks: pre-formatted multi-message blocks.
+        # Format them with a special header instead of the standard
+        # single-message format to avoid double-wrapping.
+        # -----------------------------------------------------------------
+        if source_type == "conversation_chunk" or content_type == "conversation_chunk":
+            formatted_time = format_timestamp(str(timestamp))
+            first_ts = payload.get("first_timestamp", 0)
+            first_formatted = format_timestamp(str(first_ts)) if first_ts else ""
+            date_range = f"{first_formatted} → {formatted_time}" if first_formatted else formatted_time
+            msg_count = payload.get("message_count", "?")
+            
+            # The chunk text is already formatted as [timestamp] sender: message lines
+            # Use _node_content if available (full text), otherwise try message field
+            chunk_text = message
+            if not chunk_text:
+                node_content = payload.get("_node_content")
+                if node_content and isinstance(node_content, str):
+                    try:
+                        chunk_text = json.loads(node_content).get("text", "")
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            
+            if chunk_text:
+                return (
+                    f"WhatsApp Conversation | {chat_name} | {date_range} "
+                    f"({msg_count} messages):\n{chunk_text}"
+                )
+        
+        # -----------------------------------------------------------------
+        # Paperless documents: prefer _node_content (full chunk text, up to
         # 6000 chars) over the 'message' metadata field which may be truncated
-        # (old syncs stored only 2000 chars in 'message').  This ensures the LLM
-        # sees the complete document chunk without requiring a re-sync.
+        # (old syncs stored only 2000 chars in 'message').  New syncs store
+        # full text in 'message' but we keep the _node_content fallback for
+        # backward compatibility with existing data.
+        # -----------------------------------------------------------------
         if source == "paperless":
-            node_content = payload.get("_node_content")
-            if node_content and isinstance(node_content, str):
-                try:
-                    content_dict = json.loads(node_content)
-                    text = content_dict.get("text")
-                    if text:
-                        formatted_time = format_timestamp(str(timestamp))
-                        if sender and sender != "Unknown":
-                            return f"{source_label} | {formatted_time} | {sender} in {chat_name}:\n{text}"
-                        return f"{source_label} | {formatted_time} | Document '{chat_name}':\n{text}"
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            # Fall through to 'message' field if _node_content unavailable
+            # Try message field first (new syncs store full text here)
+            text = message
+            # Fall back to _node_content for old syncs with truncated message
+            if not text or len(text) < 100:
+                node_content = payload.get("_node_content")
+                if node_content and isinstance(node_content, str):
+                    try:
+                        nc_text = json.loads(node_content).get("text", "")
+                        if nc_text and len(nc_text) > len(text or ""):
+                            text = nc_text
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            
+            if text:
+                formatted_time = format_timestamp(str(timestamp))
+                if sender and sender != "Unknown":
+                    return f"{source_label} | {formatted_time} | {sender} in {chat_name}:\n{text}"
+                return f"{source_label} | {formatted_time} | Document '{chat_name}':\n{text}"
         
-        # WhatsApp messages (and Paperless fallback) use the 'message' metadata field
+        # -----------------------------------------------------------------
+        # Standard messages (WhatsApp, Gmail, etc.) use the 'message' field
+        # -----------------------------------------------------------------
         if message:
             formatted_time = format_timestamp(str(timestamp))
             return f"{source_label} | {formatted_time} | {sender} in {chat_name}: {message}"
         
+        # -----------------------------------------------------------------
         # Generic documents without 'message': extract text from _node_content
+        # -----------------------------------------------------------------
         node_content = payload.get("_node_content")
         if node_content and isinstance(node_content, str):
             try:
@@ -3205,12 +3271,26 @@ class LlamaIndexRAG:
             "-----\n"
             "{context_str}\n"
             "-----\n"
+            "UNDERSTANDING THE RETRIEVED ITEMS:\n"
+            "Each item above is formatted with a source label at the start. "
+            "The formats you will see:\n"
+            "- **WhatsApp messages**: 'WhatsApp | date | sender in chat: message'\n"
+            "- **WhatsApp conversations**: 'WhatsApp Conversation | chat | date_range (N messages):' "
+            "followed by multiple [timestamp] sender: message lines — these show a sequence of "
+            "messages from the same chat\n"
+            "- **Paperless documents**: 'Paperless | date | Document title:' followed by document text\n"
+            "- **Gmail emails**: 'Gmail | date | sender in subject: body'\n"
+            "- **Entity Store facts**: 'Entity Store | Person: name:' followed by known facts about "
+            "a person — these are verified facts from the knowledge base, cite them as 'known facts'\n"
+            "- **Other sources**: 'Source | date | sender in context: content'\n\n"
             "CITATION RULES:\n"
-            "- Each retrieved item above starts with its source (WhatsApp, Gmail, "
-            "Paperless, etc.), date, and sender.\n"
-            "- When citing information from a specific retrieved item, mention the "
-            "source and approximate date so the user can verify. For example: "
-            "'According to a WhatsApp message from David on 15/01/2024...'\n"
+            "- When citing information, mention the SOURCE TYPE and approximate date "
+            "so the user can verify. Examples:\n"
+            "  - 'According to a WhatsApp message from David on 15/01/2024...'\n"
+            "  - 'A Paperless document titled \"Divorce Agreement\" from 03/2023 states...'\n"
+            "  - 'In an email from Sarah on 10/02/2024...'\n"
+            "  - 'Known facts show that David was born on 1990-01-15...'\n"
+            "- For conversation chunks with multiple messages, cite the relevant speaker(s)\n"
             "- If multiple sources provide the same information, cite the most "
             "specific or most recent one.\n"
             "- Only cite a source when you are explicitly referencing information "

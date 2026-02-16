@@ -595,13 +595,22 @@ class EmailSyncer:
                             else int(time.time())
                         )
 
+                        # Parse display name from full email address
+                        # "David Pickel <david@example.com>" → "David Pickel"
+                        from email.utils import parseaddr
+                        sender_name, sender_email = parseaddr(parsed.from_address)
+                        # Use display name if available, otherwise email
+                        sender_display = sender_name.strip() if sender_name.strip() else (
+                            sender_email or parsed.from_address
+                        )
+
                         # Build base metadata
                         base_metadata = {
                             "source": "gmail",
                             "source_id": source_id,
                             "content_type": "text",
                             "chat_name": parsed.subject,
-                            "sender": parsed.from_address,
+                            "sender": sender_display,
                             "timestamp": ts,
                             "folder": ",".join(parsed.labels),
                             "thread_id": parsed.thread_id,
@@ -709,9 +718,10 @@ class EmailSyncer:
                                         att_meta = {
                                             "source": "gmail",
                                             "source_id": f"gmail:{msg_id}:att:{att.filename}",
+                                            "parent_source_id": source_id,
                                             "content_type": "document",
                                             "chat_name": f"{parsed.subject} — {att.filename}",
-                                            "sender": parsed.from_address,
+                                            "sender": sender_display,
                                             "timestamp": ts,
                                             "message": achunk,
                                             "folder": ",".join(parsed.labels),

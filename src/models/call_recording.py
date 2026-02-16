@@ -235,6 +235,10 @@ class CallRecordingDocument(BaseRAGDocument):
         """Convert to LlamaIndex TextNode with call-specific metadata.
         
         Adds call-specific fields to the standard metadata.
+        Also maps author→sender, participants→chat_name, and stores
+        a truncated transcript in 'message' so that fulltext search
+        and _extract_text_from_payload() work consistently across all
+        document types.
         
         Returns:
             LlamaIndex TextNode with full metadata
@@ -243,6 +247,10 @@ class CallRecordingDocument(BaseRAGDocument):
         
         # Get base metadata
         node_metadata = self.metadata.to_qdrant_payload()
+        
+        # Build a human-readable chat_name from participants
+        participants_str = ", ".join(self.participants) if self.participants else "Unknown"
+        call_chat_name = f"Call with {participants_str}"
         
         # Add call-specific fields
         node_metadata.update({
@@ -257,7 +265,14 @@ class CallRecordingDocument(BaseRAGDocument):
             "confidence_score": self.confidence_score,
             "audio_format": self.audio_format,
             "transcription_provider": self.transcription_provider,
-            "language_detected": self.language_detected
+            "language_detected": self.language_detected,
+            # Standard fields for consistent retrieval across all source types:
+            # - sender: enables fulltext search on the 'sender' field
+            # - chat_name: enables fulltext search + context expansion grouping
+            # - message: enables fulltext search on 'message' field + display
+            "sender": self.author,
+            "chat_name": call_chat_name,
+            "message": self.transcript[:2000] if self.transcript else "",
         })
         
         return TextNode(

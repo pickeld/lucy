@@ -258,6 +258,10 @@ class FileDocument(BaseRAGDocument):
         """Convert to LlamaIndex TextNode with file-specific metadata.
         
         Adds file-specific fields to the standard metadata.
+        Also maps author→sender, title→chat_name, and stores a
+        truncated content preview in 'message' so that fulltext search
+        and _extract_text_from_payload() work consistently across all
+        document types.
         
         Returns:
             LlamaIndex TextNode with full metadata
@@ -281,7 +285,14 @@ class FileDocument(BaseRAGDocument):
             "chunk_index": self.chunk_index,
             "total_chunks": self.total_chunks,
             "title": self.title,
-            "description": self.description
+            "description": self.description,
+            # Standard fields for consistent retrieval across all source types:
+            # - sender: enables fulltext search on the 'sender' field
+            # - chat_name: enables fulltext search + context expansion grouping
+            # - message: enables fulltext search on 'message' field + display
+            "sender": self.author,
+            "chat_name": self.title or self.file_name,
+            "message": self.content[:2000] if self.content else "",
         })
         
         return TextNode(
