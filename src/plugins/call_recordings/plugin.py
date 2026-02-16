@@ -363,20 +363,20 @@ class CallRecordingsPlugin(ChannelPlugin):
                             jsonify(
                                 {
                                     "status": "error",
-                                    "message": "Dropbox connection failed",
+                                    "message": "Dropbox connection failed — check token",
                                 }
                             ),
                             500,
                         )
-                except ImportError:
+                except (ValueError, ImportError) as e:
                     return (
                         jsonify(
                             {
                                 "status": "error",
-                                "message": "dropbox package not installed",
+                                "message": str(e),
                             }
                         ),
-                        500,
+                        400,
                     )
                 except Exception as e:
                     return (

@@ -399,18 +399,58 @@ class DropboxFileScanner(BaseFileScanner):
         # Track temp dirs for cleanup
         self._temp_dirs: Dict[str, str] = {}
 
+    def __init__(
+        self,
+        access_token: str = "",
+        folder_path: str = "",
+        extensions: Optional[set] = None,
+        app_key: str = "",
+        app_secret: str = "",
+        refresh_token: str = "",
+    ):
+        self.access_token = access_token
+        self.folder_path = folder_path.rstrip("/")
+        self.extensions = extensions or DEFAULT_AUDIO_EXTENSIONS
+        self.app_key = app_key
+        self.app_secret = app_secret
+        self.refresh_token = refresh_token
+        self._dbx = None
+        self._temp_dirs: Dict[str, str] = {}
+
     @property
     def dbx(self):
-        """Lazy-initialize the Dropbox client."""
+        """Lazy-initialize the Dropbox client.
+
+        Supports two auth modes:
+        1. app_key + app_secret + refresh_token (long-lived, preferred)
+        2. access_token (short-lived, for testing)
+        """
         if self._dbx is None:
             try:
                 import dropbox
-
-                self._dbx = dropbox.Dropbox(self.access_token)
             except ImportError:
                 raise ImportError(
                     "dropbox package not installed. "
                     "Install with: pip install dropbox"
+                )
+
+            # Prefer refresh token auth (long-lived)
+            if self.refresh_token and self.app_key and self.app_secret:
+                self._dbx = dropbox.Dropbox(
+                    oauth2_refresh_token=self.refresh_token,
+                    app_key=self.app_key,
+                    app_secret=self.app_secret,
+                )
+            elif self.access_token:
+                token = self.access_token.strip()
+                if not token:
+                    raise ValueError("Dropbox token is empty")
+                self._dbx = dropbox.Dropbox(oauth2_access_token=token)
+            else:
+                raise ValueError(
+                    "Dropbox not configured. Provide either: "
+                    "(1) App Key + App Secret and authorize via the UI, or "
+                    "(2) A short-lived access token."
                 )
         return self._dbx
 
@@ -518,13 +558,28 @@ class DropboxFileScanner(BaseFileScanner):
 
         Returns:
             True if Dropbox is accessible and folder exists
+
+        Raises:
+            ValueError: With helpful message if token is invalid
         """
         try:
+            import dropbox as _dbx
+
             # Test account access
             self.dbx.users_get_current_account()
             # Test folder access
             self.dbx.files_list_folder(self.folder_path or "", limit=1)
             return True
         except Exception as e:
+            err_str = str(e)
+            if "invalid_access_token" in err_str or "AuthError" in err_str:
+                raise ValueError(
+                    f"Dropbox token is invalid or expired. "
+                    f"Dropbox now uses short-lived tokens (starting with 'sl.'). "
+                    f"Go to https://www.dropbox.com/developers/apps → your app → "
+                    f"'Generate access token' to get a fresh token. "
+                    f"Alternatively, switch Source Type to 'local' and use the "
+                    f"Upload feature or Docker volume mount."
+                )
             logger.error(f"Dropbox connection test failed: {e}")
             return False
