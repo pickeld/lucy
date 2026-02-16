@@ -881,7 +881,7 @@ class LlamaIndexRAG:
                         filter=qdrant_filters,
                     ),
                 ],
-                query=Fusion(fusion=Fusion.RRF),  # type: ignore[arg-type]
+                query=Fusion.RRF,
                 limit=k * 2,
                 with_payload=True,
             ).points
@@ -1664,16 +1664,25 @@ class LlamaIndexRAG:
                 return tokens
             
             # Check each token against the name map
+            MAX_EXPANSION_PER_TOKEN = 10  # Cap per single token match
+            MAX_TOTAL_EXPANDED = 50       # Hard cap on total expanded tokens
+            
             expanded = list(tokens)
             seen = {t.lower() for t in tokens}
             
             for token in tokens:
                 low = token.lower()
                 if low in name_map:
+                    added_for_token = 0
                     for name_part in name_map[low]:
+                        if added_for_token >= MAX_EXPANSION_PER_TOKEN:
+                            break
+                        if len(expanded) >= MAX_TOTAL_EXPANDED:
+                            break
                         if name_part.lower() not in seen:
                             seen.add(name_part.lower())
                             expanded.append(name_part)
+                            added_for_token += 1
             
             if len(expanded) > len(tokens):
                 logger.debug(
@@ -1702,6 +1711,12 @@ class LlamaIndexRAG:
             if not persons:
                 return {}
             
+            import re
+            _NUMERIC_RE = re.compile(r"^[\d+\-#().]+$")
+            # Short tokens that are common Hebrew words but also match names
+            # (e.g. "בן"=son/Ben, "על"=on, "שם"=name, "גן"=garden, "אור"=light)
+            _MIN_NAME_PART_LEN = 3  # Skip 1-2 char parts as map keys (too ambiguous)
+            
             name_map: Dict[str, set] = {}
             for person in persons:
                 # Collect all name parts from canonical name + all aliases
@@ -1718,9 +1733,18 @@ class LlamaIndexRAG:
                         if alias_text:
                             all_parts.update(alias_text.split())
                 
-                # Map each part (lowercased) → all parts
+                # Filter out phone numbers, group IDs, and other numeric-only parts
+                all_parts = {p for p in all_parts if not _NUMERIC_RE.match(p)}
+                
+                if not all_parts:
+                    continue
+                
+                # Map each part (lowercased) → all parts for that person,
+                # but only use parts with enough length as map keys to avoid
+                # common short Hebrew words triggering massive expansions.
                 for part in list(all_parts):
-                    name_map.setdefault(part.lower(), set()).update(all_parts)
+                    if len(part) >= _MIN_NAME_PART_LEN:
+                        name_map.setdefault(part.lower(), set()).update(all_parts)
             
             return name_map
         except Exception:
@@ -1745,14 +1769,23 @@ class LlamaIndexRAG:
             if chat_names:
                 all_names.update(chat_names)
             
+            import re
+            _NUMERIC_RE = re.compile(r"^[\d+\-#().]+$")
+            
             name_map: Dict[str, set] = {}
             for contact in all_names:
                 parts = contact.split()
                 if not parts:
                     continue
+                # Filter out phone numbers / numeric-only parts
+                parts = [p for p in parts if not _NUMERIC_RE.match(p)]
+                if not parts:
+                    continue
                 first = parts[0].lower()
                 all_parts = set(parts)
-                name_map.setdefault(first, set()).update(all_parts)
+                # Only use keys with >= 3 chars to avoid common short-word collisions
+                if len(first) >= 3:
+                    name_map.setdefault(first, set()).update(all_parts)
             
             return name_map
         except Exception:
@@ -3049,7 +3082,7 @@ class LlamaIndexRAG:
                     "Only skip disambiguation if the user provided a full name (first + last) "
                     "or enough context to uniquely identify the person."
                 )
-                logger.debug(f"Injected {len(sender_list)} contacts + disambiguation rule into system prompt")
+                logger.debug(f"Injected {contact_count} contacts + disambiguation rule into system prompt")
         except Exception as e:
             logger.debug(f"Failed to inject contacts into system prompt (non-fatal): {e}")
         
@@ -3667,13 +3700,19 @@ class VectorOnlyRetriever(BaseRetriever):
         try:
             query_embedding = Settings.embed_model.get_query_embedding(query_bundle.query_str)
             
-            search_results = self._rag.qdrant_client.query_points(
-                collection_name=self._rag.COLLECTION_NAME,
-                query=query_embedding,
-                query_filter=self._qdrant_filter,
-                limit=self._k * 2,
-                with_payload=True,
-            ).points
+            query_kwargs = {
+                "collection_name": self._rag.COLLECTION_NAME,
+                "query": query_embedding,
+                "query_filter": self._qdrant_filter,
+                "limit": self._k * 2,
+                "with_payload": True,
+            }
+            # When the collection uses named vectors (hybrid mode), we must
+            # specify which vector to query against; otherwise Qdrant returns
+            # 400 "Not existing vector name".
+            if self._rag.HYBRID_ENABLED:
+                query_kwargs["using"] = self._rag.DENSE_VECTOR_NAME
+            search_results = self._rag.qdrant_client.query_points(**query_kwargs).points
             
             results = []
             for result in search_results:
