@@ -1814,8 +1814,101 @@ class AppState(rx.State):
                 if errors:
                     msg += f" — Errors: {'; '.join(errors)}"
                 self.call_recordings_upload_message = msg
+                # Refresh the files table after upload
+                await self._load_recording_files()
         except Exception as e:
             self.call_recordings_upload_message = f"❌ Upload error: {str(e)}"
+
+    # ----- Call Recordings files table -----
+
+    async def _load_recording_files(self):
+        """Fetch recording files from the backend and populate the table."""
+        self.call_recordings_files_loading = True
+        result = await api_client.fetch_call_recording_files()
+        if "error" in result and result["error"]:
+            self.call_recordings_files = []
+            self.call_recordings_counts = {}
+        else:
+            raw_files = result.get("files", [])
+            # Normalize all values to strings for Reflex rendering
+            self.call_recordings_files = [
+                {k: str(v) if v is not None else "" for k, v in f.items()}
+                for f in raw_files
+            ]
+            counts = result.get("counts", {})
+            self.call_recordings_counts = {k: str(v) for k, v in counts.items()}
+        self.call_recordings_files_loading = False
+
+    async def load_recording_files(self):
+        """Public handler to load/refresh the recordings table."""
+        await self._load_recording_files()
+
+    async def scan_recordings(self):
+        """Scan for new files and auto-transcribe them."""
+        self.call_recordings_scan_message = "⏳ Scanning and transcribing…"
+        self.call_recordings_files_loading = True
+        yield
+
+        result = await api_client.scan_call_recordings(auto_transcribe=True)
+        if "error" in result:
+            self.call_recordings_scan_message = f"❌ {result['error']}"
+        elif result.get("status") == "complete":
+            discovered = result.get("discovered", 0)
+            new = result.get("new", 0)
+            transcribed = result.get("transcribed", 0)
+            errors = result.get("errors", 0)
+            self.call_recordings_scan_message = (
+                f"✅ Scan complete — {discovered} found, {new} new, "
+                f"{transcribed} transcribed, {errors} errors"
+            )
+        elif result.get("status") == "already_running":
+            self.call_recordings_scan_message = "⏳ Scan already in progress"
+        else:
+            self.call_recordings_scan_message = f"❌ Unexpected: {result}"
+
+        await self._load_recording_files()
+
+    async def approve_recording(self, content_hash: str):
+        """Approve a transcribed recording and index it into Qdrant."""
+        result = await api_client.approve_recording(content_hash)
+        if "error" in result:
+            self.call_recordings_scan_message = f"❌ {result['error']}"
+        else:
+            self.call_recordings_scan_message = "✅ Recording approved and indexed"
+            self.rag_stats = await api_client.get_rag_stats()
+        await self._load_recording_files()
+
+    async def delete_recording(self, content_hash: str):
+        """Delete a recording file."""
+        result = await api_client.delete_recording(content_hash)
+        if "error" in result:
+            self.call_recordings_scan_message = f"❌ {result['error']}"
+        else:
+            self.call_recordings_scan_message = "✅ Recording deleted"
+        await self._load_recording_files()
+
+    async def retry_transcription(self, content_hash: str):
+        """Retry transcription for a failed recording."""
+        self.call_recordings_scan_message = "⏳ Retrying transcription…"
+        yield
+        result = await api_client.transcribe_recording(content_hash)
+        if "error" in result:
+            self.call_recordings_scan_message = f"❌ {result['error']}"
+        else:
+            self.call_recordings_scan_message = "✅ Transcription complete"
+        await self._load_recording_files()
+
+    async def save_recording_metadata(self, content_hash: str, field: str, value: str):
+        """Save an edited metadata field for a recording."""
+        kwargs: dict = {}
+        if field == "contact_name":
+            kwargs["contact_name"] = value
+        elif field == "phone_number":
+            kwargs["phone_number"] = value
+        else:
+            return
+        await api_client.update_recording_metadata(content_hash, **kwargs)
+        await self._load_recording_files()
 
     async def reset_category(self, category: str):
         """Reset a settings category to defaults."""
