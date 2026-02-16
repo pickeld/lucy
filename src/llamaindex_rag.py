@@ -29,7 +29,9 @@ from llama_index.core import (
 from llama_index.core.chat_engine import CondensePlusContextChatEngine, ContextChatEngine
 from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.memory import ChatMemoryBuffer
-from llama_index.core.postprocessor import SimilarityPostprocessor
+# SimilarityPostprocessor intentionally not imported — see §1.1 in
+# plans/rag-hybrid-retrieval-upgrade.md for rationale on why it was
+# removed from the main postprocessor chain.
 from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
 from llama_index.embeddings.openai import OpenAIEmbedding
@@ -387,24 +389,32 @@ class ArchiveRetriever(BaseRetriever):
             logger.debug(f"Cohere reranking failed (non-critical): {e}")
         
         # =====================================================================
-        # NodePostprocessor chain — composable score filtering
+        # Score-based filtering
         # =====================================================================
-        try:
-            postprocessors = [
-                SimilarityPostprocessor(
-                    similarity_cutoff=float(settings.get("rag_min_score", "0.2"))
-                ),
-            ]
-            for pp in postprocessors:
-                pre_pp = len(results)
-                results = pp.postprocess_nodes(results, query_bundle)
-                if len(results) < pre_pp:
-                    logger.debug(
-                        f"Postprocessor {pp.__class__.__name__}: "
-                        f"{pre_pp} → {len(results)} results"
-                    )
-        except Exception as e:
-            logger.debug(f"Postprocessor chain failed (non-critical): {e}")
+        # NOTE: SimilarityPostprocessor is intentionally NOT applied here.
+        #
+        # At this point, node scores come from heterogeneous sources:
+        #   - Dense vector cosine similarity (0-1)
+        #   - Fulltext heuristic constants (0.75-0.95)
+        #   - Recency decay scores (0.3-0.5)
+        #   - Entity fact scores (1.0)
+        #   - Context expansion scores (0.5)
+        #
+        # If Cohere reranking ran, all scores are replaced with cross-encoder
+        # relevance scores (0-1), which ARE comparable — but applying a
+        # similarity cutoff after reranking is counterproductive because the
+        # reranker already selected the top-N most relevant results.
+        #
+        # If Cohere reranking did NOT run, scores are mixed types and a
+        # single cutoff cannot meaningfully filter them.
+        #
+        # Instead, minimum similarity filtering is applied earlier:
+        #   - VectorOnlyRetriever._retrieve() filters dense results by
+        #     MINIMUM_SIMILARITY_SCORE before they enter the fusion pipeline
+        #   - The search() fallback path also applies the score threshold
+        #     to vector results before merging with fulltext
+        #
+        # See: plans/rag-hybrid-retrieval-upgrade.md §1.1
         
         # Ensure at least one node so the synthesizer doesn't return "Empty Response"
         if not results:
@@ -891,6 +901,75 @@ class LlamaIndexRAG:
     CHUNK_MAX_MESSAGES = int(settings.get("rag_chunk_max_messages", "5"))
     CHUNK_OVERLAP_MESSAGES = int(settings.get("rag_chunk_overlap_messages", "1"))
     
+    # Minimum TTL remaining (seconds) before a buffer is considered
+    # "near-expiry" and flushed proactively.  When a buffer's TTL drops
+    # below this threshold and it holds ≥ 2 messages, it is flushed to
+    # prevent silent data loss from Redis key expiration.
+    CHUNK_BUFFER_FLUSH_THRESHOLD = max(
+        10,
+        int(settings.get("rag_chunk_buffer_ttl", "120")) // 4,
+    )
+    
+    def _flush_expiring_buffers(self) -> int:
+        """Scan for chunk buffers near TTL expiry and flush them.
+        
+        Without this, low-volume chats that never reach CHUNK_MAX_MESSAGES
+        have their buffered messages silently deleted when the Redis TTL
+        fires.  This method is called on every new message arrival and
+        uses SCAN to find active buffers whose TTL is below the flush
+        threshold.
+        
+        Only buffers with ≥ 2 messages are flushed (single messages don't
+        benefit from conversation chunking).
+        
+        Returns:
+            Number of buffers flushed
+        """
+        flushed = 0
+        try:
+            redis = get_redis_client()
+            cursor = 0
+            pattern = f"{self.CHUNK_BUFFER_KEY_PREFIX}*"
+            
+            while True:
+                cursor, keys = redis.scan(
+                    cursor=cursor,
+                    match=pattern,
+                    count=50,
+                )
+                
+                for key in keys:
+                    # Decode key if bytes
+                    key_str = key if isinstance(key, str) else key.decode("utf-8", errors="replace")
+                    
+                    try:
+                        ttl = redis.ttl(key_str)
+                        # ttl returns -1 if no expiry, -2 if key doesn't exist
+                        if ttl < 0:
+                            continue
+                        
+                        if ttl <= self.CHUNK_BUFFER_FLUSH_THRESHOLD:
+                            buf_len = redis.llen(key_str)
+                            if buf_len >= 2:
+                                # Extract chat_id from the key
+                                chat_id = key_str[len(self.CHUNK_BUFFER_KEY_PREFIX):]
+                                if self._flush_chunk_buffer(chat_id):
+                                    flushed += 1
+                                    logger.info(
+                                        f"Flushed near-expiry buffer for chat {chat_id} "
+                                        f"(TTL={ttl}s, {buf_len} msgs)"
+                                    )
+                    except Exception as e:
+                        logger.debug(f"Error checking buffer TTL for {key_str}: {e}")
+                
+                if cursor == 0:
+                    break
+            
+        except Exception as e:
+            logger.debug(f"Expiring buffer scan failed (non-critical): {e}")
+        
+        return flushed
+    
     def _buffer_message_for_chunking(
         self,
         chat_id: str,
@@ -903,8 +982,12 @@ class LlamaIndexRAG:
         """Buffer a message for conversation chunking.
         
         Messages are buffered per chat in a Redis list. When the buffer reaches
-        CHUNK_MAX_MESSAGES or the TTL expires, the buffer is flushed as a single
-        conversation chunk that gets its own embedding in Qdrant.
+        CHUNK_MAX_MESSAGES, the buffer is flushed as a single conversation chunk
+        that gets its own embedding in Qdrant.
+        
+        Before buffering, scans for other chats' buffers that are near TTL
+        expiry and flushes them proactively.  This prevents low-volume chats
+        from silently losing buffered messages when the Redis TTL fires.
         
         This gives isolated messages (like "yes", "me too") conversational context
         in the embedding, dramatically improving retrieval quality.
@@ -918,6 +1001,9 @@ class LlamaIndexRAG:
             timestamp: Unix timestamp as string
         """
         try:
+            # Proactively flush any buffers about to expire (prevents data loss)
+            self._flush_expiring_buffers()
+            
             redis = get_redis_client()
             buffer_key = f"{self.CHUNK_BUFFER_KEY_PREFIX}{chat_id}"
             
@@ -2071,9 +2157,36 @@ class LlamaIndexRAG:
                         metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
                         id_=str(record.id),
                     )
-                    # Use timestamp as score so most recent messages rank highest
+                    # Store raw timestamp temporarily; we'll normalize below
                     ts = payload.get("timestamp", 0)
                     nodes.append(NodeWithScore(node=node, score=float(ts) if ts else 0.0))
+            
+            # ---------------------------------------------------------------
+            # Normalize recency scores to the 0.3–0.5 band using linear
+            # interpolation.  This replaces the previous raw-timestamp
+            # scoring which produced values like 1708012345.0 that broke
+            # any downstream score comparison (e.g. SimilarityPostprocessor
+            # cutoffs, Cohere rerank score merging).
+            #
+            # Most recent message → 0.5, oldest in batch → 0.3.
+            # These scores sit *below* typical dense-vector cosine
+            # similarities (~0.5–0.9) and fulltext heuristic scores
+            # (0.75–0.95), so recency supplements don't outrank semantic
+            # matches, but above the minimum score threshold (default 0.2)
+            # so they aren't filtered out.
+            # ---------------------------------------------------------------
+            if nodes:
+                raw_scores = [n.score for n in nodes if n.score is not None]
+                if raw_scores:
+                    max_ts = max(raw_scores)
+                    min_ts = min(raw_scores)
+                    ts_range = max_ts - min_ts if max_ts != min_ts else 1.0
+                    for nws in nodes:
+                        if nws.score is not None and nws.score > 0:
+                            # Linear interpolation: newest=0.5, oldest=0.3
+                            nws.score = 0.3 + 0.2 * ((nws.score - min_ts) / ts_range)
+                        else:
+                            nws.score = 0.3  # Default for missing timestamps
             
             logger.info(f"Recency search returned {len(nodes)} messages (most recent first)")
             return nodes
@@ -2521,8 +2634,9 @@ class LlamaIndexRAG:
                 valid_results.append(NodeWithScore(node=node, score=result.score))
             
             # Score filtering and hybrid fulltext+vector fusion are now
-            # handled by QueryFusionRetriever (primary path above) and
-            # SimilarityPostprocessor in the _retrieve() postprocessor chain.
+            # handled by QueryFusionRetriever (primary path above).
+            # Minimum similarity filtering is applied inside VectorOnlyRetriever
+            # via MINIMUM_SIMILARITY_SCORE.
             # This vector-only path is the fallback when QueryFusion fails.
             
             logger.info(f"RAG search for '{query[:50]}...' returned {len(valid_results)} results (vector-only fallback)")
