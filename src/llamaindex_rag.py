@@ -27,7 +27,9 @@ from llama_index.core import (
     VectorStoreIndex,
 )
 from llama_index.core.chat_engine import CondensePlusContextChatEngine, ContextChatEngine
+from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.memory import ChatMemoryBuffer
+from llama_index.core.postprocessor import SimilarityPostprocessor
 from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
 from llama_index.embeddings.openai import OpenAIEmbedding
@@ -353,6 +355,61 @@ class ArchiveRetriever(BaseRetriever):
         except Exception as e:
             logger.debug(f"Entity fact injection failed (non-critical): {e}")
         
+        # =====================================================================
+        # Phase 2: Cohere multilingual reranking (optional)
+        # Re-scores results using a cross-encoder model that natively
+        # understands Hebrew, dramatically improving retrieval precision.
+        # =====================================================================
+        try:
+            if settings.get("rag_rerank_enabled", "false").lower() == "true":
+                cohere_key = settings.get("cohere_api_key", "")
+                if cohere_key:
+                    from llama_index.postprocessor.cohere_rerank import CohereRerank
+                    
+                    rerank_top_n = int(settings.get("rag_rerank_top_n", "10"))
+                    rerank_model = settings.get("rag_rerank_model", "rerank-multilingual-v3.0")
+                    reranker = CohereRerank(
+                        api_key=cohere_key,
+                        top_n=rerank_top_n,
+                        model=rerank_model,
+                    )
+                    pre_rerank = len(results)
+                    results = reranker.postprocess_nodes(results, query_bundle)
+                    logger.info(
+                        f"Cohere rerank ({rerank_model}): {pre_rerank} → {len(results)} results"
+                    )
+                else:
+                    logger.debug("Reranking enabled but cohere_api_key not set — skipping")
+        except ImportError:
+            logger.warning(
+                "llama-index-postprocessor-cohere-rerank not installed. "
+                "Install with: pip install llama-index-postprocessor-cohere-rerank"
+            )
+        except Exception as e:
+            logger.debug(f"Cohere reranking failed (non-critical): {e}")
+        
+        # =====================================================================
+        # Phase 5: LlamaIndex NodePostprocessor chain (optional)
+        # Replaces manual score filtering with composable postprocessors.
+        # =====================================================================
+        try:
+            if settings.get("rag_postprocessor_chain_enabled", "false").lower() == "true":
+                postprocessors = [
+                    SimilarityPostprocessor(
+                        similarity_cutoff=float(settings.get("rag_min_score", "0.2"))
+                    ),
+                ]
+                for pp in postprocessors:
+                    pre_pp = len(results)
+                    results = pp.postprocess_nodes(results, query_bundle)
+                    if len(results) < pre_pp:
+                        logger.debug(
+                            f"Postprocessor {pp.__class__.__name__}: "
+                            f"{pre_pp} → {len(results)} results"
+                        )
+        except Exception as e:
+            logger.debug(f"Postprocessor chain failed (non-critical): {e}")
+        
         # Ensure at least one node so the synthesizer doesn't return "Empty Response"
         if not results:
             placeholder = TextNode(
@@ -429,6 +486,7 @@ class LlamaIndexRAG:
     _qdrant_client = None
     _vector_store = None
     _chat_store = None
+    _ingestion_pipeline = None
     
     COLLECTION_NAME = settings.rag_collection_name
     VECTOR_SIZE = int(settings.get("rag_vector_size", "1024"))
@@ -597,6 +655,81 @@ class LlamaIndexRAG:
                 storage_context=storage_context,
             )
         return LlamaIndexRAG._index
+    
+    @property
+    def ingestion_pipeline(self) -> IngestionPipeline:
+        """Get or create the LlamaIndex IngestionPipeline with optional embedding cache.
+        
+        The pipeline provides:
+        - Embedding cache via Redis (avoids re-embedding unchanged content)
+        - Deduplication via content hash
+        - Composable transformation chain
+        
+        When ``rag_embedding_cache_enabled`` is True (default), embeddings
+        are cached in Redis so that re-syncs of unchanged documents skip
+        the embedding API call entirely.
+        
+        Returns:
+            IngestionPipeline instance configured with the current vector store
+        """
+        if LlamaIndexRAG._ingestion_pipeline is None:
+            cache = None
+            if settings.get("rag_embedding_cache_enabled", "true").lower() == "true":
+                try:
+                    from llama_index.storage.kvstore.redis import RedisKVStore
+                    from llama_index.core.ingestion import IngestionCache
+                    
+                    redis_url = f"redis://{settings.redis_host}:{settings.redis_port}"
+                    redis_kvstore = RedisKVStore(redis_uri=redis_url)
+                    cache = IngestionCache(cache=redis_kvstore)
+                    logger.info(f"Embedding cache enabled via Redis at {redis_url}")
+                except ImportError:
+                    logger.warning(
+                        "llama-index-storage-kvstore-redis not installed. "
+                        "Embedding cache disabled. Install with: "
+                        "pip install llama-index-storage-kvstore-redis"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to initialize embedding cache: {e}")
+            
+            pipeline_kwargs = {
+                "transformations": [Settings.embed_model],
+                "vector_store": self.vector_store,
+            }
+            if cache is not None:
+                pipeline_kwargs["cache"] = cache
+            
+            LlamaIndexRAG._ingestion_pipeline = IngestionPipeline(**pipeline_kwargs)
+            logger.info("IngestionPipeline initialized")
+        
+        return LlamaIndexRAG._ingestion_pipeline
+    
+    def ingest_nodes(self, nodes: List[TextNode]) -> int:
+        """Ingest nodes via the IngestionPipeline (with embedding cache).
+        
+        Uses the shared IngestionPipeline which provides:
+        - Redis-backed embedding cache (skips re-embedding unchanged content)
+        - Automatic deduplication by content hash
+        
+        Falls back to ``add_nodes()`` if the pipeline fails.
+        
+        Args:
+            nodes: List of TextNode instances to ingest
+            
+        Returns:
+            Number of nodes successfully ingested
+        """
+        if not nodes:
+            return 0
+        
+        try:
+            result_nodes = self.ingestion_pipeline.run(nodes=nodes, show_progress=False)
+            count = len(result_nodes) if result_nodes else len(nodes)
+            logger.info(f"IngestionPipeline ingested {count} nodes")
+            return count
+        except Exception as e:
+            logger.warning(f"IngestionPipeline failed, falling back to add_nodes(): {e}")
+            return self.add_nodes(nodes)
     
     def _ensure_collection(self):
         """Ensure the collection exists in Qdrant with text indexes for metadata search."""
@@ -2344,17 +2477,80 @@ class LlamaIndexRAG:
             if metadata_only:
                 return self._metadata_search(k=k, **_fkw)
             
+            # =================================================================
+            # Phase 4: QueryFusionRetriever (optional)
+            # When enabled, replaces the manual RRF merge below with
+            # LlamaIndex's built-in QueryFusionRetriever, which also
+            # generates multiple query variants for better recall.
+            # =================================================================
+            try:
+                if settings.get("rag_query_fusion_enabled", "false").lower() == "true":
+                    from llama_index.core.retrievers import QueryFusionRetriever
+                    
+                    self._ensure_llm_configured()
+                    must_conditions = self._build_filter_conditions(**_fkw)
+                    qdrant_filters = Filter(must=must_conditions) if must_conditions else None
+                    
+                    vector_ret = VectorOnlyRetriever(rag=self, k=k, qdrant_filter=qdrant_filters)
+                    fulltext_ret = FulltextOnlyRetriever(rag=self, k=k, filter_kwargs=_fkw)
+                    
+                    num_queries = int(settings.get("rag_query_fusion_num_queries", "3"))
+                    fusion = QueryFusionRetriever(
+                        retrievers=[vector_ret, fulltext_ret],
+                        similarity_top_k=k,
+                        num_queries=num_queries,
+                        mode="reciprocal_rerank",
+                        llm=Settings.llm,
+                    )
+                    fusion_results = fusion.retrieve(query)
+                    logger.info(
+                        f"QueryFusionRetriever ({num_queries} query variants): "
+                        f"{len(fusion_results)} results for '{query[:50]}...'"
+                    )
+                    return fusion_results
+            except ImportError:
+                logger.debug("QueryFusionRetriever not available — using manual RRF")
+            except Exception as e:
+                logger.debug(f"QueryFusionRetriever failed, falling back to manual RRF: {e}")
+            
             # Build Qdrant filter conditions
             must_conditions = self._build_filter_conditions(**_fkw)
             
             qdrant_filters = Filter(must=must_conditions) if must_conditions else None
+            
+            # =================================================================
+            # Phase 3: HyDE query transform (optional)
+            # Generates a hypothetical answer to the query, then uses that
+            # answer's embedding for retrieval. Language-agnostic — handles
+            # Hebrew morphology naturally because the LLM generates the answer.
+            # =================================================================
+            hyde_embedding = None
+            try:
+                if settings.get("rag_hyde_enabled", "false").lower() == "true":
+                    self._ensure_llm_configured()
+                    from llama_index.core.indices.query.query_transform import HyDEQueryTransform
+                    
+                    hyde = HyDEQueryTransform(llm=Settings.llm, include_original=True)
+                    hyde_bundle = hyde.run(query)
+                    # Use the HyDE-generated embedding if available
+                    if hasattr(hyde_bundle, 'embedding') and hyde_bundle.embedding:
+                        hyde_embedding = hyde_bundle.embedding
+                        logger.info(f"HyDE generated hypothetical answer for query: {query[:50]}...")
+                    elif hasattr(hyde_bundle, 'query_str') and hyde_bundle.query_str:
+                        # Embed the hypothetical document text
+                        hyde_embedding = Settings.embed_model.get_query_embedding(hyde_bundle.query_str)
+                        logger.info(f"HyDE transformed query: {hyde_bundle.query_str[:80]}...")
+            except ImportError:
+                logger.debug("HyDE query transform not available")
+            except Exception as e:
+                logger.debug(f"HyDE query transform failed (non-critical): {e}")
             
             # Use direct Qdrant search to avoid LlamaIndex TextNode validation issues
             # with documents that have None text values.
             # Fetch more candidates (k * 2) to compensate for score-threshold filtering,
             # especially for morphologically rich languages like Hebrew where semantic
             # similarity may be lower for inflected query forms.
-            query_embedding = Settings.embed_model.get_query_embedding(query)
+            query_embedding = hyde_embedding if hyde_embedding is not None else Settings.embed_model.get_query_embedding(query)
             vector_fetch_limit = k * 2
             
             search_results = self.qdrant_client.query_points(
@@ -2946,6 +3142,7 @@ class LlamaIndexRAG:
             # Clear cached singleton references so they get recreated
             LlamaIndexRAG._vector_store = None
             LlamaIndexRAG._index = None
+            LlamaIndexRAG._ingestion_pipeline = None
             
             # Recreate collection with current VECTOR_SIZE
             self.qdrant_client.create_collection(
@@ -3108,6 +3305,162 @@ class LlamaIndexRAG:
             logger.info("Invalidated cached chat/sender lists")
         except Exception as e:
             logger.warning(f"Failed to invalidate list caches: {e}")
+
+
+# =========================================================================
+# Phase 4: Helper retrievers for QueryFusionRetriever
+# =========================================================================
+
+class VectorOnlyRetriever(BaseRetriever):
+    """Retriever that performs only vector similarity search via Qdrant.
+    
+    Used as one of the sub-retrievers for QueryFusionRetriever.
+    Delegates to LlamaIndexRAG's direct Qdrant query logic.
+    """
+    
+    def __init__(self, rag: "LlamaIndexRAG", k: int = 10, qdrant_filter=None, **kwargs):
+        super().__init__(**kwargs)
+        self._rag = rag
+        self._k = k
+        self._qdrant_filter = qdrant_filter
+    
+    def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
+        """Run vector similarity search only."""
+        try:
+            query_embedding = Settings.embed_model.get_query_embedding(query_bundle.query_str)
+            
+            search_results = self._rag.qdrant_client.query_points(
+                collection_name=self._rag.COLLECTION_NAME,
+                query=query_embedding,
+                query_filter=self._qdrant_filter,
+                limit=self._k * 2,
+                with_payload=True,
+            ).points
+            
+            results = []
+            for result in search_results:
+                payload = result.payload or {}
+                text = self._rag._extract_text_from_payload(payload)
+                if text:
+                    node = TextNode(
+                        text=text,
+                        metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
+                        id_=str(result.id),
+                    )
+                    results.append(NodeWithScore(node=node, score=result.score))
+            
+            # Apply minimum similarity score
+            results = [
+                r for r in results
+                if r.score is not None and r.score >= self._rag.MINIMUM_SIMILARITY_SCORE
+            ]
+            return results
+        except Exception as e:
+            logger.error(f"VectorOnlyRetriever failed: {e}")
+            return []
+
+
+class FulltextOnlyRetriever(BaseRetriever):
+    """Retriever that performs only full-text search on metadata fields.
+    
+    Used as one of the sub-retrievers for QueryFusionRetriever.
+    Delegates to LlamaIndexRAG._fulltext_search().
+    """
+    
+    def __init__(self, rag: "LlamaIndexRAG", k: int = 10, filter_kwargs: Optional[Dict] = None, **kwargs):
+        super().__init__(**kwargs)
+        self._rag = rag
+        self._k = k
+        self._filter_kwargs = filter_kwargs or {}
+    
+    def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
+        """Run full-text search only."""
+        try:
+            return self._rag._fulltext_search(
+                query=query_bundle.query_str,
+                k=self._k,
+                **self._filter_kwargs,
+            )
+        except Exception as e:
+            logger.error(f"FulltextOnlyRetriever failed: {e}")
+            return []
+
+
+# =========================================================================
+# Phase 6: EntityExtractionTransform for IngestionPipeline
+# =========================================================================
+
+class EntityExtractionTransform:
+    """LlamaIndex-compatible transform that runs entity extraction on nodes.
+    
+    When added to an IngestionPipeline, automatically extracts person facts
+    (birth dates, cities, relationships, etc.) from ingested documents and
+    stores them in the Entity Store.
+    
+    This is an alternative to calling entity_extractor directly from the
+    sync files. The transform passes nodes through unchanged — it only
+    has the side effect of populating the entity store.
+    
+    Usage:
+        pipeline = IngestionPipeline(
+            transformations=[
+                splitter,
+                EntityExtractionTransform(),
+                embed_model,
+            ],
+        )
+    """
+    
+    def __call__(self, nodes: List[TextNode], **kwargs) -> List[TextNode]:
+        """Extract entities from nodes and store in entity_db.
+        
+        Nodes are passed through unchanged. Entity extraction is a
+        side effect that populates the entity store.
+        
+        Args:
+            nodes: List of TextNode instances from the pipeline
+            
+        Returns:
+            The same nodes, unchanged
+        """
+        if settings.get("rag_entity_extraction_in_pipeline", "false").lower() != "true":
+            return nodes
+        
+        if not settings.get("entity_extraction_enabled", "true").lower() == "true":
+            return nodes
+        
+        try:
+            from entity_extractor import extract_entities_from_document
+            
+            for node in nodes:
+                metadata = getattr(node, "metadata", {})
+                source = metadata.get("source", "")
+                title = metadata.get("chat_name", "")
+                sender = metadata.get("sender", "")
+                text = getattr(node, "text", "")
+                source_id = metadata.get("source_id", "")
+                
+                if not text or len(text) < 20:
+                    continue
+                
+                # Only extract from document-type content (not short messages)
+                content_type = metadata.get("content_type", "")
+                if content_type in ("document", "text") and source in ("paperless", "gmail"):
+                    try:
+                        extract_entities_from_document(
+                            doc_title=title or "Document",
+                            doc_text=text,
+                            source_ref=source_id,
+                            sender=sender,
+                        )
+                    except Exception as e:
+                        logger.debug(f"Entity extraction failed for node (non-critical): {e}")
+        except ImportError:
+            logger.debug("entity_extractor not available — skipping pipeline extraction")
+        except Exception as e:
+            logger.debug(f"EntityExtractionTransform failed (non-critical): {e}")
+        
+        return nodes
 
 
 # Create singleton instance getter

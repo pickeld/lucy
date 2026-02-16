@@ -64,6 +64,7 @@ ENV_KEY_MAP: Dict[str, str] = {
     "openai_api_key": "OPENAI_API_KEY",
     "google_api_key": "GOOGLE_API_KEY",
     "waha_api_key": "WAHA_API_KEY",
+    "cohere_api_key": "COHERE_API_KEY",
     # LLM
     "llm_provider": "LLM_PROVIDER",
     "openai_model": "OPENAI_MODEL",
@@ -152,6 +153,7 @@ DEFAULT_SETTINGS: List[Tuple[str, str, str, str, str]] = [
     ("openai_api_key", "", "secrets", "secret", "OpenAI API key"),
     ("google_api_key", "", "secrets", "secret", "Google Gemini API key"),
     ("waha_api_key", "", "secrets", "secret", "WAHA API key"),
+    ("cohere_api_key", "", "secrets", "secret", "Cohere API key (for multilingual reranking)"),
     # LLM
     ("llm_provider", "openai", "llm", "select", "LLM provider: openai or gemini"),
     ("openai_model", "gpt-4o", "llm", "text", "OpenAI model name"),
@@ -182,6 +184,16 @@ DEFAULT_SETTINGS: List[Tuple[str, str, str, str, str]] = [
     ("rag_chunk_buffer_ttl", "120", "rag", "int", "Conversation chunk buffer TTL in seconds"),
     ("rag_chunk_overlap_messages", "1", "rag", "int", "Number of messages to keep as overlap between consecutive conversation chunks"),
     ("gmail_signature_markers", "-- ,--,---", "rag", "text", "Comma-separated email signature delimiters (content after these is stripped)"),
+    # RAG — LlamaIndex feature toggles
+    ("rag_embedding_cache_enabled", "true", "rag", "bool", "Enable Redis-backed embedding cache (avoids re-embedding unchanged content during re-syncs)"),
+    ("rag_rerank_enabled", "false", "rag", "bool", "Enable Cohere multilingual reranking (requires cohere_api_key). Dramatically improves Hebrew retrieval precision."),
+    ("rag_rerank_top_n", "10", "rag", "int", "Number of results to keep after Cohere reranking"),
+    ("rag_rerank_model", "rerank-multilingual-v3.0", "rag", "text", "Cohere rerank model (rerank-multilingual-v3.0 supports Hebrew)"),
+    ("rag_hyde_enabled", "false", "rag", "bool", "Enable HyDE (Hypothetical Document Embedding) query transform. Generates a hypothetical answer before searching — improves Hebrew recall. Costs one extra LLM call per query."),
+    ("rag_query_fusion_enabled", "false", "rag", "bool", "Enable QueryFusionRetriever — generates multiple query variants and fuses results with RRF. Improves recall for ambiguous queries."),
+    ("rag_query_fusion_num_queries", "3", "rag", "int", "Number of query variants to generate for QueryFusionRetriever"),
+    ("rag_postprocessor_chain_enabled", "false", "rag", "bool", "Enable LlamaIndex NodePostprocessor chain (replaces manual score filtering and context budget trimming)"),
+    ("rag_entity_extraction_in_pipeline", "false", "rag", "bool", "Run entity extraction as part of the LlamaIndex ingestion pipeline (instead of standalone)"),
     # WhatsApp
     ("chat_prefix", "??", "whatsapp", "text", "Prefix to trigger AI chat response"),
     ("dalle_prefix", "!!", "whatsapp", "text", "Prefix to trigger DALL-E image generation"),

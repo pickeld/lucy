@@ -644,8 +644,9 @@ class EmailSyncer:
                                 id_=str(uuid.uuid4()),
                             ))
 
-                        # Batch insert: single embedding API call + Qdrant upsert
-                        added = self.rag.add_nodes(chunk_nodes)
+                        # Batch insert via IngestionPipeline (with embedding cache)
+                        # Falls back to add_nodes() if pipeline is unavailable.
+                        added = self.rag.ingest_nodes(chunk_nodes)
                         chunk_ok = added == len(chunk_nodes)
 
                         if chunk_ok:
@@ -722,7 +723,7 @@ class EmailSyncer:
                                             metadata=att_meta,
                                             id_=str(uuid.uuid4()),
                                         )
-                                        self.rag.add_node(att_node)
+                                        self.rag.ingest_nodes([att_node])
                                         attachment_count += 1
 
                                 except Exception as ae:
