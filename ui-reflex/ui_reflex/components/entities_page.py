@@ -183,13 +183,21 @@ def _merge_action_bar() -> rx.Component:
     return rx.flex(
         rx.flex(
             rx.icon("merge", size=16, class_name="text-purple-500"),
-            rx.text(
-                rx.cond(
-                    AppState.entity_merge_count > 0,
-                    AppState.entity_merge_count.to(str) + " selected",  # type: ignore[union-attr]
-                    "Click persons to select for merge",
+            rx.cond(
+                AppState.entity_merge_count > 0,
+                rx.flex(
+                    rx.text(
+                        AppState.entity_merge_count.to(str),  # type: ignore[union-attr]
+                        class_name="text-sm font-semibold text-purple-600",
+                    ),
+                    rx.text("selected", class_name="text-sm text-gray-600"),
+                    gap="1",
+                    align="center",
                 ),
-                class_name="text-sm text-gray-600",
+                rx.text(
+                    "Click persons to select for merge",
+                    class_name="text-sm text-gray-600",
+                ),
             ),
             align="center",
             gap="2",
@@ -1228,9 +1236,17 @@ def _suggestion_card(candidate: dict) -> rx.Component:
                         candidate["reason"],
                         class_name="text-sm font-semibold text-purple-700",
                     ),
-                    rx.text(
-                        candidate["count"] + " persons",
-                        class_name="text-xs text-gray-400 ml-2",
+                    rx.flex(
+                        rx.text(
+                            candidate["count"],
+                            class_name="text-xs text-gray-400",
+                        ),
+                        rx.text(
+                            "persons",
+                            class_name="text-xs text-gray-400",
+                        ),
+                        gap="1",
+                        class_name="ml-2",
                     ),
                     align="center",
                     gap="1",

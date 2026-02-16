@@ -1672,10 +1672,11 @@ def find_merge_candidates(limit: int = 50) -> List[Dict[str, Any]]:
             _add_candidate(f"📧 Same email (fact): {row['fact_value']}", ids)
 
         # 4. Shared alias — two different persons with the exact same alias text
+        #    (at least 2 words to avoid false positives on common first names)
         shared_alias_rows = conn.execute(
             """SELECT alias, GROUP_CONCAT(DISTINCT person_id) as ids, COUNT(DISTINCT person_id) as cnt
                FROM person_aliases
-               WHERE script != 'numeric'
+               WHERE script != 'numeric' AND alias LIKE '% %'
                GROUP BY alias COLLATE NOCASE HAVING cnt > 1 LIMIT ?""",
             (limit,),
         ).fetchall()
@@ -1702,39 +1703,39 @@ def _find_name_similarity_candidates(
     seen_groups: set,
     limit: int,
 ) -> None:
-    """Find persons with matching first names across different persons.
+    """Find persons with matching names across different person records.
 
-    Groups persons where person A has a Hebrew alias and person B has
-    the same Latin alias (or vice versa) — suggesting they may be the
-    same person in different scripts.
+    Detection strategies:
+    1. Full name match — two persons share an identical full alias
+       (e.g., "David Cohen" on person A == "David Cohen" on person B)
+    2. Canonical name match — same canonical_name text across persons
+       (can happen from different import sources)
 
-    Also catches exact canonical_name matches (case-insensitive) which
-    can happen when contacts are imported from different sources.
+    Full-name matches are prioritized over single-word (first name) matches
+    because they are stronger duplicate signals.
     """
-    # Build a mapping: lowercase alias → list of (person_id, script)
+    # Fetch all non-numeric aliases
     all_aliases = conn.execute(
         "SELECT person_id, alias, script FROM person_aliases WHERE script IN ('hebrew', 'latin')"
     ).fetchall()
 
-    # Group aliases by their text (lowercase for Latin, exact for Hebrew)
-    # We look for cases where the SAME first-name appears as alias on different persons
-    # but the canonical names differ — suggesting duplicates.
-
-    # First, build first-name → person_ids mapping
-    first_name_to_persons: dict[str, set[int]] = {}
+    # Build alias → person_ids mapping for full names only (2+ words)
+    # Single first names like "David" cause too many false positives
+    alias_to_persons: dict[str, set[int]] = {}
     for row in all_aliases:
         alias = row["alias"].strip()
         pid = row["person_id"]
-        # Only consider short aliases (likely first names, not full names with spaces)
-        if " " not in alias and len(alias) >= 2:
-            # For Latin script, normalize to lowercase
-            key = alias.lower() if row["script"] == "latin" else alias
-            if key not in first_name_to_persons:
-                first_name_to_persons[key] = set()
-            first_name_to_persons[key].add(pid)
+        # Require at least 2 words (first + surname)
+        if " " not in alias or len(alias) < 3:
+            continue
+        # Normalize: lowercase for Latin, exact for Hebrew
+        key = alias.lower() if row["script"] == "latin" else alias
+        if key not in alias_to_persons:
+            alias_to_persons[key] = set()
+        alias_to_persons[key].add(pid)
 
-    # Find first names shared by multiple persons
-    for alias_text, person_ids in first_name_to_persons.items():
+    # Find full names shared by multiple persons
+    for alias_text, person_ids in sorted(alias_to_persons.items()):
         if len(person_ids) < 2:
             continue
         if len(candidates) >= limit:
@@ -1745,12 +1746,11 @@ def _find_name_similarity_candidates(
         if key in seen_groups:
             continue
 
-        # Verify these are actually different persons (not just the same one)
         seen_groups.add(key)
         persons = _get_mini_persons(conn, ids)
         if len(persons) >= 2:
             candidates.append({
-                "reason": f"👤 Same name: \"{alias_text}\"",
+                "reason": f"👤 Same full name: \"{alias_text}\"",
                 "persons": persons,
             })
 
