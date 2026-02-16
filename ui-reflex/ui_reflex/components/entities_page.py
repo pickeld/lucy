@@ -49,10 +49,12 @@ def entities_page() -> rx.Component:
                 rx.tabs.list(
                     rx.tabs.trigger("👤 People", value="people"),
                     rx.tabs.trigger("📋 All Facts", value="facts"),
+                    rx.tabs.trigger("🔀 Suggestions", value="suggestions"),
                     size="2",
                 ),
                 rx.tabs.content(_people_tab(), value="people", class_name="pt-4"),
                 rx.tabs.content(_facts_tab(), value="facts", class_name="pt-4"),
+                rx.tabs.content(_suggestions_tab(), value="suggestions", class_name="pt-4"),
                 value=AppState.entity_tab,
                 on_change=AppState.set_entity_tab,
                 default_value="people",
@@ -1144,5 +1146,124 @@ def _all_facts_row(fact: dict) -> rx.Component:
         class_name=(
             "border-b border-gray-100 cursor-pointer hover:bg-gray-50 "
             "transition-colors duration-100"
+        ),
+    )
+
+
+# =========================================================================
+# TAB: MERGE SUGGESTIONS
+# =========================================================================
+
+
+def _suggestions_tab() -> rx.Component:
+    """Merge suggestions tab — shows potential duplicates with one-click merge."""
+    return rx.flex(
+        # Controls
+        rx.flex(
+            rx.button(
+                rx.icon("scan-search", size=14, class_name="mr-1"),
+                "Find Duplicates",
+                on_click=AppState.load_merge_candidates,
+                loading=AppState.entity_candidates_loading,
+                size="2",
+                class_name="bg-purple-500 text-white hover:bg-purple-600",
+            ),
+            rx.text(
+                "Scans for persons sharing phone, email, WhatsApp ID, aliases, or names",
+                class_name="text-xs text-gray-400 italic ml-2",
+            ),
+            gap="2",
+            align="center",
+            class_name="mb-4",
+        ),
+        # Candidate list
+        rx.cond(
+            AppState.entity_merge_candidates.length() > 0,  # type: ignore[union-attr]
+            rx.box(
+                rx.foreach(
+                    AppState.entity_merge_candidates,
+                    _suggestion_card,
+                ),
+                class_name="space-y-3",
+            ),
+            rx.cond(
+                AppState.entity_candidates_loading,
+                rx.flex(
+                    rx.spinner(size="3"),
+                    rx.text("Scanning…", class_name="text-sm text-gray-400 ml-2"),
+                    align="center",
+                    justify="center",
+                    class_name="py-12",
+                ),
+                rx.box(
+                    rx.flex(
+                        rx.icon("check-circle", size=40, class_name="text-green-300"),
+                        rx.text(
+                            "No merge suggestions yet",
+                            class_name="text-gray-400 mt-2",
+                        ),
+                        rx.text(
+                            "Click 'Find Duplicates' to scan for potential merges",
+                            class_name="text-sm text-gray-300 mt-1",
+                        ),
+                        direction="column",
+                        align="center",
+                        class_name="py-16",
+                    ),
+                ),
+            ),
+        ),
+        direction="column",
+    )
+
+
+def _suggestion_card(candidate: dict) -> rx.Component:
+    """Single merge suggestion card with reason, persons, and merge button."""
+    return rx.box(
+        rx.flex(
+            # Left: reason + person details
+            rx.box(
+                rx.flex(
+                    rx.text(
+                        candidate["reason"],
+                        class_name="text-sm font-semibold text-purple-700",
+                    ),
+                    rx.text(
+                        candidate["count"] + " persons",
+                        class_name="text-xs text-gray-400 ml-2",
+                    ),
+                    align="center",
+                    gap="1",
+                ),
+                rx.text(
+                    candidate["names"],
+                    class_name="text-sm text-gray-800 mt-1 font-medium",
+                ),
+                rx.text(
+                    candidate["details"],
+                    class_name="text-xs text-gray-500 mt-0.5 truncate",
+                ),
+                class_name="flex-1 min-w-0",
+            ),
+            # Right: merge button
+            rx.button(
+                rx.icon("git-merge", size=14, class_name="mr-1"),
+                "Merge",
+                on_click=AppState.merge_candidate_group(
+                    candidate["target_id"],
+                    candidate["source_ids"],
+                ),
+                size="2",
+                class_name=(
+                    "bg-purple-500 text-white hover:bg-purple-600 shrink-0"
+                ),
+            ),
+            justify="between",
+            align="center",
+            gap="3",
+        ),
+        class_name=(
+            "px-4 py-3 border border-purple-200 bg-purple-50 "
+            "rounded-lg hover:border-purple-300 transition-colors"
         ),
     )

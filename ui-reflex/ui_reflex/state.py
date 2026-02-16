@@ -253,6 +253,8 @@ class AppState(rx.State):
     # --- Entity merge ---
     entity_merge_mode: bool = False
     entity_merge_selection: list[str] = []  # person IDs as strings
+    entity_merge_candidates: list[dict[str, Any]] = []
+    entity_candidates_loading: bool = False
 
     # =====================================================================
     # EXPLICIT SETTERS (avoid deprecated state_auto_setters)
@@ -2053,6 +2055,110 @@ class AppState(rx.State):
             await self._load_entity_list()
         else:
             self.entity_save_message = result.get("message", "No change needed")
+
+    async def load_merge_candidates(self):
+        """Fetch merge suggestions from the backend."""
+        self.entity_candidates_loading = True
+        yield
+        data = await api_client.fetch_merge_candidates(limit=50)
+        raw_candidates = data.get("candidates", [])
+        # Flatten candidates into renderable format
+        processed: list[dict[str, str]] = []
+        for group in raw_candidates:
+            reason = group.get("reason", "")
+            persons = group.get("persons", [])
+            if len(persons) < 2:
+                continue
+            # Build a flat dict per candidate group
+            person_ids = [str(p.get("id", "")) for p in persons]
+            person_names = [str(p.get("canonical_name", "")) for p in persons]
+            person_details = []
+            for p in persons:
+                facts = p.get("fact_count", 0)
+                aliases = p.get("alias_count", 0)
+                phone = str(p.get("phone", "") or "")
+                email = str(p.get("email", "") or "")
+                detail = str(p.get("canonical_name", ""))
+                extras = []
+                if phone:
+                    extras.append(phone)
+                if email:
+                    extras.append(email)
+                if extras:
+                    detail += f" ({', '.join(extras)})"
+                detail += f" [{facts}f, {aliases}a]"
+                person_details.append(detail)
+
+            processed.append({
+                "reason": reason,
+                "ids": ",".join(person_ids),
+                "names": " ↔ ".join(person_names[:4]),
+                "details": " | ".join(person_details[:4]),
+                "count": str(len(persons)),
+                "target_id": person_ids[0] if person_ids else "",
+                "source_ids": ",".join(person_ids[1:]),
+            })
+        self.entity_merge_candidates = processed  # type: ignore[assignment]
+        self.entity_candidates_loading = False
+
+    async def merge_candidate_group(self, target_id: str, source_ids_str: str):
+        """Merge a suggested candidate group with one click."""
+        if not target_id or not source_ids_str:
+            return
+        source_ids = [int(s) for s in source_ids_str.split(",") if s]
+        self.entity_save_message = "⏳ Merging…"
+        yield
+        result = await api_client.merge_entities(int(target_id), source_ids)
+        if "error" in result:
+            self.entity_save_message = f"❌ {result['error']}"
+        else:
+            merged = result.get("sources_deleted", 0)
+            name = result.get("display_name", "")
+            self.entity_save_message = f"✅ Merged {merged + 1} → \"{name}\""
+            # Refresh suggestions and entity list
+            await self._reload_merge_candidates()
+            await self._load_entity_list()
+            stats = await api_client.fetch_entity_stats()
+            self.entity_stats = {k: str(v) for k, v in stats.items()}
+
+    async def _reload_merge_candidates(self):
+        """Internal: reload merge candidates without yield (non-generator)."""
+        data = await api_client.fetch_merge_candidates(limit=50)
+        raw_candidates = data.get("candidates", [])
+        processed: list[dict[str, str]] = []
+        for group in raw_candidates:
+            reason = group.get("reason", "")
+            persons = group.get("persons", [])
+            if len(persons) < 2:
+                continue
+            person_ids = [str(p.get("id", "")) for p in persons]
+            person_names = [str(p.get("canonical_name", "")) for p in persons]
+            person_details = []
+            for p in persons:
+                facts = p.get("fact_count", 0)
+                aliases = p.get("alias_count", 0)
+                phone = str(p.get("phone", "") or "")
+                email = str(p.get("email", "") or "")
+                detail = str(p.get("canonical_name", ""))
+                extras = []
+                if phone:
+                    extras.append(phone)
+                if email:
+                    extras.append(email)
+                if extras:
+                    detail += f" ({', '.join(extras)})"
+                detail += f" [{facts}f, {aliases}a]"
+                person_details.append(detail)
+            processed.append({
+                "reason": reason,
+                "ids": ",".join(person_ids),
+                "names": " ↔ ".join(person_names[:4]),
+                "details": " | ".join(person_details[:4]),
+                "count": str(len(persons)),
+                "target_id": person_ids[0] if person_ids else "",
+                "source_ids": ",".join(person_ids[1:]),
+            })
+        self.entity_merge_candidates = processed  # type: ignore[assignment]
 
 
 # =========================================================================

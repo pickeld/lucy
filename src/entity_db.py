@@ -1596,8 +1596,13 @@ def merge_persons(
 def find_merge_candidates(limit: int = 50) -> List[Dict[str, Any]]:
     """Find potential duplicate persons that could be merged.
 
-    Looks for persons sharing the same phone number, email, or
-    similar names (same first name in different scripts).
+    Detection strategies (in priority order):
+    1. Same phone number
+    2. Same WhatsApp ID
+    3. Same email (persons table or facts)
+    4. Shared alias text (two persons with the same alias)
+    5. Similar names — first name matches across different persons
+       (e.g., "David" alias on person A == "David" alias on person B)
 
     Args:
         limit: Maximum number of candidate groups to return
@@ -1610,6 +1615,18 @@ def find_merge_candidates(limit: int = 50) -> List[Dict[str, Any]]:
         candidates: list[Dict[str, Any]] = []
         seen_groups: set[frozenset[int]] = set()
 
+        def _add_candidate(reason: str, ids: List[int]) -> None:
+            """Helper to add a candidate group, deduplicating by ID set."""
+            key = frozenset(ids)
+            if key not in seen_groups and len(ids) >= 2:
+                seen_groups.add(key)
+                persons = _get_mini_persons(conn, ids)
+                if len(persons) >= 2:
+                    candidates.append({
+                        "reason": reason,
+                        "persons": persons,
+                    })
+
         # 1. Same phone number
         phone_rows = conn.execute(
             """SELECT phone, GROUP_CONCAT(id) as ids, COUNT(*) as cnt
@@ -1619,16 +1636,20 @@ def find_merge_candidates(limit: int = 50) -> List[Dict[str, Any]]:
         ).fetchall()
         for row in phone_rows:
             ids = [int(x) for x in row["ids"].split(",")]
-            key = frozenset(ids)
-            if key not in seen_groups:
-                seen_groups.add(key)
-                persons = _get_mini_persons(conn, ids)
-                candidates.append({
-                    "reason": f"Same phone: {row['phone']}",
-                    "persons": persons,
-                })
+            _add_candidate(f"📱 Same phone: {row['phone']}", ids)
 
-        # 2. Same email
+        # 2. Same WhatsApp ID
+        wa_rows = conn.execute(
+            """SELECT whatsapp_id, GROUP_CONCAT(id) as ids, COUNT(*) as cnt
+               FROM persons WHERE whatsapp_id IS NOT NULL AND whatsapp_id != ''
+               GROUP BY whatsapp_id HAVING cnt > 1 LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        for row in wa_rows:
+            ids = [int(x) for x in row["ids"].split(",")]
+            _add_candidate(f"💬 Same WhatsApp: {row['whatsapp_id']}", ids)
+
+        # 3a. Same email (persons table)
         email_rows = conn.execute(
             """SELECT email, GROUP_CONCAT(id) as ids, COUNT(*) as cnt
                FROM persons WHERE email IS NOT NULL AND email != ''
@@ -1637,16 +1658,9 @@ def find_merge_candidates(limit: int = 50) -> List[Dict[str, Any]]:
         ).fetchall()
         for row in email_rows:
             ids = [int(x) for x in row["ids"].split(",")]
-            key = frozenset(ids)
-            if key not in seen_groups:
-                seen_groups.add(key)
-                persons = _get_mini_persons(conn, ids)
-                candidates.append({
-                    "reason": f"Same email: {row['email']}",
-                    "persons": persons,
-                })
+            _add_candidate(f"📧 Same email: {row['email']}", ids)
 
-        # 3. Same email via facts
+        # 3b. Same email via facts
         email_fact_rows = conn.execute(
             """SELECT fact_value, GROUP_CONCAT(person_id) as ids, COUNT(*) as cnt
                FROM person_facts WHERE fact_key = 'email'
@@ -1655,18 +1669,90 @@ def find_merge_candidates(limit: int = 50) -> List[Dict[str, Any]]:
         ).fetchall()
         for row in email_fact_rows:
             ids = [int(x) for x in row["ids"].split(",")]
-            key = frozenset(ids)
-            if key not in seen_groups:
-                seen_groups.add(key)
-                persons = _get_mini_persons(conn, ids)
-                candidates.append({
-                    "reason": f"Same email (fact): {row['fact_value']}",
-                    "persons": persons,
-                })
+            _add_candidate(f"📧 Same email (fact): {row['fact_value']}", ids)
+
+        # 4. Shared alias — two different persons with the exact same alias text
+        shared_alias_rows = conn.execute(
+            """SELECT alias, GROUP_CONCAT(DISTINCT person_id) as ids, COUNT(DISTINCT person_id) as cnt
+               FROM person_aliases
+               WHERE script != 'numeric'
+               GROUP BY alias COLLATE NOCASE HAVING cnt > 1 LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        for row in shared_alias_rows:
+            ids = [int(x) for x in row["ids"].split(",")]
+            _add_candidate(f"🏷️ Same alias: \"{row['alias']}\"", ids)
+
+        # 5. Name similarity — find persons whose first name (first word of
+        #    canonical_name) matches an alias of another person.
+        #    This catches cases like "דוד כהן" and "David Cohen" where both
+        #    have an alias "David" / "דוד" that doesn't literally match but
+        #    the first name was added as alias in the other script.
+        if len(candidates) < limit:
+            _find_name_similarity_candidates(conn, candidates, seen_groups, limit)
 
         return candidates[:limit]
     finally:
         conn.close()
+
+
+def _find_name_similarity_candidates(
+    conn: sqlite3.Connection,
+    candidates: list,
+    seen_groups: set,
+    limit: int,
+) -> None:
+    """Find persons with matching first names across different persons.
+
+    Groups persons where person A has a Hebrew alias and person B has
+    the same Latin alias (or vice versa) — suggesting they may be the
+    same person in different scripts.
+
+    Also catches exact canonical_name matches (case-insensitive) which
+    can happen when contacts are imported from different sources.
+    """
+    # Build a mapping: lowercase alias → list of (person_id, script)
+    all_aliases = conn.execute(
+        "SELECT person_id, alias, script FROM person_aliases WHERE script IN ('hebrew', 'latin')"
+    ).fetchall()
+
+    # Group aliases by their text (lowercase for Latin, exact for Hebrew)
+    # We look for cases where the SAME first-name appears as alias on different persons
+    # but the canonical names differ — suggesting duplicates.
+
+    # First, build first-name → person_ids mapping
+    first_name_to_persons: dict[str, set[int]] = {}
+    for row in all_aliases:
+        alias = row["alias"].strip()
+        pid = row["person_id"]
+        # Only consider short aliases (likely first names, not full names with spaces)
+        if " " not in alias and len(alias) >= 2:
+            # For Latin script, normalize to lowercase
+            key = alias.lower() if row["script"] == "latin" else alias
+            if key not in first_name_to_persons:
+                first_name_to_persons[key] = set()
+            first_name_to_persons[key].add(pid)
+
+    # Find first names shared by multiple persons
+    for alias_text, person_ids in first_name_to_persons.items():
+        if len(person_ids) < 2:
+            continue
+        if len(candidates) >= limit:
+            break
+
+        ids = sorted(person_ids)
+        key = frozenset(ids)
+        if key in seen_groups:
+            continue
+
+        # Verify these are actually different persons (not just the same one)
+        seen_groups.add(key)
+        persons = _get_mini_persons(conn, ids)
+        if len(persons) >= 2:
+            candidates.append({
+                "reason": f"👤 Same name: \"{alias_text}\"",
+                "persons": persons,
+            })
 
 
 def _get_mini_persons(conn: sqlite3.Connection, ids: List[int]) -> List[Dict[str, Any]]:
