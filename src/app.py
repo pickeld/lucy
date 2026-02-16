@@ -1004,13 +1004,20 @@ def costs_breakdown():
 
 @app.route("/entities", methods=["GET"])
 def list_entities():
-    """List all person entities with summary info."""
+    """List all person entities with summary info.
+
+    Supports ?q=search for searching, and ?limit=N to cap results.
+    Default limit is 50 when no search query is provided.
+    """
     try:
         query = request.args.get("q")
+        limit = request.args.get("limit", 50, type=int)
         if query:
-            persons = entity_db.search_persons(query)
+            persons = entity_db.search_persons(query, limit=min(limit, 200))
         else:
-            persons = entity_db.get_all_persons_summary()
+            # Limit the full list to avoid sending 5000+ records
+            all_persons = entity_db.get_all_persons_summary()
+            persons = all_persons[:limit]
         return jsonify({"persons": persons, "count": len(persons)}), 200
     except Exception as e:
         trace = traceback.format_exc()
@@ -1218,6 +1225,23 @@ def seed_entities():
     except Exception as e:
         trace = traceback.format_exc()
         logger.error(f"Entity seed error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/entities/cleanup", methods=["POST"])
+def cleanup_entities():
+    """Remove persons with garbage/invalid names from the entity store."""
+    try:
+        result = entity_db.cleanup_garbage_persons()
+        return jsonify({
+            "status": "ok",
+            "deleted": result["deleted"],
+            "names": result["names"][:50],  # Limit response size
+            "stats": entity_db.get_stats(),
+        }), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Entity cleanup error: {e}\n{trace}")
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 

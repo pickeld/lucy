@@ -1720,10 +1720,41 @@ class AppState(rx.State):
         """Fetch person list from backend."""
         self.entity_loading = True
         raw = await api_client.fetch_entities(query=query or None)
-        self.entity_persons = [
-            {k: str(v) if v is not None else "" for k, v in p.items()}
-            for p in raw
-        ]
+        processed: list[dict[str, str]] = []
+        for p in raw:
+            # Compute alias count and preview from list
+            aliases_raw = p.get("aliases", [])
+            if isinstance(aliases_raw, list):
+                alias_count = len(aliases_raw)
+                # Filter to name-like aliases (not pure numeric/phone)
+                name_aliases = [
+                    a for a in aliases_raw
+                    if isinstance(a, str) and not a.replace("+", "").isdigit()
+                ]
+                aliases_preview = ", ".join(name_aliases[:3])
+                if len(name_aliases) > 3:
+                    aliases_preview += f" +{len(name_aliases) - 3}"
+            else:
+                alias_count = p.get("alias_count", 0)
+                aliases_preview = ""
+
+            # Compute fact count from dict or use provided count
+            facts_raw = p.get("facts", {})
+            if isinstance(facts_raw, dict):
+                fact_count = len(facts_raw)
+            else:
+                fact_count = p.get("fact_count", 0)
+
+            processed.append({
+                "id": str(p.get("id", "")),
+                "canonical_name": str(p.get("canonical_name", "")),
+                "phone": str(p.get("phone", "") or ""),
+                "whatsapp_id": str(p.get("whatsapp_id", "") or ""),
+                "alias_count": str(alias_count),
+                "fact_count": str(fact_count),
+                "aliases_preview": aliases_preview,
+            })
+        self.entity_persons = processed
         self.entity_loading = False
 
     async def search_entities(self):
@@ -1916,6 +1947,20 @@ class AppState(rx.State):
         await self._load_entity_list()
         stats = await api_client.fetch_entity_stats()
         self.entity_stats = {k: str(v) for k, v in stats.items()}
+
+    async def cleanup_entities(self):
+        """Remove persons with garbage/invalid names."""
+        self.entity_save_message = "⏳ Cleaning up…"
+        yield
+        result = await api_client.cleanup_entities()
+        if "error" in result:
+            self.entity_save_message = f"❌ {result['error']}"
+        else:
+            deleted = result.get("deleted", 0)
+            self.entity_save_message = f"✅ Removed {deleted} garbage entries"
+            await self._load_entity_list()
+            stats = await api_client.fetch_entity_stats()
+            self.entity_stats = {k: str(v) for k, v in stats.items()}
 
 
 # =========================================================================

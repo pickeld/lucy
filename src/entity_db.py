@@ -44,6 +44,17 @@ def _get_connection() -> sqlite3.Connection:
 _HEBREW_RE = re.compile(r'[\u0590-\u05FF]')
 _LATIN_RE = re.compile(r'[a-zA-Z]')
 
+# Patterns that indicate a garbage / non-person name
+_GARBAGE_NAME_PATTERNS = [
+    re.compile(r'^\W+$'),                    # Pure punctuation/symbols
+    re.compile(r'^\d+$'),                     # Pure digits
+    re.compile(r'^\(.*\)$'),                  # Wrapped in parens like ('')
+    re.compile(r'^[\'"]+$'),                  # Just quotes
+    re.compile(r'^\*\w{0,2}$'),              # Star-prefixed short codes like *K
+    re.compile(r'^.{0,1}$'),                 # Single char or empty
+    re.compile(r'^[\U0001F600-\U0001F9FF\s]+$'),  # Pure emoji
+]
+
 
 def _detect_script(text: str) -> str:
     """Detect the primary script of a text string.
@@ -60,6 +71,39 @@ def _detect_script(text: str) -> str:
     elif has_latin:
         return "latin"
     return "unknown"
+
+
+def _is_valid_person_name(name: str) -> bool:
+    """Check if a name is a valid person/contact name.
+
+    Filters out garbage like punctuation-only, single chars, pure digits,
+    star-prefix short codes, and other non-name strings that WhatsApp
+    contacts sometimes have.
+
+    Args:
+        name: The candidate name string
+
+    Returns:
+        True if the name looks like a real person/group name
+    """
+    if not name or len(name.strip()) < 2:
+        return False
+
+    stripped = name.strip()
+
+    for pattern in _GARBAGE_NAME_PATTERNS:
+        if pattern.match(stripped):
+            return False
+
+    # Must contain at least one letter (any script)
+    if not _HEBREW_RE.search(stripped) and not _LATIN_RE.search(stripped):
+        # Allow CJK and other scripts too — just reject pure non-letter strings
+        # Check for any Unicode letter category
+        has_letter = any(c.isalpha() for c in stripped)
+        if not has_letter:
+            return False
+
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -961,7 +1005,7 @@ def seed_from_whatsapp_contacts(contacts: List[Dict[str, Any]]) -> Dict[str, int
         whatsapp_id = contact.get("id")
         phone = contact.get("number")
 
-        if not name:
+        if not name or not _is_valid_person_name(name):
             skipped += 1
             continue
 
@@ -1018,6 +1062,49 @@ def seed_from_whatsapp_contacts(contacts: List[Dict[str, Any]]) -> Dict[str, int
         f"Entity seeding complete: {created} created, {updated} updated, {skipped} skipped"
     )
     return {"created": created, "updated": updated, "skipped": skipped}
+
+
+# ---------------------------------------------------------------------------
+# Cleanup — remove garbage persons
+# ---------------------------------------------------------------------------
+
+def cleanup_garbage_persons() -> Dict[str, Any]:
+    """Remove persons with invalid/garbage names from the entity store.
+
+    Identifies persons whose canonical_name fails _is_valid_person_name()
+    and deletes them (cascades to aliases, facts, relationships).
+
+    Returns:
+        Dict with 'deleted' count and 'names' list of removed names
+    """
+    conn = _get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, canonical_name FROM persons"
+        ).fetchall()
+
+        garbage_ids: list[int] = []
+        garbage_names: list[str] = []
+        for row in rows:
+            name = row["canonical_name"]
+            if not _is_valid_person_name(name):
+                garbage_ids.append(row["id"])
+                garbage_names.append(name)
+
+        if garbage_ids:
+            placeholders = ",".join("?" for _ in garbage_ids)
+            conn.execute(
+                f"DELETE FROM persons WHERE id IN ({placeholders})",
+                garbage_ids,
+            )
+            conn.commit()
+
+        logger.info(
+            f"Entity cleanup: removed {len(garbage_ids)} garbage persons"
+        )
+        return {"deleted": len(garbage_ids), "names": garbage_names}
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------

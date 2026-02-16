@@ -655,6 +655,16 @@ async def seed_entities() -> dict[str, Any]:
         return {"error": str(e)}
 
 
+async def cleanup_entities() -> dict[str, Any]:
+    """Remove persons with garbage/invalid names."""
+    try:
+        resp = await _get_client().post("/entities/cleanup", timeout=30)
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error cleaning up entities: {e}")
+        return {"error": str(e)}
+
+
 async def fetch_all_entity_facts(
     key: str | None = None,
 ) -> dict[str, Any]:

@@ -171,27 +171,16 @@ def _people_tab() -> rx.Component:
 
 
 def _toolbar() -> rx.Component:
-    """Search bar + seed + refresh buttons."""
+    """Search bar + seed + refresh + cleanup buttons."""
     return rx.flex(
-        rx.flex(
-            rx.icon("search", size=14, class_name="text-gray-400"),
-            rx.el.input(
-                placeholder="Search persons…",
-                value=AppState.entity_search,
-                on_change=AppState.set_entity_search,
-                on_key_down=rx.cond(  # type: ignore[arg-type]
-                    rx.Var.create("e.key") == "Enter",
-                    AppState.search_entities,
-                    None,
-                ),
-                class_name=(
-                    "bg-transparent border-none outline-none text-sm text-gray-700 "
-                    "placeholder-gray-400 flex-1 ml-2"
-                ),
-            ),
-            align="center",
+        rx.el.input(
+            placeholder="Search persons…",
+            default_value=AppState.entity_search,
+            on_change=AppState.set_entity_search,
             class_name=(
-                "flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2"
+                "flex-1 bg-white border border-gray-200 rounded-lg "
+                "px-3 py-2 text-sm text-gray-700 outline-none "
+                "placeholder-gray-400"
             ),
         ),
         rx.button(
@@ -215,6 +204,14 @@ def _toolbar() -> rx.Component:
             loading=AppState.entity_seed_status == "seeding",
             size="2",
             class_name="bg-green-500 text-white hover:bg-green-600",
+        ),
+        rx.button(
+            rx.icon("trash-2", size=14, class_name="mr-1"),
+            "Cleanup",
+            on_click=AppState.cleanup_entities,
+            variant="outline",
+            size="2",
+            color_scheme="red",
         ),
         gap="2",
         align="center",
@@ -273,30 +270,16 @@ def _person_grid_full() -> rx.Component:
 def _person_card(person: dict) -> rx.Component:
     """Single person card for the grid."""
     return rx.box(
-        rx.flex(
-            rx.text(
-                person["canonical_name"],
-                class_name="text-sm font-semibold text-gray-800 truncate",
-            ),
-            rx.cond(
-                person.get("phone", "") != "",  # type: ignore[arg-type]
-                rx.text(
-                    person["phone"],
-                    class_name="text-xs text-gray-400 truncate",
-                ),
-                rx.fragment(),
-            ),
-            direction="column",
-            gap="0.5",
+        rx.text(
+            person["canonical_name"],
+            class_name="text-sm font-semibold text-gray-800 truncate",
         ),
-        # Aliases preview
+        # Aliases preview (clean comma-separated names)
         rx.cond(
-            person.get("aliases", "") != "",  # type: ignore[arg-type]
-            rx.box(
-                rx.text(
-                    _format_aliases_preview(person),
-                    class_name="text-xs text-gray-400 truncate mt-1",
-                ),
+            person["aliases_preview"] != "",
+            rx.text(
+                person["aliases_preview"],
+                class_name="text-xs text-gray-400 truncate mt-1",
             ),
             rx.fragment(),
         ),
@@ -305,18 +288,20 @@ def _person_card(person: dict) -> rx.Component:
             rx.flex(
                 rx.icon("file-text", size=12, class_name="text-gray-400"),
                 rx.text(
-                    person.get("fact_count", "0"),  # type: ignore[call-overload]
+                    person["fact_count"],
                     class_name="text-xs text-gray-500",
                 ),
+                rx.text("facts", class_name="text-xs text-gray-400"),
                 align="center",
                 gap="1",
             ),
             rx.flex(
                 rx.icon("tag", size=12, class_name="text-gray-400"),
                 rx.text(
-                    person.get("alias_count", "0"),  # type: ignore[call-overload]
+                    person["alias_count"],
                     class_name="text-xs text-gray-500",
                 ),
+                rx.text("aliases", class_name="text-xs text-gray-400"),
                 align="center",
                 gap="1",
             ),
@@ -329,12 +314,6 @@ def _person_card(person: dict) -> rx.Component:
             "transition-all duration-150 hover:-translate-y-0.5"
         ),
     )
-
-
-def _format_aliases_preview(person: dict) -> rx.Var:
-    """Format aliases for preview display in person cards."""
-    # For the grid view, just show the aliases string
-    return person.get("aliases", "")  # type: ignore[return-value]
 
 
 # =========================================================================
@@ -368,7 +347,7 @@ def _person_list_item(person: dict) -> rx.Component:
             rx.flex(
                 rx.icon("file-text", size=11, class_name="text-gray-400"),
                 rx.text(
-                    person.get("fact_count", "0"),  # type: ignore[call-overload]
+                    person["fact_count"],
                     class_name="text-xs text-gray-400",
                 ),
                 align="center",
@@ -377,7 +356,7 @@ def _person_list_item(person: dict) -> rx.Component:
             rx.flex(
                 rx.icon("tag", size=11, class_name="text-gray-400"),
                 rx.text(
-                    person.get("alias_count", "0"),  # type: ignore[call-overload]
+                    person["alias_count"],
                     class_name="text-xs text-gray-400",
                 ),
                 align="center",
