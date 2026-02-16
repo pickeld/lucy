@@ -25,7 +25,7 @@ from utils.text_processing import (
     split_text,
 )
 
-from .scanner import AudioFile, BaseFileScanner, _parse_filename_metadata
+from .scanner import AudioFile, LocalFileScanner, _parse_filename_metadata
 from .transcriber import TranscriptionResult, WhisperTranscriber
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ class CallRecordingSyncer:
 
     def __init__(
         self,
-        scanner: BaseFileScanner,
+        scanner: LocalFileScanner,
         transcriber: WhisperTranscriber,
         rag,
     ):
