@@ -506,7 +506,7 @@ def _call_recordings_actions() -> rx.Component:
         rx.flex(
             rx.button(
                 rx.icon("search", size=14, class_name="mr-1"),
-                "Scan & Transcribe",
+                "Scan Files",
                 on_click=AppState.scan_recordings,
                 loading=AppState.call_recordings_files_loading,
                 size="2",
@@ -734,16 +734,16 @@ def _recording_row(item: dict) -> rx.Component:
                     ),
                     rx.fragment(),
                 ),
-                # Retry button (only for error)
+                # Transcribe button (for pending or error)
                 rx.cond(
-                    item["status"] == "error",
+                    (item["status"] == "pending") | (item["status"] == "error"),
                     rx.icon_button(
-                        rx.icon("rotate-cw", size=16),
+                        rx.icon("mic", size=16),
                         on_click=AppState.retry_transcription(item["content_hash"]),
                         variant="ghost",
                         size="1",
-                        class_name="text-yellow-500 hover:text-yellow-700",
-                        title="Retry transcription",
+                        class_name="text-blue-500 hover:text-blue-700",
+                        title="Transcribe",
                     ),
                     rx.fragment(),
                 ),

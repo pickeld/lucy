@@ -1844,12 +1844,12 @@ class AppState(rx.State):
         await self._load_recording_files()
 
     async def scan_recordings(self):
-        """Scan for new files and auto-transcribe them."""
-        self.call_recordings_scan_message = "⏳ Scanning and transcribing…"
+        """Scan for new files (without auto-transcribe — too slow for many files)."""
+        self.call_recordings_scan_message = "⏳ Scanning for new files…"
         self.call_recordings_files_loading = True
         yield
 
-        result = await api_client.scan_call_recordings(auto_transcribe=True)
+        result = await api_client.scan_call_recordings(auto_transcribe=False)
         if "error" in result:
             self.call_recordings_scan_message = f"❌ {result['error']}"
         elif result.get("status") == "complete":
