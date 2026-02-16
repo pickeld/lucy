@@ -45,11 +45,17 @@ from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    Fusion,
     MatchText,
     MatchValue,
+    NamedSparseVector,
+    NamedVector,
     OrderBy,
     PayloadSchemaType,
+    Prefetch,
     Range,
+    SparseVector,
+    SparseVectorParams,
     TextIndexParams,
     TextIndexType,
     TokenizerType,
@@ -506,6 +512,11 @@ class LlamaIndexRAG:
     MINIMUM_SIMILARITY_SCORE = float(settings.rag_min_score)
     MAX_CONTEXT_TOKENS = int(settings.rag_max_context_tokens)
     
+    # Sparse+dense hybrid retrieval (see plans/rag-hybrid-retrieval-upgrade.md §1.3)
+    HYBRID_ENABLED = settings.get("rag_hybrid_enabled", "false").lower() == "true"
+    DENSE_VECTOR_NAME = "dense"    # Named vector for OpenAI embeddings
+    SPARSE_VECTOR_NAME = "sparse"  # Named vector for BM25-style sparse vectors
+    
     def __new__(cls):
         """Singleton pattern to ensure one RAG instance."""
         if cls._instance is None:
@@ -647,12 +658,19 @@ class LlamaIndexRAG:
     
     @property
     def vector_store(self) -> QdrantVectorStore:
-        """Get or create the Qdrant vector store."""
+        """Get or create the Qdrant vector store.
+        
+        When hybrid mode is enabled, configures the vector store to use
+        the 'dense' named vector instead of the default unnamed vector.
+        """
         if LlamaIndexRAG._vector_store is None:
-            LlamaIndexRAG._vector_store = QdrantVectorStore(
-                client=self.qdrant_client,
-                collection_name=self.COLLECTION_NAME,
-            )
+            kwargs = {
+                "client": self.qdrant_client,
+                "collection_name": self.COLLECTION_NAME,
+            }
+            if self.HYBRID_ENABLED:
+                kwargs["vector_name"] = self.DENSE_VECTOR_NAME
+            LlamaIndexRAG._vector_store = QdrantVectorStore(**kwargs)
         return LlamaIndexRAG._vector_store
     
     @property
@@ -738,13 +756,165 @@ class LlamaIndexRAG:
             result_nodes = self.ingestion_pipeline.run(nodes=nodes, show_progress=False)
             count = len(result_nodes) if result_nodes else len(nodes)
             logger.info(f"IngestionPipeline ingested {count} nodes")
+            
+            # After dense vector ingestion, compute and upsert sparse vectors
+            if self.HYBRID_ENABLED:
+                self._upsert_sparse_vectors(nodes)
+            
             return count
         except Exception as e:
             logger.warning(f"IngestionPipeline failed, falling back to add_nodes(): {e}")
-            return self.add_nodes(nodes)
+            count = self.add_nodes(nodes)
+            if self.HYBRID_ENABLED and count > 0:
+                self._upsert_sparse_vectors(nodes)
+            return count
+    
+    def _upsert_sparse_vectors(self, nodes: List[TextNode]) -> None:
+        """Compute and upsert BM25-style sparse vectors for ingested nodes.
+        
+        Called after dense vector ingestion.  Uses the Qdrant client directly
+        to update each point with a sparse vector in the 'sparse' named vector
+        field.  This enables server-side hybrid search (dense + sparse + RRF).
+        
+        Only runs when ``rag_hybrid_enabled=true`` and the collection has
+        a sparse vector configuration.
+        
+        Args:
+            nodes: List of TextNode instances that were just ingested
+        """
+        try:
+            from utils.sparse_vectors import compute_sparse_vector
+            from qdrant_client.models import PointVectors
+            
+            points_to_update = []
+            for node in nodes:
+                text = getattr(node, "text", "") or ""
+                if not text:
+                    continue
+                
+                indices, values = compute_sparse_vector(text)
+                if not indices:
+                    continue
+                
+                points_to_update.append(
+                    PointVectors(
+                        id=node.id_,
+                        vector={
+                            self.SPARSE_VECTOR_NAME: SparseVector(
+                                indices=indices,
+                                values=values,
+                            )
+                        },
+                    )
+                )
+            
+            if points_to_update:
+                self.qdrant_client.update_vectors(
+                    collection_name=self.COLLECTION_NAME,
+                    points=points_to_update,
+                )
+                logger.debug(
+                    f"Upserted sparse vectors for {len(points_to_update)} nodes"
+                )
+        except ImportError:
+            logger.debug("sparse_vectors module not available — skipping sparse upsert")
+        except Exception as e:
+            logger.debug(f"Sparse vector upsert failed (non-critical): {e}")
+    
+    def _hybrid_search(
+        self,
+        query: str,
+        k: int = 10,
+        qdrant_filters: Optional[Filter] = None,
+    ) -> List[NodeWithScore]:
+        """Perform hybrid search using Qdrant's server-side dense+sparse RRF fusion.
+        
+        Sends two prefetch queries (dense embedding + sparse BM25 vector) and
+        lets Qdrant fuse them via Reciprocal Rank Fusion.  This replaces both
+        the vector-only search AND the fulltext search with a single unified
+        ranked result set.
+        
+        Only works when the collection has named vectors (dense + sparse).
+        Falls back gracefully if sparse vectors are not available.
+        
+        Args:
+            query: Search query text
+            k: Number of results to return
+            qdrant_filters: Optional Qdrant filter conditions
+            
+        Returns:
+            List of NodeWithScore from hybrid search
+        """
+        try:
+            from utils.sparse_vectors import compute_query_sparse_vector
+            
+            # Compute both dense and sparse query vectors
+            query_embedding = Settings.embed_model.get_query_embedding(query)
+            sparse_indices, sparse_values = compute_query_sparse_vector(query)
+            
+            if not sparse_indices:
+                # No sparse tokens — fall back to dense-only
+                logger.debug("No sparse tokens for query, using dense-only")
+                return []  # Caller will fall back
+            
+            # Qdrant hybrid query with prefetch + RRF fusion
+            prefetch_limit = k * 3  # Fetch more candidates for fusion
+            
+            search_results = self.qdrant_client.query_points(
+                collection_name=self.COLLECTION_NAME,
+                prefetch=[
+                    Prefetch(
+                        query=query_embedding,
+                        using=self.DENSE_VECTOR_NAME,
+                        limit=prefetch_limit,
+                        filter=qdrant_filters,
+                    ),
+                    Prefetch(
+                        query=SparseVector(
+                            indices=sparse_indices,
+                            values=sparse_values,
+                        ),
+                        using=self.SPARSE_VECTOR_NAME,
+                        limit=prefetch_limit,
+                        filter=qdrant_filters,
+                    ),
+                ],
+                query=Fusion(fusion=Fusion.RRF),  # type: ignore[arg-type]
+                limit=k * 2,
+                with_payload=True,
+            ).points
+            
+            # Convert to NodeWithScore
+            valid_results = []
+            for result in search_results:
+                payload = result.payload or {}
+                text = self._extract_text_from_payload(payload)
+                if not text:
+                    continue
+                node = TextNode(
+                    text=text,
+                    metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
+                    id_=str(result.id),
+                )
+                valid_results.append(NodeWithScore(node=node, score=result.score))
+            
+            logger.info(
+                f"Hybrid search (dense+sparse RRF) for '{query[:50]}...' "
+                f"returned {len(valid_results)} results"
+            )
+            return valid_results
+            
+        except Exception as e:
+            logger.warning(f"Hybrid search failed, will fall back to standard search: {e}")
+            return []  # Caller falls back to non-hybrid path
     
     def _ensure_collection(self):
-        """Ensure the collection exists in Qdrant with text indexes for metadata search."""
+        """Ensure the collection exists in Qdrant with text indexes for metadata search.
+        
+        When ``rag_hybrid_enabled=true``, creates the collection with named
+        vectors (dense + sparse) for server-side hybrid search with RRF fusion.
+        Otherwise creates a standard single-vector collection.
+        """
         try:
             logger.debug("Fetching existing collections from Qdrant...")
             collections = self.qdrant_client.get_collections().collections
@@ -752,15 +922,35 @@ class LlamaIndexRAG:
             logger.debug(f"Found collections: {collection_names}")
             
             if self.COLLECTION_NAME not in collection_names:
-                logger.info(f"Creating Qdrant collection: {self.COLLECTION_NAME}")
-                self.qdrant_client.create_collection(
-                    collection_name=self.COLLECTION_NAME,
-                    vectors_config=VectorParams(
-                        size=self.VECTOR_SIZE,
-                        distance=Distance.COSINE
+                if self.HYBRID_ENABLED:
+                    # Named vectors: dense (OpenAI embeddings) + sparse (BM25)
+                    logger.info(
+                        f"Creating HYBRID Qdrant collection: {self.COLLECTION_NAME} "
+                        f"(dense={self.VECTOR_SIZE}d + sparse)"
                     )
-                )
-                logger.info(f"Created Qdrant collection: {self.COLLECTION_NAME}")
+                    self.qdrant_client.create_collection(
+                        collection_name=self.COLLECTION_NAME,
+                        vectors_config={
+                            self.DENSE_VECTOR_NAME: VectorParams(
+                                size=self.VECTOR_SIZE,
+                                distance=Distance.COSINE,
+                            ),
+                        },
+                        sparse_vectors_config={
+                            self.SPARSE_VECTOR_NAME: SparseVectorParams(),
+                        },
+                    )
+                    logger.info(f"Created hybrid collection: {self.COLLECTION_NAME}")
+                else:
+                    logger.info(f"Creating Qdrant collection: {self.COLLECTION_NAME}")
+                    self.qdrant_client.create_collection(
+                        collection_name=self.COLLECTION_NAME,
+                        vectors_config=VectorParams(
+                            size=self.VECTOR_SIZE,
+                            distance=Distance.COSINE
+                        )
+                    )
+                    logger.info(f"Created Qdrant collection: {self.COLLECTION_NAME}")
             
             # Ensure text indexes exist for full-text search on metadata fields
             self._ensure_text_indexes()
@@ -2551,6 +2741,29 @@ class LlamaIndexRAG:
             # Metadata-only search: skip vector search entirely
             if metadata_only:
                 return self._metadata_search(k=k, **_fkw)
+            
+            # =================================================================
+            # Hybrid search (dense + sparse RRF fusion) — highest priority
+            # When rag_hybrid_enabled=true and the collection has sparse
+            # vectors, this replaces both vector search and fulltext search
+            # with a single Qdrant query that fuses both signal types.
+            # =================================================================
+            if self.HYBRID_ENABLED:
+                must_conditions = self._build_filter_conditions(**_fkw)
+                qdrant_filters = Filter(must=must_conditions) if must_conditions else None
+                hybrid_results = self._hybrid_search(
+                    query=query,
+                    k=k,
+                    qdrant_filters=qdrant_filters,
+                )
+                if hybrid_results:
+                    logger.info(
+                        f"Hybrid search for '{query[:50]}...' returned "
+                        f"{len(hybrid_results)} results"
+                    )
+                    return hybrid_results
+                # If hybrid search returns empty, fall through to standard paths
+                logger.debug("Hybrid search returned no results, falling back to standard")
             
             # =================================================================
             # Phase 4: QueryFusionRetriever (optional)
