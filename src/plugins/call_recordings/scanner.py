@@ -5,6 +5,7 @@ Discovers files, computes content hashes for deduplication, and extracts
 metadata from audio file tags (ID3/MP4) and filename patterns.
 """
 
+import errno
 import hashlib
 import logging
 import os
@@ -306,6 +307,9 @@ class LocalFileScanner:
             return []
 
         files: List[AudioFile] = []
+        locked_count = 0
+        error_count = 0
+
         for path in sorted(root.rglob("*")):
             if not path.is_file():
                 continue
@@ -317,8 +321,13 @@ class LocalFileScanner:
             try:
                 try:
                     stat = path.stat()
-                except OSError:
-                    logger.debug(f"Cannot stat {path}, skipping")
+                except OSError as e:
+                    if e.errno == errno.EDEADLK:
+                        locked_count += 1
+                        logger.debug(f"File locked by cloud sync (Errno 35): {path.name}")
+                    else:
+                        error_count += 1
+                        logger.debug(f"Cannot stat {path}: {e}")
                     continue
                 content_hash = compute_file_hash(str(path))
                 # Audio metadata extraction is non-critical — skip on lock errors
@@ -340,13 +349,26 @@ class LocalFileScanner:
                         file_metadata=file_meta,
                     )
                 )
+            except OSError as e:
+                if e.errno == errno.EDEADLK:
+                    locked_count += 1
+                    logger.debug(f"File locked by cloud sync (Errno 35): {path.name}")
+                else:
+                    error_count += 1
+                    logger.warning(f"Failed to scan file {path}: {e}")
+                continue
             except Exception as e:
+                error_count += 1
                 logger.warning(f"Failed to scan file {path}: {e}")
                 continue
 
-        logger.info(
-            f"Local scan found {len(files)} audio files in {self.source_path}"
-        )
+        summary = f"Local scan found {len(files)} audio files in {self.source_path}"
+        if locked_count:
+            summary += f" ({locked_count} skipped — locked by cloud sync)"
+        if error_count:
+            summary += f" ({error_count} errors)"
+        logger.info(summary)
+
         return files
 
     def download(self, audio_file: AudioFile) -> Path:

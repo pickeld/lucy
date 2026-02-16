@@ -11,10 +11,13 @@ Composable steps:
     sync_recordings()     — Legacy: scan + transcribe + auto-approve (all-in-one)
 """
 
+import errno
 import json
 import logging
 import os
 import re
+import shutil
+import tempfile
 import time
 import uuid
 from datetime import datetime
@@ -210,11 +213,15 @@ class CallRecordingSyncer:
         Reads the file record from the DB, runs Whisper, and stores
         the transcription result back in the DB with status 'transcribed'.
 
+        If the source file is locked (e.g. by Dropbox cloud sync), the file
+        is copied to a temporary location before passing to ffmpeg/Whisper.
+
         Args:
             content_hash: SHA256 content hash identifying the file
 
         Returns:
-            Dict with status and transcription summary
+            Dict with status and transcription summary.
+            On lock errors, includes ``"error_type": "file_locked"``.
         """
         record = recording_db.get_file(content_hash)
         if not record:
@@ -227,12 +234,55 @@ class CallRecordingSyncer:
             recording_db.update_status(content_hash, "error", "File not found on disk")
             return {"status": "error", "error": f"File not found: {file_path}"}
 
+        # Pre-check: can we actually read the file?
+        # Dropbox CloudStorage mounts may return Errno 35 (EDEADLK) for
+        # files still being synced.  If so, copy to /tmp first.
+        transcribe_path = Path(file_path)
+        tmp_path: Optional[Path] = None
+
+        try:
+            with open(file_path, "rb") as f:
+                f.read(1)  # probe readability
+        except OSError as e:
+            if e.errno == errno.EDEADLK:
+                # Try copying to a temp file to work around the lock
+                try:
+                    ext = Path(filename).suffix
+                    tmp_fd, tmp_str = tempfile.mkstemp(
+                        suffix=ext, prefix=f"call_rec_{content_hash[:12]}_"
+                    )
+                    os.close(tmp_fd)
+                    shutil.copy2(file_path, tmp_str)
+                    tmp_path = Path(tmp_str)
+                    transcribe_path = tmp_path
+                    logger.info(
+                        f"File locked by cloud sync, copied to temp: {filename}"
+                    )
+                except OSError as copy_err:
+                    logger.warning(
+                        f"Cannot read or copy locked file {filename}: {copy_err}"
+                    )
+                    error_msg = (
+                        "File is locked by cloud sync (Dropbox) — "
+                        "try again when sync completes"
+                    )
+                    recording_db.update_status(content_hash, "error", error_msg)
+                    return {
+                        "status": "error",
+                        "error": error_msg,
+                        "error_type": "file_locked",
+                    }
+            else:
+                logger.warning(f"Cannot read file {filename}: {e}")
+                recording_db.update_status(content_hash, "error", str(e))
+                return {"status": "error", "error": str(e)}
+
         # Mark as transcribing
         recording_db.update_status(content_hash, "transcribing")
 
         try:
             logger.info(f"Transcribing: {filename}")
-            transcription = self.transcriber.transcribe(Path(file_path))
+            transcription = self.transcriber.transcribe(transcribe_path)
 
             if not transcription.text or len(transcription.text.strip()) < MIN_CONTENT_CHARS:
                 recording_db.update_status(
@@ -275,9 +325,30 @@ class CallRecordingSyncer:
             }
 
         except Exception as e:
+            error_str = str(e)
+            # Detect ffmpeg "Resource deadlock avoided" buried in Whisper errors
+            if "Resource deadlock avoided" in error_str:
+                clean_msg = (
+                    "File is locked by cloud sync (Dropbox) — "
+                    "try again when sync completes"
+                )
+                logger.warning(f"Transcription hit file lock for {filename}")
+                recording_db.update_status(content_hash, "error", clean_msg)
+                return {
+                    "status": "error",
+                    "error": clean_msg,
+                    "error_type": "file_locked",
+                }
             logger.error(f"Transcription failed for {filename}: {e}")
-            recording_db.update_status(content_hash, "error", str(e))
-            return {"status": "error", "error": str(e)}
+            recording_db.update_status(content_hash, "error", error_str)
+            return {"status": "error", "error": error_str}
+        finally:
+            # Clean up temp file if we created one
+            if tmp_path and tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
 
     # -------------------------------------------------------------------------
     # Step 3: Approve (index into Qdrant)

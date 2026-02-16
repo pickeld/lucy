@@ -140,12 +140,39 @@ def delete_conversation_data(conversation_id: str) -> bool:
 # HEALTH CHECK — delegates to plugin registry
 # =============================================================================
 
+@app.route("/health/live", methods=["GET"])
+def health_live():
+    """Liveness probe — returns 200 if the process is running.
+
+    Used by Docker healthcheck so the container isn't marked unhealthy
+    when a transient dependency (Redis, Qdrant) is temporarily down.
+    """
+    return jsonify({"status": "alive"}), 200
+
+
 @app.route("/health", methods=["GET"])
 def health():
-    """Health check endpoint that verifies connectivity to dependencies."""
+    """Readiness check — verifies connectivity to all dependencies."""
+    import shutil
+
     status = {"status": "up", "dependencies": {}}
     overall_healthy = True
-    
+
+    # Check disk space — early warning before services start failing
+    try:
+        usage = shutil.disk_usage("/")
+        free_pct = usage.free / usage.total * 100
+        free_gb = usage.free / (1024 ** 3)
+        if free_pct < 5:
+            status["dependencies"]["disk"] = f"error: critically low ({free_pct:.1f}% free, {free_gb:.1f} GB)"
+            overall_healthy = False
+        elif free_pct < 15:
+            status["dependencies"]["disk"] = f"warning: {free_pct:.1f}% free ({free_gb:.1f} GB)"
+        else:
+            status["dependencies"]["disk"] = f"ok ({free_pct:.0f}% free)"
+    except Exception:
+        pass  # disk_usage may not work on all platforms
+
     # Check Redis
     try:
         redis_client = get_redis_client()

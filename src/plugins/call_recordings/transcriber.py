@@ -132,9 +132,11 @@ class WhisperTranscriber:
         logger.info(f"Transcribing: {path.name} ({path.stat().st_size / 1024:.0f} KB)")
 
         # Run Whisper transcription
+        # fp16=False avoids noisy "FP16 is not supported on CPU" warning
         result = self._model.transcribe(
             str(path),
             verbose=False,
+            fp16=False,
             # Enable word timestamps for better segment data
             word_timestamps=False,
         )
