@@ -1308,7 +1308,7 @@ class LlamaIndexRAG:
                 ),
             )
             
-            self.index.insert_nodes([chunk_node])
+            self.ingest_nodes([chunk_node])
             logger.info(
                 f"Created conversation chunk: {chat_name} ({len(messages)} msgs, "
                 f"{first_ts}→{last_ts})"
@@ -1432,10 +1432,13 @@ class LlamaIndexRAG:
     def add_node(self, node: TextNode) -> bool:
         """Add a pre-constructed TextNode to the vector store.
         
+        Routes through :meth:`ingest_nodes` so the node benefits from the
+        Redis-backed embedding cache and (when hybrid mode is enabled)
+        automatic sparse-vector upsert.
+        
         Proactively truncates node text that exceeds EMBEDDING_MAX_CHARS
         before calling the embedding API, avoiding a wasted API call on
-        oversized content.  Falls back to reactive truncation if a 400
-        "maximum context length" error still occurs.
+        oversized content.
         
         Args:
             node: LlamaIndex TextNode to add
@@ -1452,30 +1455,22 @@ class LlamaIndexRAG:
                 )
                 node.text = node.text[:self.EMBEDDING_MAX_CHARS]
             
-            self.index.insert_nodes([node])
+            self.ingest_nodes([node])
             logger.debug(f"Added node to RAG: {node.text[:50]}...")
             return True
         except Exception as e:
-            error_str = str(e)
-            # Detect embedding token-limit errors and retry with truncated text
-            if "maximum context length" in error_str and len(node.text) > self.EMBEDDING_MAX_CHARS:
-                logger.warning(
-                    f"Node text too long for embedding ({len(node.text)} chars), "
-                    f"truncating to {self.EMBEDDING_MAX_CHARS} chars and retrying"
-                )
-                try:
-                    node.text = node.text[:self.EMBEDDING_MAX_CHARS]
-                    self.index.insert_nodes([node])
-                    logger.debug(f"Added truncated node to RAG: {node.text[:50]}...")
-                    return True
-                except Exception as retry_err:
-                    logger.error(f"Failed to add truncated node: {retry_err}")
-                    return False
             logger.error(f"Failed to add node to vector store: {e}")
             return False
     
     def add_nodes(self, nodes: List[TextNode]) -> int:
-        """Add multiple nodes to the vector store in batch.
+        """Add multiple nodes to the vector store in batch (internal fallback).
+        
+        .. warning:: This method inserts directly via ``index.insert_nodes()``
+           and does **not** use the :class:`IngestionPipeline` (no embedding
+           cache, no automatic sparse-vector upsert).  It exists only as
+           the last-resort fallback inside :meth:`ingest_nodes`.
+        
+           External callers should use :meth:`ingest_nodes` instead.
         
         Args:
             nodes: List of TextNode instances
@@ -1514,7 +1509,7 @@ class LlamaIndexRAG:
                 raise TypeError(f"Expected BaseRAGDocument, got {type(document)}")
             
             node = document.to_llama_index_node()
-            self.index.insert_nodes([node])
+            self.ingest_nodes([node])
             
             logger.debug(f"Added {document.metadata.source.value}/{document.metadata.content_type.value} document to RAG: {document.get_embedding_text()[:50]}...")
             return True
@@ -1548,7 +1543,7 @@ class LlamaIndexRAG:
                 nodes.append(doc.to_llama_index_node())
             
             if nodes:
-                self.index.insert_nodes(nodes)
+                self.ingest_nodes(nodes)
                 logger.info(f"Added {len(nodes)} documents to RAG vector store")
             
             return len(nodes)
