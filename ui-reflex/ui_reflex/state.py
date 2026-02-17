@@ -1103,6 +1103,20 @@ class AppState(rx.State):
             self.active_filters = {}
         await self._refresh_conversations()
 
+    async def delete_all_chats(self):
+        """Delete all conversations and chat history."""
+        result = await api_client.delete_all_conversations()
+        if "error" in result:
+            self.settings_save_message = f"❌ {result['error']}"
+        else:
+            deleted = result.get("deleted", 0)
+            self.settings_save_message = f"✅ Deleted {deleted} conversation(s)"
+            self.conversation_id = ""
+            self.messages = []
+            self.active_filters = {}
+            self.conversations = []
+        await self._refresh_conversations()
+
     def start_rename(self, convo_id: str):
         """Enter rename mode for a conversation."""
         self.renaming_id = convo_id

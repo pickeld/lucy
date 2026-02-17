@@ -830,6 +830,47 @@ def _system_tab() -> rx.Component:
             ),
             reset_category="app",
         ),
+        # Danger Zone
+        rx.box(
+            rx.flex(
+                rx.icon("alert-triangle", size=18, class_name="text-red-500"),
+                rx.text(
+                    "Danger Zone",
+                    class_name="text-sm font-semibold text-red-600",
+                ),
+                align="center",
+                gap="2",
+                class_name="mb-3",
+            ),
+            rx.flex(
+                rx.box(
+                    rx.text(
+                        "Delete all chat conversations",
+                        class_name="text-sm font-medium text-gray-700",
+                    ),
+                    rx.text(
+                        "Permanently remove all conversations and chat history from the database. "
+                        "This does not affect the RAG knowledge base.",
+                        class_name="text-xs text-gray-400 mt-0.5",
+                    ),
+                    class_name="flex-1",
+                ),
+                rx.button(
+                    rx.icon("trash-2", size=14, class_name="mr-1"),
+                    "Delete All Chats",
+                    on_click=AppState.delete_all_chats,
+                    size="2",
+                    variant="outline",
+                    color_scheme="red",
+                    class_name="shrink-0",
+                ),
+                align="center",
+                gap="4",
+            ),
+            class_name=(
+                "bg-white rounded-xl border border-red-200 shadow-sm p-4 mt-4"
+            ),
+        ),
         direction="column",
     )
 

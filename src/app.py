@@ -786,6 +786,33 @@ def delete_conversation_endpoint(conversation_id: str):
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
+@app.route("/conversations", methods=["DELETE"])
+def delete_all_conversations_endpoint():
+    """Delete all conversations and their chat history (SQLite + Redis)."""
+    try:
+        # Delete all conversations from SQLite (messages cascade-deleted)
+        count = conversations_db.delete_all_conversations()
+
+        # Clear all Redis conversation filter keys
+        try:
+            redis = get_redis_client()
+            filter_keys = list(redis.scan_iter(f"{FILTER_KEY_PREFIX}*"))
+            if filter_keys:
+                redis.delete(*filter_keys)
+        except Exception as e:
+            logger.debug(f"Failed to clear Redis conversation filters: {e}")
+
+        logger.info(f"Deleted all conversations: {count} removed")
+        return jsonify({
+            "status": "ok",
+            "deleted": count,
+        }), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Delete all conversations error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
 # =============================================================================
 # CONFIGURATION MANAGEMENT ENDPOINTS
 # =============================================================================

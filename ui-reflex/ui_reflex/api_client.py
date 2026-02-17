@@ -98,6 +98,16 @@ async def delete_conversation(conversation_id: str) -> bool:
         return False
 
 
+async def delete_all_conversations() -> dict[str, Any]:
+    """Delete all conversations and chat history."""
+    try:
+        resp = await _get_client().delete("/conversations", timeout=30)
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error deleting all conversations: {e}")
+        return {"error": str(e)}
+
+
 async def export_conversation(conversation_id: str) -> dict[str, Any]:
     """Export a conversation as Markdown content for download."""
     try:

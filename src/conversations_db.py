@@ -365,6 +365,24 @@ def delete_conversation(conversation_id: str) -> bool:
         conn.close()
 
 
+def delete_all_conversations() -> int:
+    """Delete all conversations and their messages.
+
+    Returns:
+        Number of conversations deleted
+    """
+    conn = _get_connection()
+    try:
+        cursor = conn.execute("SELECT COUNT(*) as cnt FROM conversations")
+        count = cursor.fetchone()["cnt"]
+        # Messages are cascade-deleted via FK constraint
+        conn.execute("DELETE FROM conversations")
+        conn.commit()
+        return count
+    finally:
+        conn.close()
+
+
 def _generate_title(first_message: str, max_length: int = 60) -> str:
     """Generate a conversation title from the first user message.
 
