@@ -52,29 +52,6 @@ def _is_pyannote_available() -> bool:
         return False
 
 
-def _get_pyannote_version() -> Optional[Tuple[int, ...]]:
-    """Return the pyannote.audio version as a tuple, or None if unavailable."""
-    try:
-        import pyannote.audio
-        parts = pyannote.audio.__version__.split(".")
-        return tuple(int(x) for x in parts[:2])
-    except Exception:
-        return None
-
-
-def _verify_ffmpeg_available() -> bool:
-    """Check that ffmpeg/ffprobe is available on PATH."""
-    try:
-        subprocess.run(
-            ["ffmpeg", "-version"],
-            capture_output=True,
-            timeout=5,
-        )
-        return True
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-
-
 @dataclass
 class TranscriptionResult:
     """Result from Whisper transcription of an audio file.
@@ -341,15 +318,16 @@ class WhisperTranscriber:
         return None
 
     # ------------------------------------------------------------------
-    # Diarization pipeline loading (thread-safe, version-aware)
+    # Diarization pipeline loading (thread-safe)
     # ------------------------------------------------------------------
 
     def _ensure_diarization_loaded(self) -> bool:
         """Lazily load the pyannote diarization pipeline.
 
-        Thread-safe and version-aware:
-        - pyannote >= 4.0: uses ``token=`` kwarg, FFmpeg-only I/O
-        - pyannote 3.x: uses ``use_auth_token=`` kwarg
+        Thread-safe.  Authentication is handled entirely via the
+        ``HF_TOKEN`` environment variable — no token kwargs are passed
+        to ``Pipeline.from_pretrained()``, which avoids breakage across
+        pyannote / huggingface_hub version combinations.
 
         Returns True if the pipeline is ready, False if unavailable.
         """
@@ -385,10 +363,16 @@ class WhisperTranscriber:
                 return False
 
     def _load_diarization_pipeline(self, token: str) -> bool:
-        """Perform the actual pipeline loading with version-aware logic.
+        """Load the pyannote diarization pipeline.
+
+        Authentication is done exclusively via the ``HF_TOKEN``
+        environment variable.  This avoids the ``token=`` vs
+        ``use_auth_token=`` kwarg incompatibility across pyannote
+        and huggingface_hub versions (the root cause of the
+        "unexpected keyword argument 'token'" error).
 
         Args:
-            token: HuggingFace auth token
+            token: HuggingFace auth token (set into env, not passed as kwarg)
 
         Returns:
             True if pipeline loaded successfully
@@ -398,9 +382,6 @@ class WhisperTranscriber:
             Exception: on pipeline load failure
         """
         from pyannote.audio import Pipeline
-
-        pyannote_ver = _get_pyannote_version()
-        is_v4_plus = pyannote_ver is not None and pyannote_ver >= (4, 0)
 
         # --- Compatibility: torch.load weights_only (PyTorch 2.6+) ---
         # Scope the patch to pipeline loading only, then restore.
@@ -422,48 +403,21 @@ class WhisperTranscriber:
             pass
 
         try:
-            # --- Compatibility: huggingface_hub shim (only for pyannote < 4.0) ---
-            if not is_v4_plus:
-                self._apply_huggingface_hub_shim()
-
-            if is_v4_plus:
-                # pyannote 4+ requires FFmpeg, no soundfile backend
-                if not _verify_ffmpeg_available():
-                    logger.warning(
-                        "pyannote.audio >= 4.0 requires FFmpeg but it was not "
-                        "found on PATH. Diarization may fail."
-                    )
-
-            # --- Load the pipeline ---
-            # Ensure HF_TOKEN is in env — huggingface_hub reads it as fallback
+            # Ensure HF_TOKEN is in env — huggingface_hub reads it automatically.
+            # This is the ONLY auth mechanism we use; no token kwargs are passed
+            # to Pipeline.from_pretrained() to avoid version-dependent breakage.
             os.environ["HF_TOKEN"] = token
+            os.environ["HUGGING_FACE_HUB_TOKEN"] = token  # legacy env var fallback
 
             model_id = self._diarization_model
 
             logger.info(
-                f"Loading pyannote diarization pipeline '{model_id}'"
-                f" (pyannote version: {pyannote_ver})..."
+                f"Loading pyannote diarization pipeline '{model_id}' "
+                f"(auth via HF_TOKEN env var)..."
             )
 
-            # Support loading from a local directory (air-gapped)
-            if os.path.isdir(model_id):
-                self._diarization_pipeline = Pipeline.from_pretrained(model_id)
-            elif is_v4_plus:
-                # pyannote 4+ uses token= kwarg
-                self._diarization_pipeline = Pipeline.from_pretrained(
-                    model_id, token=token,
-                )
-            else:
-                # pyannote 3.x uses use_auth_token= kwarg
-                try:
-                    self._diarization_pipeline = Pipeline.from_pretrained(
-                        model_id, use_auth_token=token,
-                    )
-                except TypeError:
-                    # Some intermediate versions may already use token=
-                    self._diarization_pipeline = Pipeline.from_pretrained(
-                        model_id, token=token,
-                    )
+            # Load pipeline — auth handled by env var, no token kwarg needed
+            self._diarization_pipeline = Pipeline.from_pretrained(model_id)
 
             # Move to GPU if available
             try:
@@ -488,35 +442,6 @@ class WhisperTranscriber:
                     logger.debug("Restored original torch.load")
                 except ImportError:
                     pass
-
-    def _apply_huggingface_hub_shim(self):
-        """Patch huggingface_hub for pyannote 3.x use_auth_token compat.
-
-        huggingface_hub v1.0 removed ``use_auth_token`` in favor of
-        ``token``.  pyannote 3.x still passes the old kwarg.
-        Only applied when pyannote < 4.0.
-        """
-        try:
-            import huggingface_hub as _hfhub
-
-            _orig_dl = _hfhub.hf_hub_download
-
-            def _patched_dl(*args, **kwargs):
-                if "use_auth_token" in kwargs:
-                    val = kwargs.pop("use_auth_token")
-                    if val is not None:
-                        kwargs["token"] = val
-                return _orig_dl(*args, **kwargs)
-
-            if _orig_dl is not _patched_dl:
-                _hfhub.hf_hub_download = _patched_dl
-                if hasattr(_hfhub, "file_download"):
-                    _hfhub.file_download.hf_hub_download = _patched_dl
-                logger.debug(
-                    "Applied huggingface_hub use_auth_token shim (pyannote <4.0)"
-                )
-        except ImportError:
-            pass
 
     def _log_diarization_error(self, error: Exception):
         """Log a diarization loading error with actionable guidance.
