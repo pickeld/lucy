@@ -91,6 +91,69 @@ services:
       retries: 3
       start_period: 30s
 
+  # -------------------------------------------------------------------------
+  # Celery workers — durable background task execution
+  # -------------------------------------------------------------------------
+  # Default queue: WhatsApp message processing, entity extraction
+  worker:
+    build: .
+    container_name: lucy-worker
+    restart: unless-stopped
+    logging: *default-logging
+    env_file:
+      - .env
+    environment:
+      REDIS_HOST: redis
+      QDRANT_HOST: qdrant
+      WAHA_BASE_URL: "http://waha:3000"
+      CELERY_REDIS_DB: "1"
+    command: >
+      celery -A tasks worker
+      --loglevel=info
+      -Q default
+      --concurrency=4
+      -n worker-default@%h
+    volumes:
+      - ./src:/app/src
+      - ./.env:/app/.env:ro
+      - ./data:/app/data
+    depends_on:
+      redis:
+        condition: service_started
+      qdrant:
+        condition: service_started
+
+  # Heavy queue: Whisper transcription (concurrency=1 to avoid OOM)
+  worker-heavy:
+    build: .
+    container_name: lucy-worker-heavy
+    restart: unless-stopped
+    logging: *default-logging
+    env_file:
+      - .env
+    environment:
+      REDIS_HOST: redis
+      QDRANT_HOST: qdrant
+      WAHA_BASE_URL: "http://waha:3000"
+      CELERY_REDIS_DB: "1"
+    command: >
+      celery -A tasks worker
+      --loglevel=info
+      -Q heavy
+      --concurrency=1
+      -n worker-heavy@%h
+    volumes:
+      - ./src:/app/src
+      - ./.env:/app/.env:ro
+      - ./data:/app/data
+      - whisper_cache:/root/.cache
+      - /Users/dpickel/Library/CloudStorage/Dropbox/call_recordings:/app/data/call_recordings
+    depends_on:
+      redis:
+        condition: service_started
+      qdrant:
+        condition: service_started
+
   ui:
     build: ./ui-reflex
     container_name: lucy-ui

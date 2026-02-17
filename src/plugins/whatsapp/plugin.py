@@ -13,7 +13,6 @@ Provides:
 import base64
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Blueprint, Flask, jsonify, redirect, render_template_string, request
@@ -36,7 +35,6 @@ class WhatsAppPlugin(ChannelPlugin):
     """
     
     def __init__(self):
-        self._executor: Optional[ThreadPoolExecutor] = None
         self._rag = None
     
     # -------------------------------------------------------------------------
@@ -99,22 +97,15 @@ class WhatsAppPlugin(ChannelPlugin):
     # -------------------------------------------------------------------------
     
     def initialize(self, app: Flask) -> None:
-        """Initialize WhatsApp plugin — set up thread pool and RAG reference."""
-        self._executor = ThreadPoolExecutor(
-            max_workers=4, thread_name_prefix="wa-webhook"
-        )
-        
+        """Initialize WhatsApp plugin — set up RAG reference."""
         # Get RAG instance (lazy — don't import at module level)
         from llamaindex_rag import get_rag
         self._rag = get_rag()
         
-        logger.info("WhatsApp plugin initialized")
+        logger.info("WhatsApp plugin initialized (Celery worker handles processing)")
     
     def shutdown(self) -> None:
-        """Shutdown WhatsApp plugin — clean up thread pool."""
-        if self._executor:
-            self._executor.shutdown(wait=False)
-            self._executor = None
+        """Shutdown WhatsApp plugin."""
         self._rag = None
         logger.info("WhatsApp plugin shut down")
     
@@ -131,7 +122,13 @@ class WhatsAppPlugin(ChannelPlugin):
         
         @bp.route("/webhook", methods=["POST"])
         def webhook():
-            """Receive WhatsApp webhook events from WAHA."""
+            """Receive WhatsApp webhook events from WAHA.
+            
+            Enqueues a Celery task and returns 200 immediately.
+            The actual message processing (media download, Vision/Whisper
+            enrichment, RAG storage, entity extraction) happens in the
+            Celery worker via ``tasks.whatsapp.process_whatsapp_message``.
+            """
             request_data = request.json or {}
             payload = request_data.get("payload", {})
             
@@ -139,14 +136,14 @@ class WhatsAppPlugin(ChannelPlugin):
                 if not plugin.should_process(payload):
                     return jsonify({"status": "ok"}), 200
                 
-                # Submit to background thread pool
-                if plugin._executor:
-                    plugin._executor.submit(plugin._process_webhook_payload, payload)
+                # Enqueue to Celery worker for durable processing
+                from tasks.whatsapp import process_whatsapp_message
+                process_whatsapp_message.delay(payload)
                 
                 return jsonify({"status": "ok"}), 200
             except Exception as e:
                 trace = traceback.format_exc()
-                logger.error(f"Error submitting webhook: {e} ::: {payload}\n{trace}")
+                logger.error(f"Error enqueuing webhook: {e} ::: {payload}\n{trace}")
                 return jsonify({"error": str(e), "traceback": trace}), 500
         
         # --- WAHA Session Management ---
@@ -300,7 +297,8 @@ class WhatsAppPlugin(ChannelPlugin):
         """Process a WhatsApp webhook payload and return a RAG document.
         
         This is the high-level interface called by the registry.
-        For the actual background processing, see _process_webhook_payload().
+        Background processing is handled by the Celery task
+        ``tasks.whatsapp.process_whatsapp_message``.
         """
         from plugins.whatsapp.handler import create_whatsapp_message
         
@@ -309,76 +307,3 @@ class WhatsAppPlugin(ChannelPlugin):
             thread_id = (msg.group.id if msg.is_group else msg.contact.id) or "unknown"
             return msg.to_rag_document(thread_id=thread_id)
         return None
-    
-    def _process_webhook_payload(self, payload: Dict[str, Any]) -> None:
-        """Process a webhook payload in a background thread.
-        
-        Handles the heavy work: creating the message object (which may
-        trigger Whisper transcription or GPT-4 Vision), then storing
-        the result in the RAG vector store.
-        """
-        try:
-            from plugins.whatsapp.handler import create_whatsapp_message
-            
-            msg = create_whatsapp_message(payload)
-            
-            # Determine chat identification
-            if msg.is_group:
-                chat_id = msg.group.id
-                chat_name = msg.group.name
-            elif msg.from_me and msg.recipient:
-                chat_id = msg.recipient.number or msg.recipient.id
-                chat_name = msg.recipient.name
-            else:
-                chat_id = msg.contact.number
-                chat_name = msg.contact.name
-            
-            sender = str(msg.contact.name or "Unknown")
-            logger.info(f"Processing message: {chat_name} ({chat_id}) - {msg.message}")
-            
-            # Store message in RAG vector store
-            if msg.message and self._rag:
-                # Pass media info for correct content_type (voice, image, etc.)
-                has_media = getattr(msg, "has_media", False)
-                media_type = getattr(msg, "media_type", None)
-                media_url = getattr(msg, "media_url", None)
-                media_path = getattr(msg, "saved_path", None)
-                
-                # Pass the handler's content_type so that even if media
-                # download failed (has_media=False), the correct type
-                # (voice, image, etc.) is preserved in Qdrant metadata.
-                handler_content_type = getattr(msg, "content_type", None)
-                ct_value = handler_content_type.value if handler_content_type else None
-                
-                self._rag.add_message(
-                    thread_id=chat_id or "UNKNOWN",
-                    chat_id=chat_id or "UNKNOWN",
-                    chat_name=chat_name or "UNKNOWN",
-                    is_group=msg.is_group,
-                    sender=sender,
-                    message=msg.message,
-                    timestamp=str(msg.timestamp) if msg.timestamp else "0",
-                    has_media=has_media,
-                    media_type=media_type,
-                    media_url=media_url,
-                    media_path=media_path,
-                    message_content_type=ct_value,
-                )
-                logger.debug(f"Stored message: {chat_name} || {msg}")
-                
-                # Entity extraction (async, non-blocking — failures are logged and ignored)
-                try:
-                    from entity_extractor import maybe_extract_entities
-                    maybe_extract_entities(
-                        sender=sender,
-                        chat_name=chat_name or "Unknown",
-                        message=msg.message,
-                        timestamp=str(msg.timestamp) if msg.timestamp else "0",
-                        chat_id=chat_id or "",
-                        whatsapp_id=msg.contact.id,
-                    )
-                except Exception as ee:
-                    logger.debug(f"Entity extraction failed (non-critical): {ee}")
-        except Exception as e:
-            trace = traceback.format_exc()
-            logger.error(f"Background webhook processing error: {e} ::: {payload}\n{trace}")

@@ -167,8 +167,7 @@ class WhisperTranscriber:
         """Lazily load the Whisper model on first use.
 
         Thread-safe: uses a lock to prevent double-loads when called
-        from concurrent threads (e.g. the ``ThreadPoolExecutor`` in
-        ``CallRecordingSyncer``).
+        from concurrent Celery workers or threads.
 
         Device selection strategy:
         - ``device="auto"`` → try GPU first, fall back to CPU on any error

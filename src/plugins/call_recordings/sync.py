@@ -24,7 +24,6 @@ import shutil
 import tempfile
 import time
 import uuid
-from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -67,11 +66,6 @@ class CallRecordingSyncer:
         rag: LlamaIndexRAG instance
     """
 
-    # One transcription at a time — Whisper is GPU/CPU-bound and concurrent
-    # runs would OOM or thrash.  The single worker thread is enough to keep
-    # the Flask event loop unblocked.
-    _POOL_WORKERS = 1
-
     def __init__(
         self,
         scanner: LocalFileScanner,
@@ -84,10 +78,6 @@ class CallRecordingSyncer:
         self._syncing = False
         self._last_sync = 0
         self._recording_count = 0
-        self._pool: Optional[ThreadPoolExecutor] = ThreadPoolExecutor(
-            max_workers=self._POOL_WORKERS,
-            thread_name_prefix="whisper",
-        )
 
     @property
     def is_syncing(self) -> bool:
@@ -106,64 +96,39 @@ class CallRecordingSyncer:
     # -------------------------------------------------------------------------
 
     def shutdown(self) -> None:
-        """Shut down the background thread pool.
+        """Shutdown hook — called by the plugin's ``shutdown()`` method.
 
-        Waits for any in-progress transcription to finish, then releases
-        the pool.  Called by the plugin's ``shutdown()`` hook.
+        No thread pool to clean up since transcription runs in Celery workers.
         """
-        if self._pool:
-            logger.info("Shutting down transcription thread pool...")
-            self._pool.shutdown(wait=True)
-            self._pool = None
-            logger.info("Transcription thread pool shut down")
+        logger.info("CallRecordingSyncer shut down")
 
     # -------------------------------------------------------------------------
-    # Async transcription helpers
+    # Async transcription via Celery
     # -------------------------------------------------------------------------
 
-    def transcribe_file_async(self, content_hash: str) -> Optional[Future]:
-        """Submit a transcription job to the background thread pool.
+    def transcribe_file_async(self, content_hash: str) -> Optional[str]:
+        """Submit a transcription job to the Celery ``heavy`` queue.
 
-        Returns immediately.  The job updates the recording DB status
-        as it progresses (transcribing → transcribed / error).
+        Returns immediately.  The Celery worker updates the recording DB
+        status as it progresses (transcribing → transcribed / error).
 
         Args:
             content_hash: SHA256 content hash identifying the file
 
         Returns:
-            A ``Future`` for the background job, or ``None`` if the pool
-            is not available.
+            The Celery task ID string, or ``None`` if the job was not queued.
         """
-        if not self._pool:
-            logger.warning("Thread pool not available — running transcription synchronously")
-            self.transcribe_file(content_hash)
-            return None
-
         # Pre-validate the record exists before submitting
         record = recording_db.get_file(content_hash)
         if not record:
             logger.warning(f"Cannot queue transcription — file not found: {content_hash}")
             return None
 
-        logger.info(f"Queuing background transcription for {record.get('filename', content_hash)}")
+        logger.info(f"Queuing Celery transcription for {record.get('filename', content_hash)}")
 
-        future = self._pool.submit(self._transcribe_worker, content_hash)
-        return future
-
-    def _transcribe_worker(self, content_hash: str) -> Dict:
-        """Background worker that runs ``transcribe_file`` in the thread pool.
-
-        Catches all exceptions so the thread pool stays healthy.
-        """
-        try:
-            return self.transcribe_file(content_hash)
-        except Exception as e:
-            logger.error(f"Background transcription failed for {content_hash}: {e}")
-            try:
-                recording_db.update_status(content_hash, "error", str(e))
-            except Exception:
-                pass
-            return {"status": "error", "error": str(e)}
+        from tasks.transcription import transcribe_recording
+        result = transcribe_recording.delay(content_hash)
+        return result.id
 
     def scan_and_register(self, auto_transcribe: bool = True) -> Dict:
         """Discover audio files and register them in the tracking DB.
