@@ -264,6 +264,31 @@ class WhisperTranscriber:
             except ImportError:
                 pass
 
+            # Compatibility shim: pyannote.audio 3.x passes deprecated
+            # use_auth_token to huggingface_hub which removed it in v1.0.
+            # Patch hf_hub_download to accept and convert the old kwarg.
+            try:
+                import huggingface_hub as _hfhub
+
+                _orig_dl = _hfhub.hf_hub_download
+                def _patched_dl(*args, **kwargs):
+                    if "use_auth_token" in kwargs:
+                        val = kwargs.pop("use_auth_token")
+                        # Only set token if explicitly provided (not None)
+                        # so the HF_TOKEN env var can still be used as fallback
+                        if val is not None:
+                            kwargs["token"] = val
+                    return _orig_dl(*args, **kwargs)
+
+                if _orig_dl is not _patched_dl:
+                    _hfhub.hf_hub_download = _patched_dl
+                    # Also patch the internal module copy that pyannote may import from
+                    if hasattr(_hfhub, "file_download"):
+                        _hfhub.file_download.hf_hub_download = _patched_dl
+                    logger.debug("Applied huggingface_hub use_auth_token compatibility shim")
+            except ImportError:
+                pass
+
             from pyannote.audio import Pipeline
 
             # Ensure HF_TOKEN is in env — huggingface_hub reads it automatically
