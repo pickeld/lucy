@@ -136,11 +136,14 @@ SETTING_LABELS: dict[str, str] = {
     "gmail_include_attachments": "Include Attachments",
     # Call Recordings plugin
     "call_recordings_source_path": "Source Path",
+    "call_recordings_transcription_provider": "Transcription Provider",
     "call_recordings_whisper_model": "Whisper Model Size",
+    "call_recordings_compute_type": "Compute Type",
     "call_recordings_file_extensions": "Audio File Extensions",
     "call_recordings_max_files": "Max Files per Sync",
     "call_recordings_sync_interval": "Sync Interval (seconds)",
     "call_recordings_enable_diarization": "Speaker Diarization",
+    "call_recordings_assemblyai_model": "AssemblyAI Model",
 }
 
 

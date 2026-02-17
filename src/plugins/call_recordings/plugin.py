@@ -1,8 +1,9 @@
 """Call Recordings plugin for transcribing and indexing audio recordings.
 
 Scans a local directory for audio call recordings, transcribes them
-using local OpenAI Whisper, and provides a review-and-approve workflow
-before indexing transcriptions into the Qdrant vector store.
+using local OpenAI Whisper or remote AssemblyAI, and provides a
+review-and-approve workflow before indexing transcriptions into the
+Qdrant vector store.
 """
 
 import logging
@@ -26,6 +27,9 @@ from .transcriber import (
 
 logger = logging.getLogger(__name__)
 
+# Default AssemblyAI model
+DEFAULT_ASSEMBLYAI_MODEL = "universal-2"
+
 
 class CallRecordingsPlugin(ChannelPlugin):
     """Call recordings integration with review-and-approve workflow.
@@ -36,7 +40,7 @@ class CallRecordingsPlugin(ChannelPlugin):
 
     def __init__(self):
         self._scanner: Optional[LocalFileScanner] = None
-        self._transcriber: Optional[WhisperTranscriber] = None
+        self._transcriber = None  # WhisperTranscriber or AssemblyAITranscriber
         self._syncer: Optional[CallRecordingSyncer] = None
         self._rag = None
 
@@ -58,13 +62,14 @@ class CallRecordingsPlugin(ChannelPlugin):
 
     @property
     def version(self) -> str:
-        return "2.0.0"
+        return "2.1.0"
 
     @property
     def description(self) -> str:
         return (
             "Scan a local directory for audio call recordings, "
-            "transcribe with Whisper, review, and index for RAG retrieval"
+            "transcribe with Whisper (local) or AssemblyAI (remote), "
+            "review, and index for RAG retrieval"
         )
 
     # -------------------------------------------------------------------------
@@ -80,19 +85,28 @@ class CallRecordingsPlugin(ChannelPlugin):
                 "text",
                 "Local directory path to scan for audio recordings",
             ),
+            # --- Transcription provider ---
+            (
+                "call_recordings_transcription_provider",
+                "local",
+                "call_recordings",
+                "select",
+                "Transcription engine: 'local' (Whisper on this machine) or 'assemblyai' (remote API with built-in diarization)",
+            ),
+            # --- Local Whisper settings ---
             (
                 "call_recordings_whisper_model",
                 DEFAULT_MODEL_SIZE,
                 "call_recordings",
                 "select",
-                "Whisper model size: small (fast), medium (balanced), large (accurate)",
+                "Whisper model size (local only): small (fast), medium (balanced), large (accurate)",
             ),
             (
                 "call_recordings_compute_type",
                 "auto",
                 "call_recordings",
                 "select",
-                "Compute type for Whisper inference. 'auto' picks the fastest for your hardware",
+                "Compute type for Whisper inference (local only). 'auto' picks the fastest for your hardware",
             ),
             (
                 "call_recordings_whisper_language",
@@ -127,33 +141,52 @@ class CallRecordingsPlugin(ChannelPlugin):
                 "true",
                 "call_recordings",
                 "bool",
-                "Enable speaker diarization (identify Speaker A vs Speaker B). Requires HF token and pyannote.audio",
+                "Enable speaker diarization (identify Speaker A vs Speaker B). Local: requires HF token + pyannote. AssemblyAI: built-in.",
             ),
             (
                 "call_recordings_diarization_model",
                 DEFAULT_DIARIZATION_MODEL,
                 "call_recordings",
                 "text",
-                "Diarization pipeline name or local path (e.g. pyannote/speaker-diarization-3.1 or pyannote/speaker-diarization-community-1)",
+                "Diarization pipeline (local only): pyannote model name or local path",
+            ),
+            # --- AssemblyAI settings ---
+            (
+                "call_recordings_assemblyai_model",
+                DEFAULT_ASSEMBLYAI_MODEL,
+                "call_recordings",
+                "select",
+                "AssemblyAI speech model: 'universal-2' (fast, $0.015/min) or 'universal-3-pro' (best, $0.12/min)",
+            ),
+            # --- API Keys ---
+            (
+                "assemblyai_api_key",
+                "",
+                "secrets",
+                "secret",
+                "AssemblyAI API key for remote transcription (get one at https://www.assemblyai.com/dashboard/signup)",
             ),
             (
                 "hf_token",
                 "",
                 "secrets",
                 "secret",
-                "Hugging Face token for model downloads and speaker diarization (get one at https://huggingface.co/settings/tokens)",
+                "Hugging Face token for local model downloads and speaker diarization (get one at https://huggingface.co/settings/tokens)",
             ),
         ]
 
     def get_select_options(self) -> Dict[str, List[str]]:
         return {
+            "call_recordings_transcription_provider": ["local", "assemblyai"],
             "call_recordings_whisper_model": ["small", "medium", "large"],
             "call_recordings_compute_type": ["auto", "int8", "float16", "float32"],
+            "call_recordings_assemblyai_model": ["universal-2", "universal-3-pro"],
         }
 
     def get_env_key_map(self) -> Dict[str, str]:
         return {
             "call_recordings_source_path": "CALL_RECORDINGS_SOURCE_PATH",
+            "call_recordings_transcription_provider": "CALL_RECORDINGS_TRANSCRIPTION_PROVIDER",
             "call_recordings_whisper_model": "CALL_RECORDINGS_WHISPER_MODEL",
             "call_recordings_compute_type": "CALL_RECORDINGS_COMPUTE_TYPE",
             "call_recordings_whisper_language": "CALL_RECORDINGS_WHISPER_LANGUAGE",
@@ -161,6 +194,8 @@ class CallRecordingsPlugin(ChannelPlugin):
             "call_recordings_max_files": "CALL_RECORDINGS_MAX_FILES",
             "call_recordings_sync_interval": "CALL_RECORDINGS_SYNC_INTERVAL",
             "call_recordings_diarization_model": "CALL_RECORDINGS_DIARIZATION_MODEL",
+            "call_recordings_assemblyai_model": "CALL_RECORDINGS_ASSEMBLYAI_MODEL",
+            "assemblyai_api_key": "ASSEMBLYAI_API_KEY",
             "hf_token": "HF_TOKEN",
         }
 
@@ -172,7 +207,13 @@ class CallRecordingsPlugin(ChannelPlugin):
     # -------------------------------------------------------------------------
 
     def initialize(self, app: Flask) -> None:
-        """Initialize the call recordings plugin."""
+        """Initialize the call recordings plugin.
+
+        Reads the ``call_recordings_transcription_provider`` setting and
+        instantiates the appropriate transcriber:
+        - ``local``: WhisperTranscriber (faster-whisper + optional pyannote)
+        - ``assemblyai``: AssemblyAITranscriber (remote API with built-in diarization)
+        """
         import settings_db
 
         # Clean up obsolete settings from prior versions
@@ -184,14 +225,6 @@ class CallRecordingsPlugin(ChannelPlugin):
         source_path = (
             settings_db.get_setting_value("call_recordings_source_path")
             or "/app/data/call_recordings"
-        )
-        whisper_model = (
-            settings_db.get_setting_value("call_recordings_whisper_model")
-            or DEFAULT_MODEL_SIZE
-        )
-        compute_type = (
-            settings_db.get_setting_value("call_recordings_compute_type")
-            or "auto"
         )
         extensions_str = (
             settings_db.get_setting_value("call_recordings_file_extensions")
@@ -210,28 +243,28 @@ class CallRecordingsPlugin(ChannelPlugin):
         )
         logger.info(f"Call Recordings: Using local source at '{source_path}'")
 
-        hf_token = settings_db.get_setting_value("hf_token") or ""
+        # --- Transcription provider selection ---
+        provider = (
+            settings_db.get_setting_value("call_recordings_transcription_provider")
+            or "local"
+        ).lower().strip()
+
         enable_diarization = (
             settings_db.get_setting_value("call_recordings_enable_diarization") or "true"
         ).lower() in ("true", "1", "yes")
-        diarization_model = (
-            settings_db.get_setting_value("call_recordings_diarization_model")
-            or DEFAULT_DIARIZATION_MODEL
-        )
 
-        self._transcriber = WhisperTranscriber(
-            model_size=whisper_model,
-            hf_token=hf_token if hf_token else None,
-            enable_diarization=enable_diarization,
-            compute_type=compute_type,
-            diarization_model=diarization_model,
-        )
-        diar_status = "enabled" if enable_diarization else "disabled"
-        logger.info(
-            f"Call Recordings: Whisper model '{whisper_model}' "
-            f"(compute={compute_type}), diarization {diar_status} "
-            f"(pipeline={diarization_model})"
-        )
+        language = (
+            settings_db.get_setting_value("call_recordings_whisper_language") or ""
+        ).strip() or None
+
+        if provider == "assemblyai":
+            self._transcriber = self._create_assemblyai_transcriber(
+                settings_db, enable_diarization, language,
+            )
+        else:
+            self._transcriber = self._create_local_transcriber(
+                settings_db, enable_diarization,
+            )
 
         from llamaindex_rag import get_rag
 
@@ -243,7 +276,72 @@ class CallRecordingsPlugin(ChannelPlugin):
             rag=self._rag,
         )
 
-        logger.info("Call Recordings plugin initialized (v2 — review workflow)")
+        logger.info(
+            f"Call Recordings plugin initialized (v2.1 — {provider} transcription)"
+        )
+
+    def _create_local_transcriber(self, settings_db, enable_diarization: bool):
+        """Create a local WhisperTranscriber."""
+        whisper_model = (
+            settings_db.get_setting_value("call_recordings_whisper_model")
+            or DEFAULT_MODEL_SIZE
+        )
+        compute_type = (
+            settings_db.get_setting_value("call_recordings_compute_type")
+            or "auto"
+        )
+        hf_token = settings_db.get_setting_value("hf_token") or ""
+        diarization_model = (
+            settings_db.get_setting_value("call_recordings_diarization_model")
+            or DEFAULT_DIARIZATION_MODEL
+        )
+
+        transcriber = WhisperTranscriber(
+            model_size=whisper_model,
+            hf_token=hf_token if hf_token else None,
+            enable_diarization=enable_diarization,
+            compute_type=compute_type,
+            diarization_model=diarization_model,
+        )
+        diar_status = "enabled" if enable_diarization else "disabled"
+        logger.info(
+            f"Call Recordings: Local Whisper model '{whisper_model}' "
+            f"(compute={compute_type}), diarization {diar_status} "
+            f"(pipeline={diarization_model})"
+        )
+        return transcriber
+
+    def _create_assemblyai_transcriber(
+        self, settings_db, enable_diarization: bool, language: Optional[str],
+    ):
+        """Create a remote AssemblyAITranscriber."""
+        from .remote_transcriber import AssemblyAITranscriber
+
+        api_key = settings_db.get_setting_value("assemblyai_api_key") or ""
+        if not api_key.strip():
+            logger.warning(
+                "AssemblyAI selected but no API key configured — "
+                "set it in Settings → API Keys. Falling back to local Whisper."
+            )
+            return self._create_local_transcriber(settings_db, enable_diarization)
+
+        model = (
+            settings_db.get_setting_value("call_recordings_assemblyai_model")
+            or DEFAULT_ASSEMBLYAI_MODEL
+        )
+
+        transcriber = AssemblyAITranscriber(
+            api_key=api_key.strip(),
+            model=model,
+            language=language,
+            enable_diarization=enable_diarization,
+        )
+        diar_status = "enabled" if enable_diarization else "disabled"
+        logger.info(
+            f"Call Recordings: AssemblyAI model '{model}', "
+            f"diarization {diar_status}"
+        )
+        return transcriber
 
     def shutdown(self) -> None:
         if self._syncer:
