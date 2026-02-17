@@ -245,6 +245,8 @@ class AppState(rx.State):
     call_recordings_files_loading: bool = False
     call_recordings_counts: dict[str, str] = {}
     call_recordings_scan_message: str = ""
+    call_recordings_filter_name: str = ""
+    call_recordings_filter_status: str = ""  # "" = all
 
     # --- Tab state ---
     settings_tab: str = "ai"   # Active main tab
@@ -291,6 +293,14 @@ class AppState(rx.State):
     def set_sidebar_search(self, value: str):
         """Set the sidebar search filter text."""
         self.sidebar_search = value
+
+    def set_call_recordings_filter_name(self, value: str):
+        """Set the call recordings name filter."""
+        self.call_recordings_filter_name = value
+
+    def set_call_recordings_filter_status(self, value: str):
+        """Set the call recordings status filter."""
+        self.call_recordings_filter_status = value
 
     def set_rename_text(self, value: str):
         """Set the conversation rename text."""
@@ -551,6 +561,26 @@ class AppState(rx.State):
     @rx.var(cache=True)
     def has_conversations(self) -> bool:
         return len(self.conversations) > 0
+
+    @rx.var(cache=True)
+    def filtered_recording_files(self) -> list[dict[str, str]]:
+        """Call recording files filtered by name and status."""
+        files = self.call_recordings_files
+        needle = self.call_recordings_filter_name.strip().lower()
+        status = self.call_recordings_filter_status.strip().lower()
+
+        if needle:
+            files = [
+                f for f in files
+                if needle in (f.get("filename", "") or "").lower()
+                or needle in (f.get("contact_name", "") or "").lower()
+                or needle in (f.get("phone_number", "") or "").lower()
+            ]
+
+        if status:
+            files = [f for f in files if f.get("status", "") == status]
+
+        return files
 
     @rx.var(cache=True)
     def health_label(self) -> str:

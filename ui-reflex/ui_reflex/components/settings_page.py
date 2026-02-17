@@ -571,11 +571,41 @@ def _call_recordings_actions() -> rx.Component:
             ),
             class_name="mt-3",
         ),
-        # Recordings table
+        # Recordings table with filters
         rx.box(
-            rx.text(
-                "Recordings",
-                class_name="text-sm font-medium text-gray-700 mb-2",
+            rx.flex(
+                rx.text(
+                    "Recordings",
+                    class_name="text-sm font-medium text-gray-700",
+                ),
+                # Filter controls
+                rx.el.input(
+                    type="text",
+                    placeholder="Search by name, phone…",
+                    value=AppState.call_recordings_filter_name,
+                    on_change=AppState.set_call_recordings_filter_name,  # type: ignore[arg-type]
+                    class_name=(
+                        "text-xs bg-gray-50 border border-gray-200 rounded "
+                        "px-2 py-1 w-40 outline-none focus:border-accent"
+                    ),
+                ),
+                rx.select(
+                    ["All", "pending", "transcribing", "transcribed", "approved", "error"],
+                    value=rx.cond(
+                        AppState.call_recordings_filter_status == "",
+                        "All",
+                        AppState.call_recordings_filter_status,
+                    ),
+                    on_change=lambda v: AppState.set_call_recordings_filter_status(  # type: ignore
+                        rx.cond(v == "All", "", v)  # type: ignore[arg-type]
+                    ),
+                    size="1",
+                    variant="ghost",
+                    class_name="text-xs",
+                ),
+                align="center",
+                gap="3",
+                class_name="mb-2",
             ),
             rx.cond(
                 AppState.call_recordings_files_loading,
@@ -586,16 +616,16 @@ def _call_recordings_actions() -> rx.Component:
                     class_name="py-4",
                 ),
                 rx.cond(
-                    AppState.call_recordings_files.length() > 0,  # type: ignore[union-attr]
+                    AppState.filtered_recording_files.length() > 0,  # type: ignore[union-attr]
                     rx.box(
                         rx.foreach(
-                            AppState.call_recordings_files,
+                            AppState.filtered_recording_files,
                             _recording_row,
                         ),
                     ),
                     rx.text(
                         "No recordings found. Upload files or click "
-                        "'Scan & Transcribe' to discover recordings.",
+                        "'Scan Files' to discover recordings.",
                         class_name="text-sm text-gray-400 italic py-4",
                     ),
                 ),
