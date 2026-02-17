@@ -65,7 +65,7 @@ class WhisperTranscriber:
             - large:  ~5 GB RAM, best accuracy, slowest
     """
 
-    def __init__(self, model_size: str = DEFAULT_MODEL_SIZE):
+    def __init__(self, model_size: str = DEFAULT_MODEL_SIZE, hf_token: Optional[str] = None):
         size = model_size.lower().strip()
         if size not in VALID_MODEL_SIZES:
             logger.warning(
@@ -75,6 +75,7 @@ class WhisperTranscriber:
             size = DEFAULT_MODEL_SIZE
         self._model_size = size
         self._model = None
+        self._hf_token = hf_token or None
 
     @property
     def model_size(self) -> str:
@@ -117,6 +118,12 @@ class WhisperTranscriber:
                 f"torch not available for device detection — "
                 f"using CPU with {compute_type} quantization"
             )
+
+        # Set HF_TOKEN for authenticated model downloads (higher rate limits)
+        if self._hf_token:
+            import os
+            os.environ["HF_TOKEN"] = self._hf_token
+            logger.info("HF_TOKEN set for model download")
 
         logger.info(
             f"Loading faster-whisper model '{self._model_size}' "

@@ -103,6 +103,13 @@ class CallRecordingsPlugin(ChannelPlugin):
                 "int",
                 "Sync interval in seconds (0 = manual only)",
             ),
+            (
+                "hf_token",
+                "",
+                "secrets",
+                "secret",
+                "Hugging Face token for faster model downloads (get one at https://huggingface.co/settings/tokens)",
+            ),
         ]
 
     def get_select_options(self) -> Dict[str, List[str]]:
@@ -117,6 +124,7 @@ class CallRecordingsPlugin(ChannelPlugin):
             "call_recordings_file_extensions": "CALL_RECORDINGS_FILE_EXTENSIONS",
             "call_recordings_max_files": "CALL_RECORDINGS_MAX_FILES",
             "call_recordings_sync_interval": "CALL_RECORDINGS_SYNC_INTERVAL",
+            "hf_token": "HF_TOKEN",
         }
 
     def get_category_meta(self) -> Dict[str, Dict[str, str]]:
@@ -161,7 +169,11 @@ class CallRecordingsPlugin(ChannelPlugin):
         )
         logger.info(f"Call Recordings: Using local source at '{source_path}'")
 
-        self._transcriber = WhisperTranscriber(model_size=whisper_model)
+        hf_token = settings_db.get_setting_value("hf_token") or ""
+        self._transcriber = WhisperTranscriber(
+            model_size=whisper_model,
+            hf_token=hf_token if hf_token else None,
+        )
         logger.info(f"Call Recordings: Whisper model configured as '{whisper_model}'")
 
         from llamaindex_rag import get_rag
