@@ -50,3 +50,9 @@ icalendar>=5.0.0
 # faster-whisper uses CTranslate2 backend: 4-6× faster than openai-whisper on CPU
 faster-whisper>=1.0.0
 mutagen>=1.47
+
+# Speaker diarization (optional but recommended for call recordings)
+# Requires accepting pyannote model terms at https://huggingface.co/pyannote/speaker-diarization-3.1
+# and setting HF_TOKEN in Settings → API Keys
+torch>=2.0
+pyannote.audio>=3.1

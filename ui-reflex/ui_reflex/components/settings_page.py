@@ -699,12 +699,32 @@ def _recording_row(item: dict) -> rx.Component:
                     gap="2",
                     class_name="mt-1",
                 ),
-                # Transcript preview
+                # Transcript preview (expandable)
                 rx.cond(
                     item["transcript_text"] != "",
-                    rx.text(
-                        item["transcript_text"][:200],  # type: ignore[index]
-                        class_name="text-xs text-gray-500 mt-1 line-clamp-2",
+                    rx.el.details(
+                        rx.el.summary(
+                            rx.text(
+                                item["transcript_text"][:200],  # type: ignore[index]
+                                class_name="text-xs text-gray-500 line-clamp-2 inline",
+                            ),
+                            class_name=(
+                                "text-xs text-blue-500 cursor-pointer "
+                                "hover:text-blue-700 mt-1 list-none "
+                                "[&::-webkit-details-marker]:hidden"
+                            ),
+                        ),
+                        rx.box(
+                            rx.text(
+                                item["transcript_text"],
+                                class_name="text-xs text-gray-600 whitespace-pre-wrap",
+                            ),
+                            class_name=(
+                                "mt-2 p-2 bg-gray-50 rounded border border-gray-200 "
+                                "max-h-64 overflow-y-auto"
+                            ),
+                        ),
+                        class_name="mt-1",
                     ),
                     rx.fragment(),
                 ),

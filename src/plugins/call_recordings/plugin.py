@@ -104,11 +104,18 @@ class CallRecordingsPlugin(ChannelPlugin):
                 "Sync interval in seconds (0 = manual only)",
             ),
             (
+                "call_recordings_enable_diarization",
+                "true",
+                "call_recordings",
+                "bool",
+                "Enable speaker diarization (identify Speaker A vs Speaker B). Requires HF token and pyannote.audio",
+            ),
+            (
                 "hf_token",
                 "",
                 "secrets",
                 "secret",
-                "Hugging Face token for faster model downloads (get one at https://huggingface.co/settings/tokens)",
+                "Hugging Face token for model downloads and speaker diarization (get one at https://huggingface.co/settings/tokens)",
             ),
         ]
 
@@ -170,11 +177,19 @@ class CallRecordingsPlugin(ChannelPlugin):
         logger.info(f"Call Recordings: Using local source at '{source_path}'")
 
         hf_token = settings_db.get_setting_value("hf_token") or ""
+        enable_diarization = (
+            settings_db.get_setting_value("call_recordings_enable_diarization") or "true"
+        ).lower() in ("true", "1", "yes")
         self._transcriber = WhisperTranscriber(
             model_size=whisper_model,
             hf_token=hf_token if hf_token else None,
+            enable_diarization=enable_diarization,
         )
-        logger.info(f"Call Recordings: Whisper model configured as '{whisper_model}'")
+        diar_status = "enabled" if enable_diarization else "disabled"
+        logger.info(
+            f"Call Recordings: Whisper model '{whisper_model}', "
+            f"diarization {diar_status}"
+        )
 
         from llamaindex_rag import get_rag
 

@@ -4,16 +4,20 @@ Uses the faster-whisper package (CTranslate2 backend) for local
 audio-to-text transcription.  Typically 4-6× faster than the original
 openai-whisper on CPU, with identical accuracy.
 
+Optionally runs pyannote.audio speaker diarization to label segments
+with speaker identifiers (Speaker A, Speaker B, etc.).
+
 The Whisper model is loaded lazily on first use and cached for
 subsequent calls to avoid slow startup times.
 """
 
 import logging
 import math
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -27,17 +31,30 @@ DEFAULT_MODEL_SIZE = "medium"
 _CPU_COMPUTE_TYPE = "int8"       # fastest on CPU, minimal quality loss
 _CUDA_COMPUTE_TYPE = "float16"   # optimal for GPU
 
+# Speaker label format
+_SPEAKER_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def _is_pyannote_available() -> bool:
+    """Check if pyannote.audio is installed and importable."""
+    try:
+        from pyannote.audio import Pipeline  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
 
 @dataclass
 class TranscriptionResult:
     """Result from Whisper transcription of an audio file.
 
     Attributes:
-        text: Full transcription text
+        text: Full transcription text (with speaker labels when diarization is enabled)
         language: Detected language code (e.g., "en", "he", "ar")
         duration_seconds: Audio duration in seconds
-        segments: Timestamped text segments from Whisper
+        segments: Timestamped text segments from Whisper (with optional 'speaker' key)
         confidence: Average confidence score (0.0 to 1.0)
+        speakers_detected: Number of distinct speakers found (0 if diarization disabled)
     """
 
     text: str
@@ -45,6 +62,7 @@ class TranscriptionResult:
     duration_seconds: int = 0
     segments: List[Dict] = field(default_factory=list)
     confidence: float = 1.0
+    speakers_detected: int = 0
 
 
 class WhisperTranscriber:
@@ -55,17 +73,22 @@ class WhisperTranscriber:
     GPU (CUDA) if available, otherwise falls back to CPU with int8
     quantization for maximum throughput.
 
+    When diarization is enabled and pyannote.audio is available, runs
+    speaker diarization after transcription to label segments with
+    speaker identifiers (Speaker A, Speaker B, etc.).
+
     Args:
         model_size: Whisper model size — "small", "medium", or "large".
-            Larger models are more accurate but slower and use more memory.
-
-            Approximate performance (faster-whisper on CPU int8):
-            - small:  ~1 GB RAM, fastest, good for clear audio
-            - medium: ~2.5 GB RAM, balanced accuracy/speed
-            - large:  ~5 GB RAM, best accuracy, slowest
+        hf_token: HuggingFace token for model downloads.
+        enable_diarization: If True, run speaker diarization when available.
     """
 
-    def __init__(self, model_size: str = DEFAULT_MODEL_SIZE, hf_token: Optional[str] = None):
+    def __init__(
+        self,
+        model_size: str = DEFAULT_MODEL_SIZE,
+        hf_token: Optional[str] = None,
+        enable_diarization: bool = False,
+    ):
         size = model_size.lower().strip()
         if size not in VALID_MODEL_SIZES:
             logger.warning(
@@ -76,11 +99,18 @@ class WhisperTranscriber:
         self._model_size = size
         self._model = None
         self._hf_token = hf_token or None
+        self._enable_diarization = enable_diarization
+        self._diarization_pipeline = None
 
     @property
     def model_size(self) -> str:
         """Currently configured model size."""
         return self._model_size
+
+    @property
+    def diarization_available(self) -> bool:
+        """Whether diarization is enabled and pyannote is available."""
+        return self._enable_diarization and _is_pyannote_available() and bool(self._hf_token)
 
     def _ensure_model_loaded(self):
         """Lazily load the Whisper model on first use.
@@ -120,9 +150,9 @@ class WhisperTranscriber:
             )
 
         # Set HF_TOKEN for authenticated model downloads (higher rate limits)
-        if self._hf_token:
-            import os
-            os.environ["HF_TOKEN"] = self._hf_token
+        token = self._resolve_hf_token()
+        if token:
+            os.environ["HF_TOKEN"] = token
             logger.info("HF_TOKEN set for model download")
 
         logger.info(
@@ -137,6 +167,220 @@ class WhisperTranscriber:
         logger.info(
             f"faster-whisper model '{self._model_size}' loaded successfully"
         )
+
+    def _resolve_hf_token(self) -> Optional[str]:
+        """Resolve the HuggingFace token from multiple sources.
+
+        Checks (in order):
+        1. Token passed at init time
+        2. HF_TOKEN environment variable
+        3. settings_db (live read)
+
+        Returns:
+            Token string or None
+        """
+        if self._hf_token:
+            return self._hf_token
+
+        # Check env var (may have been set by another process)
+        env_token = os.environ.get("HF_TOKEN", "").strip()
+        if env_token:
+            self._hf_token = env_token
+            return env_token
+
+        # Live read from settings DB (catches tokens set after startup)
+        try:
+            import settings_db
+            token = settings_db.get_setting_value("hf_token") or ""
+            if token.strip():
+                self._hf_token = token.strip()
+                os.environ["HF_TOKEN"] = self._hf_token
+                logger.info("HF_TOKEN resolved from settings DB")
+                return self._hf_token
+        except Exception:
+            pass
+
+        return None
+
+    def _ensure_diarization_loaded(self) -> bool:
+        """Lazily load the pyannote diarization pipeline.
+
+        Returns True if the pipeline is ready, False if unavailable.
+        """
+        if self._diarization_pipeline is not None:
+            return True
+
+        if not self._enable_diarization:
+            return False
+
+        token = self._resolve_hf_token()
+        if not token:
+            logger.warning(
+                "Diarization enabled but HF_TOKEN not set — "
+                "set it in Settings → API Keys to enable speaker detection"
+            )
+            return False
+
+        try:
+            from pyannote.audio import Pipeline
+
+            logger.info("Loading pyannote speaker diarization pipeline...")
+            self._diarization_pipeline = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1",
+                use_auth_token=token,
+            )
+
+            # Move to GPU if available
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    self._diarization_pipeline.to(torch.device("cuda"))
+                    logger.info("Diarization pipeline using GPU")
+            except (ImportError, Exception):
+                pass
+
+            logger.info("pyannote diarization pipeline loaded successfully")
+            return True
+
+        except ImportError:
+            logger.info(
+                "pyannote.audio not installed — speaker diarization disabled. "
+                "Install with: pip install pyannote.audio"
+            )
+            return False
+        except Exception as e:
+            logger.warning(
+                f"Failed to load diarization pipeline: {e}. "
+                f"Make sure you've accepted the model terms at "
+                f"https://huggingface.co/pyannote/speaker-diarization-3.1"
+            )
+            return False
+
+    def _diarize(self, audio_path: Path) -> Optional[List[Tuple[float, float, str]]]:
+        """Run speaker diarization on an audio file.
+
+        Args:
+            audio_path: Path to the audio file
+
+        Returns:
+            List of (start, end, speaker_label) tuples, or None if
+            diarization is unavailable or fails.
+        """
+        if not self._ensure_diarization_loaded():
+            return None
+
+        try:
+            logger.info(f"Running speaker diarization on {audio_path.name}...")
+            diarization = self._diarization_pipeline(str(audio_path))
+
+            # Convert pyannote output to simple list of (start, end, speaker)
+            turns = []
+            for turn, _, speaker in diarization.itertracks(yield_label=True):
+                turns.append((turn.start, turn.end, speaker))
+
+            # Map raw speaker IDs (SPEAKER_00, SPEAKER_01) to friendly labels
+            speaker_map = {}
+            label_idx = 0
+            for _, _, speaker in turns:
+                if speaker not in speaker_map:
+                    if label_idx < len(_SPEAKER_LABELS):
+                        speaker_map[speaker] = f"Speaker {_SPEAKER_LABELS[label_idx]}"
+                    else:
+                        speaker_map[speaker] = f"Speaker {label_idx + 1}"
+                    label_idx += 1
+
+            friendly_turns = [
+                (start, end, speaker_map[speaker])
+                for start, end, speaker in turns
+            ]
+
+            logger.info(
+                f"Diarization complete: {len(friendly_turns)} turns, "
+                f"{len(speaker_map)} speakers detected"
+            )
+            return friendly_turns
+
+        except Exception as e:
+            logger.warning(f"Diarization failed for {audio_path.name}: {e}")
+            return None
+
+    def _assign_speakers_to_segments(
+        self,
+        segments: List[Dict],
+        diarization_turns: List[Tuple[float, float, str]],
+    ) -> List[Dict]:
+        """Align whisper segments with diarization speaker labels.
+
+        For each whisper segment, finds the diarization turn with the
+        greatest time overlap and assigns that turn's speaker label.
+
+        Args:
+            segments: Whisper segments with start/end/text
+            diarization_turns: (start, end, speaker) from pyannote
+
+        Returns:
+            Same segments list with added 'speaker' key
+        """
+        for seg in segments:
+            seg_start = seg["start"]
+            seg_end = seg["end"]
+            best_speaker = None
+            best_overlap = 0.0
+
+            for turn_start, turn_end, speaker in diarization_turns:
+                # Calculate overlap
+                overlap_start = max(seg_start, turn_start)
+                overlap_end = min(seg_end, turn_end)
+                overlap = max(0.0, overlap_end - overlap_start)
+
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_speaker = speaker
+
+            seg["speaker"] = best_speaker or "Speaker A"
+
+        return segments
+
+    def _format_text_with_speakers(self, segments: List[Dict]) -> str:
+        """Format transcript text with speaker labels.
+
+        Groups consecutive segments by the same speaker into paragraphs.
+
+        Args:
+            segments: Segments with 'speaker' and 'text' keys
+
+        Returns:
+            Formatted transcript string like:
+            Speaker A: Hello, how are you?
+            Speaker B: I'm fine, thanks.
+        """
+        if not segments:
+            return ""
+
+        lines = []
+        current_speaker = None
+        current_texts = []
+
+        for seg in segments:
+            speaker = seg.get("speaker", "")
+            text = seg.get("text", "").strip()
+            if not text:
+                continue
+
+            if speaker != current_speaker:
+                # Flush previous speaker's text
+                if current_speaker and current_texts:
+                    lines.append(f"{current_speaker}: {' '.join(current_texts)}")
+                current_speaker = speaker
+                current_texts = [text]
+            else:
+                current_texts.append(text)
+
+        # Flush last speaker
+        if current_speaker and current_texts:
+            lines.append(f"{current_speaker}: {' '.join(current_texts)}")
+
+        return "\n".join(lines)
 
     def _validate_audio(self, path: Path) -> None:
         """Pre-validate that an audio file contains decodable audio.
@@ -219,12 +463,15 @@ class WhisperTranscriber:
     def transcribe(self, audio_path: Path) -> TranscriptionResult:
         """Transcribe an audio file using faster-whisper.
 
+        When diarization is enabled and available, also runs speaker
+        diarization and labels each segment with a speaker identifier.
+
         Args:
             audio_path: Path to the audio file to transcribe
 
         Returns:
-            TranscriptionResult with full text, language, segments,
-            duration, and confidence score
+            TranscriptionResult with full text (speaker-labeled when
+            diarization is active), language, segments, and confidence.
 
         Raises:
             FileNotFoundError: If the audio file doesn't exist
@@ -266,7 +513,6 @@ class WhisperTranscriber:
 
         # Consume the segment generator and collect results
         segments = []
-        text_parts = []
         total_confidence = 0.0
         total_duration = 0.0
 
@@ -277,7 +523,6 @@ class WhisperTranscriber:
                 "text": seg.text.strip(),
             }
             segments.append(segment_data)
-            text_parts.append(seg.text.strip())
 
             # Confidence from avg_logprob
             avg_logprob = seg.avg_logprob or 0.0
@@ -287,11 +532,8 @@ class WhisperTranscriber:
             if seg.end > total_duration:
                 total_duration = seg.end
 
-        # Build full text
-        text = " ".join(text_parts).strip()
-
-        if not text:
-            logger.warning(f"Whisper returned empty transcription for {path.name}")
+        if not segments:
+            logger.warning(f"Whisper returned no segments for {path.name}")
             return TranscriptionResult(text="", confidence=0.0)
 
         # Language from detection info
@@ -306,10 +548,33 @@ class WhisperTranscriber:
         # Use info.duration if available (more accurate), fall back to segment end
         duration_seconds = int(info.duration if info.duration else total_duration)
 
+        # --- Speaker diarization (optional) ---
+        speakers_detected = 0
+        if self._enable_diarization:
+            diarization_turns = self._diarize(path)
+            if diarization_turns:
+                segments = self._assign_speakers_to_segments(segments, diarization_turns)
+                # Count unique speakers
+                speakers_detected = len(set(
+                    seg.get("speaker", "") for seg in segments
+                ))
+                # Build speaker-labeled text
+                text = self._format_text_with_speakers(segments)
+            else:
+                # Diarization unavailable or failed — plain text
+                text = " ".join(seg["text"] for seg in segments if seg.get("text")).strip()
+        else:
+            text = " ".join(seg["text"] for seg in segments if seg.get("text")).strip()
+
+        if not text:
+            logger.warning(f"Whisper returned empty transcription for {path.name}")
+            return TranscriptionResult(text="", confidence=0.0)
+
+        diar_info = f", {speakers_detected} speakers" if speakers_detected else ""
         logger.info(
             f"Transcription complete: {path.name} — "
             f"{len(text)} chars, {duration_seconds}s, "
-            f"lang={language}, confidence={avg_confidence:.2f}"
+            f"lang={language}, confidence={avg_confidence:.2f}{diar_info}"
         )
 
         return TranscriptionResult(
@@ -318,10 +583,11 @@ class WhisperTranscriber:
             duration_seconds=duration_seconds,
             segments=segments,
             confidence=avg_confidence,
+            speakers_detected=speakers_detected,
         )
 
     def unload_model(self) -> None:
-        """Unload the Whisper model to free memory.
+        """Unload the Whisper model and diarization pipeline to free memory.
 
         Called during plugin shutdown.
         """
@@ -330,11 +596,16 @@ class WhisperTranscriber:
             del self._model
             self._model = None
 
-            # Try to free GPU memory
-            try:
-                import torch
+        if self._diarization_pipeline is not None:
+            logger.info("Unloading diarization pipeline")
+            del self._diarization_pipeline
+            self._diarization_pipeline = None
 
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except ImportError:
-                pass
+        # Try to free GPU memory
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass

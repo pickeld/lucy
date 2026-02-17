@@ -135,6 +135,7 @@ SETTING_LABELS: dict[str, str] = {
     "call_recordings_file_extensions": "Audio File Extensions",
     "call_recordings_max_files": "Max Files per Sync",
     "call_recordings_sync_interval": "Sync Interval (seconds)",
+    "call_recordings_enable_diarization": "Speaker Diarization",
 }
 
 
