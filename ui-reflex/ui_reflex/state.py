@@ -644,6 +644,16 @@ class AppState(rx.State):
         return str(self.rag_stats.get("documents", "—"))
 
     @rx.var(cache=True)
+    def rag_gmail_count(self) -> str:
+        """Extract Gmail email count from rag_stats."""
+        return str(self.rag_stats.get("gmail_emails", "—"))
+
+    @rx.var(cache=True)
+    def rag_call_recording_count(self) -> str:
+        """Extract call recording count from rag_stats."""
+        return str(self.rag_stats.get("call_recordings", "—"))
+
+    @rx.var(cache=True)
     def rag_collection_name(self) -> str:
         """Extract collection name from rag_stats."""
         return str(self.rag_stats.get("collection_name", "—"))

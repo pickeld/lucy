@@ -320,6 +320,8 @@ def _rag_stats_section() -> rx.Component:
             _stat_tile("Total Vectors", AppState.rag_total_docs, None),
             _stat_tile("WhatsApp Messages", AppState.rag_whatsapp_count, "message-circle"),
             _stat_tile("Documents", AppState.rag_document_count, "file-text"),
+            _stat_tile("Gmail Emails", AppState.rag_gmail_count, "mail"),
+            _stat_tile("Call Recordings", AppState.rag_call_recording_count, "phone"),
             _stat_tile("Collection", AppState.rag_collection_name, None),
             columns="2",
             gap="3",
