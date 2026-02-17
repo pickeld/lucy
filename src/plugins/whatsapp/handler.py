@@ -15,6 +15,7 @@ import os
 from abc import ABC, abstractmethod
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
@@ -51,7 +52,9 @@ group_manager = GroupManager()
 
 
 # make dir for media storage (persistent + debug)
-MEDIA_IMAGES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "images")
+# parents[3] traverses: whatsapp/ → plugins/ → src/ → project_root
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+MEDIA_IMAGES_DIR = str(_PROJECT_ROOT / "data" / "images")
 os.makedirs(MEDIA_IMAGES_DIR, exist_ok=True)
 if not os.path.exists("tmp/images"):
     os.makedirs("tmp/images")

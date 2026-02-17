@@ -17,8 +17,13 @@ import reflex as rx
 from . import api_client
 from .utils.time_utils import group_conversations_by_time
 
-# API base URL for constructing full media URLs
-_API_URL = os.environ.get("API_URL", "http://localhost:8765")
+# API base URL for constructing browser-facing media URLs.
+# PUBLIC_API_URL is the URL the browser can reach (e.g. http://localhost:8765).
+# Falls back to API_URL (server-to-server) which works when not in Docker.
+_API_PUBLIC_URL = os.environ.get(
+    "PUBLIC_API_URL",
+    os.environ.get("API_URL", "http://localhost:8765"),
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1117,6 +1122,16 @@ class AppState(rx.State):
                         pass
                 msg = _empty_msg(m["role"], m["content"])
                 msg["sources"] = sources_md
+                # Restore rich content (images, ICS events, buttons) from DB
+                raw_rich = m.get("rich_content", "")
+                if raw_rich and m.get("role") == "assistant":
+                    try:
+                        rich_list = json.loads(raw_rich)
+                        if rich_list:
+                            rich_fields = _flatten_rich_content(rich_list)
+                            msg.update(rich_fields)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
                 msgs.append(msg)
             self.messages = msgs
             self.active_filters = loaded.get("filters", {})
@@ -2479,15 +2494,15 @@ def _flatten_rich_content(rich_content: list[dict]) -> dict[str, str]:
         if block_type == "image":
             url = block.get("url", "")
             if url:
-                # Prefix with API URL so the browser can reach the backend
-                image_urls.append(f"{_API_URL}{url}")
+                # Prefix with public API URL so the browser can reach the backend
+                image_urls.append(f"{_API_PUBLIC_URL}{url}")
                 image_captions.append(block.get("caption", ""))
 
         elif block_type == "ics_event":
             # Take the first event only
             if not result["ics_url"]:
                 url = block.get("download_url", "")
-                result["ics_url"] = f"{_API_URL}{url}" if url else ""
+                result["ics_url"] = f"{_API_PUBLIC_URL}{url}" if url else ""
                 result["ics_title"] = block.get("title", "Calendar Event")
 
         elif block_type == "buttons":

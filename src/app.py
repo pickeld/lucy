@@ -363,11 +363,12 @@ def rag_query():
             source_nodes=source_nodes,
         )
 
-        # Persist messages to SQLite (include sources JSON for assistant)
+        # Persist messages to SQLite (include sources + rich_content JSON)
         conversations_db.add_message(conversation_id, "user", question)
         conversations_db.add_message(
             conversation_id, "assistant", answer,
             sources=json.dumps(sources) if sources else "",
+            rich_content=json.dumps(rich_content) if rich_content else "",
         )
 
         stats = rag.get_stats()

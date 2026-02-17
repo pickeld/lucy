@@ -86,6 +86,7 @@ class RichResponseProcessor:
         """
         images: List[Dict[str, Any]] = []
         seen_paths: set = set()
+        media_candidates = 0
         
         for node_with_score in source_nodes:
             node = getattr(node_with_score, 'node', None)
@@ -94,13 +95,17 @@ class RichResponseProcessor:
             
             metadata = getattr(node, 'metadata', {})
             
-            # Skip non-media nodes
+            # Skip non-media nodes — handle both bool and stringified values
             has_media = metadata.get('has_media', False)
+            if isinstance(has_media, str):
+                has_media = has_media.lower() in ('true', '1', 'yes')
             if not has_media:
                 continue
             
+            media_candidates += 1
             media_path = metadata.get('media_path', '')
             if not media_path:
+                logger.info(f"Source node has has_media=True but empty media_path (sender={metadata.get('sender', '?')})")
                 continue
             
             # Deduplicate
@@ -117,7 +122,7 @@ class RichResponseProcessor:
                 )
             
             if not os.path.exists(full_path):
-                logger.debug(f"Media file not found on disk: {full_path}")
+                logger.warning(f"Media file not found on disk: {full_path} (media_path={media_path})")
                 continue
             
             # Build the serving URL — filename relative to data/images/
@@ -149,6 +154,9 @@ class RichResponseProcessor:
                 "alt": caption,
                 "caption": caption,
             })
+        
+        if media_candidates > 0:
+            logger.info(f"Image extraction: {media_candidates} media node(s) found, {len(images)} image(s) extracted")
         
         return images
     

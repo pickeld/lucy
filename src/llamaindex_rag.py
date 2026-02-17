@@ -3188,6 +3188,24 @@ class LlamaIndexRAG:
             "  [/CREATE_EVENT]'"
         )
         
+        # Image display instructions — the RichResponseProcessor automatically
+        # extracts and displays images from source nodes, so the LLM should
+        # never claim it cannot show images.
+        prompt += (
+            "\n\nIMAGE DISPLAY:\n"
+            "When retrieved messages contain images (shown as '[Image: description]' "
+            "in the context), the system AUTOMATICALLY displays those images inline "
+            "in the chat UI below your response.\n"
+            "You do NOT need to display images yourself — they are handled by the system.\n"
+            "Your role when images are present:\n"
+            "- Describe or discuss the image content as requested by the user\n"
+            "- Reference which image you're discussing (sender, chat, date)\n"
+            "- NEVER say 'I cannot display images' or 'I can't show images directly' — "
+            "the images ARE displayed automatically below your response\n"
+            "- If the user asks to 'show' an image, describe it and confirm "
+            "it is displayed below your message\n"
+        )
+        
         return prompt
     
     def create_chat_engine(
