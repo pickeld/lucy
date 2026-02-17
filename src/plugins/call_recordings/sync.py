@@ -42,7 +42,7 @@ from utils.text_processing import (
 
 from . import db as recording_db
 from .scanner import AudioFile, LocalFileScanner, _parse_filename_metadata
-from .transcriber import TranscriptionResult, WhisperTranscriber
+from .transcriber import TranscriptionResult
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,9 @@ class CallRecordingSyncer:
 
     Args:
         scanner: File scanner instance
-        transcriber: WhisperTranscriber instance
+        transcriber: Any object with ``transcribe()``, ``unload_model()``,
+            and ``model_size`` — either WhisperTranscriber or
+            AssemblyAITranscriber.
         rag: LlamaIndexRAG instance
     """
 
@@ -73,7 +75,7 @@ class CallRecordingSyncer:
     def __init__(
         self,
         scanner: LocalFileScanner,
-        transcriber: WhisperTranscriber,
+        transcriber,  # WhisperTranscriber or AssemblyAITranscriber (duck-typed)
         rag,
     ):
         self.scanner = scanner

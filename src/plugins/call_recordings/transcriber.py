@@ -451,29 +451,63 @@ class WhisperTranscriber:
 
         huggingface_hub 1.0+ removed ``use_auth_token`` in favor of
         ``token``.  pyannote 3.x still passes the old kwarg internally.
-        This shim intercepts hf_hub_download calls and translates the kwarg.
+
+        This shim patches hf_hub_download in **all** known locations so
+        that ``use_auth_token`` is transparently translated to ``token``
+        regardless of which import path pyannote uses internally:
+        - ``huggingface_hub.hf_hub_download``
+        - ``huggingface_hub.file_download.hf_hub_download``
+        - Any cached reference in ``sys.modules``
         """
+        import sys
+
         try:
             import huggingface_hub as _hfhub
-
-            _orig_dl = _hfhub.hf_hub_download
-
-            def _patched_dl(*args, **kwargs):
-                if "use_auth_token" in kwargs:
-                    val = kwargs.pop("use_auth_token")
-                    if val is not None:
-                        kwargs["token"] = val
-                return _orig_dl(*args, **kwargs)
-
-            if _orig_dl is not _patched_dl:
-                _hfhub.hf_hub_download = _patched_dl
-                if hasattr(_hfhub, "file_download"):
-                    _hfhub.file_download.hf_hub_download = _patched_dl
-                logger.debug(
-                    "Applied huggingface_hub use_auth_token shim (pyannote 3.x)"
-                )
         except ImportError:
-            pass
+            return
+
+        # Grab the true original before any patching
+        _orig_dl = getattr(_hfhub, "_orig_hf_hub_download", None) or _hfhub.hf_hub_download
+
+        # Tag to avoid double-patching across multiple calls
+        if getattr(_hfhub, "_use_auth_token_shim_applied", False):
+            return
+
+        def _patched_dl(*args, **kwargs):
+            if "use_auth_token" in kwargs:
+                val = kwargs.pop("use_auth_token")
+                if val is not None:
+                    kwargs.setdefault("token", val)
+            return _orig_dl(*args, **kwargs)
+
+        # Store original for reference
+        _hfhub._orig_hf_hub_download = _orig_dl  # type: ignore[attr-defined]
+        _hfhub._use_auth_token_shim_applied = True  # type: ignore[attr-defined]
+
+        # Patch the top-level package attribute
+        _hfhub.hf_hub_download = _patched_dl
+
+        # Patch the file_download sub-module (where the function is defined)
+        if hasattr(_hfhub, "file_download"):
+            _hfhub.file_download.hf_hub_download = _patched_dl
+
+        # Patch any cached module references in sys.modules that have
+        # already imported hf_hub_download (e.g. pyannote internals)
+        _module_names = [
+            "huggingface_hub",
+            "huggingface_hub.file_download",
+            "huggingface_hub.hf_api",
+            "huggingface_hub._commit_api",
+        ]
+        for mod_name in _module_names:
+            mod = sys.modules.get(mod_name)
+            if mod and hasattr(mod, "hf_hub_download"):
+                mod.hf_hub_download = _patched_dl
+
+        logger.debug(
+            "Applied huggingface_hub use_auth_token→token shim "
+            "(pyannote 3.x compat, all import paths)"
+        )
 
     def _log_diarization_error(self, error: Exception):
         """Log a diarization loading error with actionable guidance.

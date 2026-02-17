@@ -43,6 +43,7 @@ class CallRecordingsPlugin(ChannelPlugin):
         self._transcriber = None  # WhisperTranscriber or AssemblyAITranscriber
         self._syncer: Optional[CallRecordingSyncer] = None
         self._rag = None
+        self._current_provider: str = "local"  # tracks active transcriber type
 
     # -------------------------------------------------------------------------
     # Identity
@@ -266,6 +267,8 @@ class CallRecordingsPlugin(ChannelPlugin):
                 settings_db, enable_diarization,
             )
 
+        self._current_provider = provider
+
         from llamaindex_rag import get_rag
 
         self._rag = get_rag()
@@ -342,6 +345,64 @@ class CallRecordingsPlugin(ChannelPlugin):
             f"diarization {diar_status}"
         )
         return transcriber
+
+    # -------------------------------------------------------------------------
+    # Hot-swap transcriber when provider setting changes
+    # -------------------------------------------------------------------------
+
+    def _ensure_correct_transcriber(self) -> None:
+        """Re-read the transcription provider setting and swap the transcriber
+        if it has changed since the last call.
+
+        Called before every transcription-related endpoint so that UI
+        settings changes take effect without requiring an app restart.
+        """
+        import settings_db
+
+        provider = (
+            settings_db.get_setting_value("call_recordings_transcription_provider")
+            or "local"
+        ).lower().strip()
+
+        if provider == self._current_provider:
+            return  # no change — nothing to do
+
+        logger.info(
+            f"Transcription provider changed: {self._current_provider} → {provider}"
+        )
+
+        enable_diarization = (
+            settings_db.get_setting_value("call_recordings_enable_diarization") or "true"
+        ).lower() in ("true", "1", "yes")
+
+        language = (
+            settings_db.get_setting_value("call_recordings_whisper_language") or ""
+        ).strip() or None
+
+        # Unload the old transcriber model (frees GPU/CPU memory)
+        if self._transcriber:
+            try:
+                self._transcriber.unload_model()
+            except Exception:
+                pass
+
+        # Create the new transcriber
+        if provider == "assemblyai":
+            self._transcriber = self._create_assemblyai_transcriber(
+                settings_db, enable_diarization, language,
+            )
+        else:
+            self._transcriber = self._create_local_transcriber(
+                settings_db, enable_diarization,
+            )
+
+        self._current_provider = provider
+
+        # Update the syncer's reference so it uses the new transcriber
+        if self._syncer:
+            self._syncer.transcriber = self._transcriber
+
+        logger.info(f"Transcriber hot-swapped to '{provider}'")
 
     def shutdown(self) -> None:
         if self._syncer:
@@ -450,6 +511,9 @@ class CallRecordingsPlugin(ChannelPlugin):
             if not plugin._syncer:
                 return jsonify({"error": "Plugin not initialized"}), 500
 
+            # Hot-swap transcriber if the provider setting changed
+            plugin._ensure_correct_transcriber()
+
             # Verify file exists before queuing
             record = recording_db.get_file(content_hash)
             if not record:
@@ -479,6 +543,9 @@ class CallRecordingsPlugin(ChannelPlugin):
             """
             if not plugin._syncer:
                 return jsonify({"error": "Plugin not initialized"}), 500
+
+            # Hot-swap transcriber if the provider setting changed
+            plugin._ensure_correct_transcriber()
 
             record = recording_db.get_file(content_hash)
             if not record:
@@ -530,6 +597,9 @@ class CallRecordingsPlugin(ChannelPlugin):
             if not plugin._syncer:
                 return jsonify({"error": "Plugin not initialized"}), 500
 
+            # Hot-swap transcriber if the provider setting changed
+            plugin._ensure_correct_transcriber()
+
             auto_transcribe = request.args.get(
                 "auto_transcribe", "true"
             ).lower() in ("true", "1", "yes")
@@ -549,6 +619,9 @@ class CallRecordingsPlugin(ChannelPlugin):
             """Legacy full sync: scan → transcribe → auto-approve all."""
             if not plugin._syncer:
                 return jsonify({"error": "Plugin not initialized"}), 500
+
+            # Hot-swap transcriber if the provider setting changed
+            plugin._ensure_correct_transcriber()
 
             force = request.args.get("force", "").lower() in ("true", "1", "yes")
             max_files = int(settings.get("call_recordings_max_files", "100"))
@@ -608,6 +681,9 @@ class CallRecordingsPlugin(ChannelPlugin):
             import werkzeug.utils
 
             from .scanner import compute_file_hash
+
+            # Hot-swap transcriber if the provider setting changed
+            plugin._ensure_correct_transcriber()
 
             source_path = (
                 settings_db.get_setting_value("call_recordings_source_path")
