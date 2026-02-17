@@ -1,3 +1,4 @@
+authentication for the ui / backend
 1. add external / internet sources
 2. create google events
 3. integrate gmail
