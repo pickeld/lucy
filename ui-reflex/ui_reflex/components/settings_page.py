@@ -754,16 +754,20 @@ def _recording_row(item: dict) -> rx.Component:
                     ),
                     rx.fragment(),
                 ),
-                # Transcribe button (for pending or error)
+                # Transcribe / retranscribe button (all statuses except transcribing)
                 rx.cond(
-                    (item["status"] == "pending") | (item["status"] == "error"),
+                    item["status"] != "transcribing",
                     rx.icon_button(
                         rx.icon("mic", size=16),
                         on_click=AppState.retry_transcription(item["content_hash"]),
                         variant="ghost",
                         size="1",
                         class_name="text-blue-500 hover:text-blue-700",
-                        title="Transcribe",
+                        title=rx.cond(
+                            (item["status"] == "transcribed") | (item["status"] == "approved"),
+                            "Re-transcribe",
+                            "Transcribe",
+                        ),
                     ),
                     rx.fragment(),
                 ),
