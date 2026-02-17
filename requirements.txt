@@ -52,11 +52,11 @@ faster-whisper>=1.0.0,<2.0
 mutagen>=1.47
 
 # Speaker diarization (optional but recommended for call recordings)
-# Requires accepting pyannote model terms at https://huggingface.co/pyannote/speaker-diarization-community-1
+# Requires accepting pyannote model terms at https://huggingface.co/pyannote/speaker-diarization-3.1
 # and setting HF_TOKEN in Settings → API Keys
-# pyannote 4.x uses token= kwarg, torchcodec for audio I/O, requires ffmpeg
-# Pinned to exact version to avoid API breakage across releases
-torch>=2.8.0
-torchaudio>=2.8.0
-torchcodec>=0.7.0
-pyannote.audio==4.0.4
+# NOTE: pyannote 4.x requires torchcodec which has no ARM wheel — staying on 3.3.2
+# NOTE: torchaudio>=2.9 removed AudioMetaData which breaks pyannote 3.x
+# Auth is done via HF_TOKEN env var + huggingface_hub shim (use_auth_token → token)
+torch>=2.0,<2.9
+torchaudio>=2.0,<2.9
+pyannote.audio==3.3.2

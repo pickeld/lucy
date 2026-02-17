@@ -30,7 +30,7 @@ VALID_MODEL_SIZES = {"tiny", "base", "small", "medium", "large", "large-v2", "la
 DEFAULT_MODEL_SIZE = "medium"
 
 # Default diarization pipeline
-DEFAULT_DIARIZATION_MODEL = "pyannote/speaker-diarization-community-1"
+DEFAULT_DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
 
 # Compute types ordered by preference per device
 _CPU_COMPUTE_TYPE = "int8"       # fastest on CPU, minimal quality loss
@@ -107,7 +107,7 @@ class WhisperTranscriber:
         local_files_only: If True, never download models from the Hub —
             only use locally cached files.  Useful for air-gapped deployments.
         diarization_model: pyannote pipeline identifier or local path.
-            Defaults to ``"pyannote/speaker-diarization-community-1"``.
+            Defaults to ``"pyannote/speaker-diarization-3.1"``.
     """
 
     def __init__(
@@ -365,8 +365,9 @@ class WhisperTranscriber:
     def _load_diarization_pipeline(self, token: str) -> bool:
         """Load the pyannote diarization pipeline.
 
-        Uses ``token=`` kwarg as required by pyannote 4.x.
-        Also sets ``HF_TOKEN`` in the environment as a fallback.
+        Authentication is done via the ``HF_TOKEN`` environment variable
+        plus a huggingface_hub shim that translates pyannote 3.x's
+        internal ``use_auth_token`` kwarg to ``token``.
 
         Args:
             token: HuggingFace auth token
@@ -413,17 +414,13 @@ class WhisperTranscriber:
                 f"(auth via HF_TOKEN env var)..."
             )
 
-            # Verify FFmpeg is available (required by pyannote 4.x for audio I/O)
-            if not self._verify_ffmpeg():
-                logger.warning(
-                    "pyannote.audio 4.x requires FFmpeg but it was not found on PATH. "
-                    "Diarization may fail. Install ffmpeg: apt-get install ffmpeg"
-                )
+            # Apply huggingface_hub shim: pyannote 3.x passes use_auth_token=
+            # to hf_hub_download(), but huggingface_hub 1.0+ removed that kwarg.
+            # This shim translates use_auth_token → token transparently.
+            self._apply_huggingface_hub_shim()
 
-            # Load pipeline — pyannote 4.x uses token= kwarg
-            self._diarization_pipeline = Pipeline.from_pretrained(
-                model_id, token=token,
-            )
+            # Load pipeline — auth handled by HF_TOKEN env var
+            self._diarization_pipeline = Pipeline.from_pretrained(model_id)
 
             # Move to GPU if available
             try:
@@ -449,19 +446,34 @@ class WhisperTranscriber:
                 except ImportError:
                     pass
 
-    @staticmethod
-    def _verify_ffmpeg() -> bool:
-        """Check that ffmpeg is available on PATH (required by pyannote 4.x)."""
-        import subprocess
+    def _apply_huggingface_hub_shim(self):
+        """Patch huggingface_hub for pyannote 3.x use_auth_token compat.
+
+        huggingface_hub 1.0+ removed ``use_auth_token`` in favor of
+        ``token``.  pyannote 3.x still passes the old kwarg internally.
+        This shim intercepts hf_hub_download calls and translates the kwarg.
+        """
         try:
-            subprocess.run(
-                ["ffmpeg", "-version"],
-                capture_output=True,
-                timeout=5,
-            )
-            return True
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return False
+            import huggingface_hub as _hfhub
+
+            _orig_dl = _hfhub.hf_hub_download
+
+            def _patched_dl(*args, **kwargs):
+                if "use_auth_token" in kwargs:
+                    val = kwargs.pop("use_auth_token")
+                    if val is not None:
+                        kwargs["token"] = val
+                return _orig_dl(*args, **kwargs)
+
+            if _orig_dl is not _patched_dl:
+                _hfhub.hf_hub_download = _patched_dl
+                if hasattr(_hfhub, "file_download"):
+                    _hfhub.file_download.hf_hub_download = _patched_dl
+                logger.debug(
+                    "Applied huggingface_hub use_auth_token shim (pyannote 3.x)"
+                )
+        except ImportError:
+            pass
 
     def _log_diarization_error(self, error: Exception):
         """Log a diarization loading error with actionable guidance.
