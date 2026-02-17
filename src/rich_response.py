@@ -51,8 +51,8 @@ class RichResponseProcessor:
         """
         rich_content: List[Dict[str, Any]] = []
         
-        # 1. Extract inline images from source nodes
-        images = self._extract_images(source_nodes or [])
+        # 1. Extract inline images from source nodes (filtered by answer context)
+        images = self._extract_images(source_nodes or [], answer)
         rich_content.extend(images)
         
         # 2. Extract and generate ICS calendar events
@@ -72,21 +72,25 @@ class RichResponseProcessor:
     def _extract_images(
         self,
         source_nodes: List[Any],
+        answer: str = "",
     ) -> List[Dict[str, Any]]:
         """Extract image content blocks from source nodes that have media.
         
         Scans source nodes for entries with has_media=True and a valid
-        media_path. Returns image blocks with serving URLs.
+        media_path. When an LLM answer is provided, filters to only show
+        images whose sender or chat name is mentioned in the answer text —
+        so only images the LLM is actually discussing are displayed.
         
         Args:
             source_nodes: List of NodeWithScore from the retriever
+            answer: The LLM's answer text (used to filter relevant images)
             
         Returns:
             List of image rich content blocks
         """
-        images: List[Dict[str, Any]] = []
+        # First pass: collect all valid media nodes with metadata
+        all_candidates: List[Dict[str, Any]] = []
         seen_paths: set = set()
-        media_candidates = 0
         
         for node_with_score in source_nodes:
             node = getattr(node_with_score, 'node', None)
@@ -102,7 +106,6 @@ class RichResponseProcessor:
             if not has_media:
                 continue
             
-            media_candidates += 1
             media_path = metadata.get('media_path', '')
             if not media_path:
                 logger.info(f"Source node has has_media=True but empty media_path (sender={metadata.get('sender', '?')})")
@@ -148,16 +151,44 @@ class RichResponseProcessor:
             if time_str:
                 caption += time_str
             
-            images.append({
+            all_candidates.append({
                 "type": "image",
                 "url": f"/media/images/{filename}",
                 "alt": caption,
                 "caption": caption,
+                "_sender": sender,
+                "_chat_name": chat_name,
             })
         
-        if media_candidates > 0:
-            logger.info(f"Image extraction: {media_candidates} media node(s) found, {len(images)} image(s) extracted")
+        if not all_candidates:
+            return []
         
+        # Second pass: filter to images referenced in the LLM answer
+        if answer and len(all_candidates) > 1:
+            answer_lower = answer.lower()
+            referenced = []
+            for img in all_candidates:
+                sender = img.get("_sender", "")
+                chat_name = img.get("_chat_name", "")
+                # Check if the sender or chat name is mentioned in the answer
+                if sender and sender.lower() in answer_lower:
+                    referenced.append(img)
+                elif chat_name and chat_name.lower() in answer_lower:
+                    referenced.append(img)
+            if referenced:
+                all_candidates = referenced
+                logger.info(
+                    f"Image extraction: filtered to {len(referenced)} image(s) "
+                    f"referenced in answer (from {len(seen_paths)} candidates)"
+                )
+        
+        # Strip internal metadata keys before returning
+        images = []
+        for img in all_candidates:
+            clean = {k: v for k, v in img.items() if not k.startswith("_")}
+            images.append(clean)
+        
+        logger.info(f"Image extraction: {len(seen_paths)} media node(s) found, {len(images)} image(s) extracted")
         return images
     
     # =========================================================================
