@@ -222,6 +222,33 @@ class WhisperTranscriber:
             return False
 
         try:
+            # Compatibility shim: pyannote.audio references torchaudio.AudioMetaData
+            # which was removed in torchaudio >= 2.6.  Create a shim so pyannote
+            # can import without error.
+            try:
+                import torchaudio
+                if not hasattr(torchaudio, "AudioMetaData"):
+                    # Reconstruct AudioMetaData from torchaudio.info() return type
+                    # In newer torchaudio, info() returns an AudioInfo namedtuple
+                    _dummy_info_cls = getattr(torchaudio, "AudioInfo", None)
+                    if _dummy_info_cls is None:
+                        # Fallback: create a minimal placeholder dataclass
+                        from dataclasses import make_dataclass
+                        _dummy_info_cls = make_dataclass(
+                            "AudioMetaData",
+                            [
+                                ("sample_rate", int, 0),
+                                ("num_frames", int, 0),
+                                ("num_channels", int, 0),
+                                ("bits_per_sample", int, 0),
+                                ("encoding", str, ""),
+                            ],
+                        )
+                    torchaudio.AudioMetaData = _dummy_info_cls
+                    logger.debug("Applied torchaudio.AudioMetaData compatibility shim")
+            except ImportError:
+                pass
+
             from pyannote.audio import Pipeline
 
             logger.info("Loading pyannote speaker diarization pipeline...")
