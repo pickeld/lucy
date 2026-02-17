@@ -222,17 +222,17 @@ class WhisperTranscriber:
             return False
 
         try:
-            # Compatibility shim: pyannote.audio references torchaudio.AudioMetaData
-            # which was removed in torchaudio >= 2.6.  Create a shim so pyannote
-            # can import without error.
+            # Compatibility shim: pyannote.audio references torchaudio APIs
+            # that were removed in torchaudio >= 2.6.  Patch them before import.
             try:
                 import torchaudio
+
+                _patched = []
+
+                # AudioMetaData was removed — create a placeholder
                 if not hasattr(torchaudio, "AudioMetaData"):
-                    # Reconstruct AudioMetaData from torchaudio.info() return type
-                    # In newer torchaudio, info() returns an AudioInfo namedtuple
                     _dummy_info_cls = getattr(torchaudio, "AudioInfo", None)
                     if _dummy_info_cls is None:
-                        # Fallback: create a minimal placeholder dataclass
                         from dataclasses import make_dataclass
                         _dummy_info_cls = make_dataclass(
                             "AudioMetaData",
@@ -245,7 +245,22 @@ class WhisperTranscriber:
                             ],
                         )
                     torchaudio.AudioMetaData = _dummy_info_cls
-                    logger.debug("Applied torchaudio.AudioMetaData compatibility shim")
+                    _patched.append("AudioMetaData")
+
+                # list_audio_backends was removed — return empty list
+                if not hasattr(torchaudio, "list_audio_backends"):
+                    torchaudio.list_audio_backends = lambda: ["soundfile"]
+                    _patched.append("list_audio_backends")
+
+                # get_audio_backend was removed
+                if not hasattr(torchaudio, "get_audio_backend"):
+                    torchaudio.get_audio_backend = lambda: "soundfile"
+                    _patched.append("get_audio_backend")
+
+                if _patched:
+                    logger.debug(
+                        f"Applied torchaudio compatibility shims: {', '.join(_patched)}"
+                    )
             except ImportError:
                 pass
 
