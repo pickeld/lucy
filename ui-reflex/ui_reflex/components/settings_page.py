@@ -538,7 +538,7 @@ def _call_recordings_actions() -> rx.Component:
         rx.box(
             rx.upload(
                 rx.flex(
-                    rx.icon("upload-cloud", size=20, class_name="text-gray-400"),
+                    rx.icon("cloud-upload", size=20, class_name="text-gray-400"),
                     rx.text(
                         "Drop audio files here or click to browse",
                         class_name="text-sm text-gray-500",
@@ -902,7 +902,7 @@ def _system_tab() -> rx.Component:
         # Danger Zone
         rx.box(
             rx.flex(
-                rx.icon("alert-triangle", size=18, class_name="text-red-500"),
+                rx.icon("triangle-alert", size=18, class_name="text-red-500"),
                 rx.text(
                     "Danger Zone",
                     class_name="text-sm font-semibold text-red-600",

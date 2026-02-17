@@ -1205,7 +1205,7 @@ def _suggestions_tab() -> rx.Component:
                 ),
                 rx.box(
                     rx.flex(
-                        rx.icon("check-circle", size=40, class_name="text-green-300"),
+                        rx.icon("circle-check", size=40, class_name="text-green-300"),
                         rx.text(
                             "No merge suggestions yet",
                             class_name="text-gray-400 mt-2",
