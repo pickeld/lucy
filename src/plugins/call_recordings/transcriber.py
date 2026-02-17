@@ -155,17 +155,24 @@ class WhisperTranscriber:
             os.environ["HF_TOKEN"] = token
             logger.info("HF_TOKEN set for model download")
 
+        # Use all available CPU cores for CTranslate2 inference
+        import multiprocessing
+        cpu_threads = multiprocessing.cpu_count()
+
         logger.info(
             f"Loading faster-whisper model '{self._model_size}' "
-            f"on {device} ({compute_type})..."
+            f"on {device} ({compute_type}, {cpu_threads} threads)..."
         )
         self._model = WhisperModel(
             self._model_size,
             device=device,
             compute_type=compute_type,
+            cpu_threads=cpu_threads,
+            num_workers=min(cpu_threads, 4),  # parallel decoding workers
         )
         logger.info(
-            f"faster-whisper model '{self._model_size}' loaded successfully"
+            f"faster-whisper model '{self._model_size}' loaded successfully "
+            f"({cpu_threads} threads)"
         )
 
     def _resolve_hf_token(self) -> Optional[str]:
@@ -222,6 +229,21 @@ class WhisperTranscriber:
             return False
 
         try:
+            # Compatibility shim: PyTorch 2.6+ defaults torch.load to
+            # weights_only=True, which breaks pyannote model loading.
+            # Patch torch.load to use weights_only=False as default.
+            try:
+                import torch
+                _orig_torch_load = torch.load
+                def _patched_torch_load(*args, **kwargs):
+                    if "weights_only" not in kwargs:
+                        kwargs["weights_only"] = False
+                    return _orig_torch_load(*args, **kwargs)
+                torch.load = _patched_torch_load
+                logger.debug("Applied torch.load weights_only compatibility shim")
+            except ImportError:
+                pass
+
             # Compatibility shim: pyannote.audio references torchaudio APIs
             # that were removed in torchaudio >= 2.6.  Patch them before import.
             try:
