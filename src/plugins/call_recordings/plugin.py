@@ -17,7 +17,12 @@ from plugins.base import ChannelPlugin
 from . import db as recording_db
 from .scanner import DEFAULT_AUDIO_EXTENSIONS, LocalFileScanner
 from .sync import CallRecordingSyncer
-from .transcriber import DEFAULT_MODEL_SIZE, VALID_MODEL_SIZES, WhisperTranscriber
+from .transcriber import (
+    DEFAULT_DIARIZATION_MODEL,
+    DEFAULT_MODEL_SIZE,
+    VALID_MODEL_SIZES,
+    WhisperTranscriber,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +88,20 @@ class CallRecordingsPlugin(ChannelPlugin):
                 "Whisper model size: small (fast), medium (balanced), large (accurate)",
             ),
             (
+                "call_recordings_compute_type",
+                "auto",
+                "call_recordings",
+                "select",
+                "Compute type for Whisper inference. 'auto' picks the fastest for your hardware",
+            ),
+            (
+                "call_recordings_whisper_language",
+                "",
+                "call_recordings",
+                "text",
+                "Force language code (e.g. 'en', 'he'). Leave blank for auto-detection",
+            ),
+            (
                 "call_recordings_file_extensions",
                 "mp3,wav,m4a,ogg,flac",
                 "call_recordings",
@@ -111,6 +130,13 @@ class CallRecordingsPlugin(ChannelPlugin):
                 "Enable speaker diarization (identify Speaker A vs Speaker B). Requires HF token and pyannote.audio",
             ),
             (
+                "call_recordings_diarization_model",
+                DEFAULT_DIARIZATION_MODEL,
+                "call_recordings",
+                "text",
+                "Diarization pipeline name or local path (e.g. pyannote/speaker-diarization-3.1 or pyannote/speaker-diarization-community-1)",
+            ),
+            (
                 "hf_token",
                 "",
                 "secrets",
@@ -122,15 +148,19 @@ class CallRecordingsPlugin(ChannelPlugin):
     def get_select_options(self) -> Dict[str, List[str]]:
         return {
             "call_recordings_whisper_model": ["small", "medium", "large"],
+            "call_recordings_compute_type": ["auto", "int8", "float16", "float32"],
         }
 
     def get_env_key_map(self) -> Dict[str, str]:
         return {
             "call_recordings_source_path": "CALL_RECORDINGS_SOURCE_PATH",
             "call_recordings_whisper_model": "CALL_RECORDINGS_WHISPER_MODEL",
+            "call_recordings_compute_type": "CALL_RECORDINGS_COMPUTE_TYPE",
+            "call_recordings_whisper_language": "CALL_RECORDINGS_WHISPER_LANGUAGE",
             "call_recordings_file_extensions": "CALL_RECORDINGS_FILE_EXTENSIONS",
             "call_recordings_max_files": "CALL_RECORDINGS_MAX_FILES",
             "call_recordings_sync_interval": "CALL_RECORDINGS_SYNC_INTERVAL",
+            "call_recordings_diarization_model": "CALL_RECORDINGS_DIARIZATION_MODEL",
             "hf_token": "HF_TOKEN",
         }
 
@@ -159,6 +189,10 @@ class CallRecordingsPlugin(ChannelPlugin):
             settings_db.get_setting_value("call_recordings_whisper_model")
             or DEFAULT_MODEL_SIZE
         )
+        compute_type = (
+            settings_db.get_setting_value("call_recordings_compute_type")
+            or "auto"
+        )
         extensions_str = (
             settings_db.get_setting_value("call_recordings_file_extensions")
             or "mp3,wav,m4a,ogg,flac"
@@ -180,15 +214,23 @@ class CallRecordingsPlugin(ChannelPlugin):
         enable_diarization = (
             settings_db.get_setting_value("call_recordings_enable_diarization") or "true"
         ).lower() in ("true", "1", "yes")
+        diarization_model = (
+            settings_db.get_setting_value("call_recordings_diarization_model")
+            or DEFAULT_DIARIZATION_MODEL
+        )
+
         self._transcriber = WhisperTranscriber(
             model_size=whisper_model,
             hf_token=hf_token if hf_token else None,
             enable_diarization=enable_diarization,
+            compute_type=compute_type,
+            diarization_model=diarization_model,
         )
         diar_status = "enabled" if enable_diarization else "disabled"
         logger.info(
-            f"Call Recordings: Whisper model '{whisper_model}', "
-            f"diarization {diar_status}"
+            f"Call Recordings: Whisper model '{whisper_model}' "
+            f"(compute={compute_type}), diarization {diar_status} "
+            f"(pipeline={diarization_model})"
         )
 
         from llamaindex_rag import get_rag
