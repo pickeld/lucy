@@ -30,7 +30,7 @@ VALID_MODEL_SIZES = {"tiny", "base", "small", "medium", "large", "large-v2", "la
 DEFAULT_MODEL_SIZE = "medium"
 
 # Default diarization pipeline
-DEFAULT_DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
+DEFAULT_DIARIZATION_MODEL = "pyannote/speaker-diarization-community-1"
 
 # Compute types ordered by preference per device
 _CPU_COMPUTE_TYPE = "int8"       # fastest on CPU, minimal quality loss
@@ -107,7 +107,7 @@ class WhisperTranscriber:
         local_files_only: If True, never download models from the Hub —
             only use locally cached files.  Useful for air-gapped deployments.
         diarization_model: pyannote pipeline identifier or local path.
-            Defaults to ``"pyannote/speaker-diarization-3.1"``.
+            Defaults to ``"pyannote/speaker-diarization-community-1"``.
     """
 
     def __init__(
@@ -365,14 +365,11 @@ class WhisperTranscriber:
     def _load_diarization_pipeline(self, token: str) -> bool:
         """Load the pyannote diarization pipeline.
 
-        Authentication is done exclusively via the ``HF_TOKEN``
-        environment variable.  This avoids the ``token=`` vs
-        ``use_auth_token=`` kwarg incompatibility across pyannote
-        and huggingface_hub versions (the root cause of the
-        "unexpected keyword argument 'token'" error).
+        Uses ``token=`` kwarg as required by pyannote 4.x.
+        Also sets ``HF_TOKEN`` in the environment as a fallback.
 
         Args:
-            token: HuggingFace auth token (set into env, not passed as kwarg)
+            token: HuggingFace auth token
 
         Returns:
             True if pipeline loaded successfully
@@ -416,8 +413,17 @@ class WhisperTranscriber:
                 f"(auth via HF_TOKEN env var)..."
             )
 
-            # Load pipeline — auth handled by env var, no token kwarg needed
-            self._diarization_pipeline = Pipeline.from_pretrained(model_id)
+            # Verify FFmpeg is available (required by pyannote 4.x for audio I/O)
+            if not self._verify_ffmpeg():
+                logger.warning(
+                    "pyannote.audio 4.x requires FFmpeg but it was not found on PATH. "
+                    "Diarization may fail. Install ffmpeg: apt-get install ffmpeg"
+                )
+
+            # Load pipeline — pyannote 4.x uses token= kwarg
+            self._diarization_pipeline = Pipeline.from_pretrained(
+                model_id, token=token,
+            )
 
             # Move to GPU if available
             try:
@@ -442,6 +448,20 @@ class WhisperTranscriber:
                     logger.debug("Restored original torch.load")
                 except ImportError:
                     pass
+
+    @staticmethod
+    def _verify_ffmpeg() -> bool:
+        """Check that ffmpeg is available on PATH (required by pyannote 4.x)."""
+        import subprocess
+        try:
+            subprocess.run(
+                ["ffmpeg", "-version"],
+                capture_output=True,
+                timeout=5,
+            )
+            return True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False
 
     def _log_diarization_error(self, error: Exception):
         """Log a diarization loading error with actionable guidance.

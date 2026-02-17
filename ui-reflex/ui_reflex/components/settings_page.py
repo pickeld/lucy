@@ -810,6 +810,19 @@ def _recording_row(item: dict) -> rx.Component:
                     ),
                     rx.fragment(),
                 ),
+                # Restart button (only for transcribing — restarts stuck jobs)
+                rx.cond(
+                    item["status"] == "transcribing",
+                    rx.icon_button(
+                        rx.icon("rotate-ccw", size=16),
+                        on_click=AppState.restart_stuck_transcription(item["content_hash"]),
+                        variant="ghost",
+                        size="1",
+                        class_name="text-orange-500 hover:text-orange-700",
+                        title="Restart stuck transcription",
+                    ),
+                    rx.fragment(),
+                ),
                 # Transcribe / retranscribe button (all statuses except transcribing)
                 rx.cond(
                     item["status"] != "transcribing",

@@ -451,3 +451,63 @@ def get_counts() -> Dict[str, int]:
         return {r["status"]: r["cnt"] for r in rows}
     finally:
         conn.close()
+
+
+def get_known_hashes() -> set:
+    """Return a set of all content_hash values already tracked in the DB.
+
+    Used by scan_and_register() to skip files that are already known
+    without running expensive metadata lookups or entity resolution.
+    """
+    conn = _get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT content_hash FROM call_recording_files"
+        ).fetchall()
+        return {r["content_hash"] for r in rows}
+    finally:
+        conn.close()
+
+
+def reset_stale_transcribing(stale_minutes: int = 30) -> int:
+    """Reset recordings stuck in 'transcribing' state back to 'pending'.
+
+    A recording is considered stuck if it has been in 'transcribing' state
+    for longer than *stale_minutes* (default 30).  This typically happens
+    when the transcription process was killed or crashed without updating
+    the DB.
+
+    Args:
+        stale_minutes: Minutes after which a transcribing job is considered stale.
+
+    Returns:
+        Number of rows reset.
+    """
+    conn = _get_connection()
+    try:
+        cutoff = datetime.now(timezone.utc).timestamp() - stale_minutes * 60
+        cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
+
+        cursor = conn.execute(
+            """
+            UPDATE call_recording_files
+            SET status = 'pending',
+                error_message = 'Reset: transcription appeared stuck (no progress for >' || ? || ' min)',
+                transcription_progress = '',
+                updated_at = datetime('now')
+            WHERE status = 'transcribing'
+              AND transcription_started_at != ''
+              AND transcription_started_at < ?
+            """,
+            (str(stale_minutes), cutoff_iso),
+        )
+        conn.commit()
+        count = cursor.rowcount
+        if count:
+            logger.info(
+                f"Reset {count} stale transcribing recording(s) "
+                f"(started > {stale_minutes} min ago)"
+            )
+        return count
+    finally:
+        conn.close()

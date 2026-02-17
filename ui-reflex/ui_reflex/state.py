@@ -2013,6 +2013,50 @@ class AppState(rx.State):
 
         self.call_recordings_scan_message = "⚠️ Transcription still running — refresh manually"
 
+    async def restart_stuck_transcription(self, content_hash: str):
+        """Restart a recording stuck in transcribing state.
+
+        Calls the restart endpoint which resets the status and
+        re-queues the transcription, then polls for progress.
+        """
+        import asyncio
+
+        self.call_recordings_scan_message = "\u23f3 Restarting stuck transcription\u2026"
+        yield
+
+        result = await api_client.restart_recording(content_hash)
+        if "error" in result and result.get("status") != "restarted":
+            self.call_recordings_scan_message = f"\u274c {result['error']}"
+            await self._load_recording_files()
+            return
+
+        self.call_recordings_scan_message = "\u23f3 Restarted \u2014 transcribing\u2026"
+
+        # Poll for progress updates until transcription completes
+        max_polls = 360  # 30 minutes max
+        for _ in range(max_polls):
+            has_transcribing = await self._load_recording_files()
+            yield
+
+            if not has_transcribing:
+                final_files = self.call_recordings_files
+                target = next(
+                    (f for f in final_files if f.get("content_hash") == content_hash),
+                    None,
+                )
+                if target and target.get("status") == "transcribed":
+                    self.call_recordings_scan_message = "\u2705 Transcription complete"
+                elif target and target.get("status") == "error":
+                    err = target.get("error_message", "Unknown error")
+                    self.call_recordings_scan_message = f"\u274c Transcription failed: {err}"
+                else:
+                    self.call_recordings_scan_message = "\u2705 Transcription complete"
+                return
+
+            await asyncio.sleep(5)
+
+        self.call_recordings_scan_message = "\u26a0\ufe0f Transcription still running \u2014 refresh manually"
+
     async def save_recording_metadata(self, content_hash: str, field: str, value: str):
         """Save an edited metadata field for a recording."""
         kwargs: dict = {}

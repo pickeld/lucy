@@ -684,6 +684,21 @@ async def transcribe_recording(content_hash: str) -> dict[str, Any]:
         return {"error": str(e)}
 
 
+
+async def restart_recording(content_hash: str) -> dict[str, Any]:
+    """Restart a stuck transcription by resetting status and re-queuing."""
+    try:
+        resp = await _get_client().post(
+            f"/plugins/call_recordings/files/{content_hash}/restart",
+            timeout=600,
+        )
+        return resp.json()
+    except httpx.ReadTimeout:
+        return {"error": "Restart timed out — it may still be running"}
+    except Exception as e:
+        logger.error(f"Error restarting recording: {e}")
+        return {"error": str(e)}
+
 async def approve_recording(content_hash: str) -> dict[str, Any]:
     """Approve a transcribed recording and index it into Qdrant."""
     try:

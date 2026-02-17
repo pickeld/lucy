@@ -369,6 +369,40 @@ class CallRecordingsPlugin(ChannelPlugin):
             }), 202
 
         # =====================================================================
+        # RESTART — reset a stuck transcribing file and re-queue
+        # =====================================================================
+
+        @bp.route("/files/<content_hash>/restart", methods=["POST"])
+        def restart_transcription(content_hash):
+            """Restart a stuck transcription.
+
+            Resets the file status from 'transcribing' to 'pending',
+            then immediately re-queues it for transcription.
+            """
+            if not plugin._syncer:
+                return jsonify({"error": "Plugin not initialized"}), 500
+
+            record = recording_db.get_file(content_hash)
+            if not record:
+                return jsonify({"status": "error", "error": "File not found"}), 404
+
+            # Reset status to pending (clears progress fields)
+            recording_db.update_status(
+                content_hash, "pending",
+                error_message="Manually restarted by user",
+            )
+
+            # Re-mark as transcribing and queue
+            recording_db.update_status(content_hash, "transcribing")
+            future = plugin._syncer.transcribe_file_async(content_hash)
+
+            return jsonify({
+                "status": "restarted",
+                "content_hash": content_hash,
+                "message": "Transcription restarted",
+            }), 202
+
+        # =====================================================================
         # APPROVE — index a transcribed file into Qdrant
         # =====================================================================
 

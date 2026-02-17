@@ -46,6 +46,9 @@ from .transcriber import TranscriptionResult, WhisperTranscriber
 
 logger = logging.getLogger(__name__)
 
+# Minutes after which a "transcribing" job is considered stuck
+_STALE_TRANSCRIBING_MINUTES = 30
+
 
 class CallRecordingSyncer:
     """Handles the call recordings review-and-approve pipeline.
@@ -164,15 +167,21 @@ class CallRecordingSyncer:
         """Discover audio files and register them in the tracking DB.
 
         New files are inserted with status 'pending'.  Already-tracked files
-        are left unchanged.  When *auto_transcribe* is ``True``, new files
-        are queued for background transcription (non-blocking).
+        (transcribed, approved, etc.) are skipped entirely — no hash lookup,
+        no metadata resolution.
+
+        Stale 'transcribing' jobs (started > 30 min ago) are automatically
+        reset to 'pending' before scanning.
+
+        When *auto_transcribe* is ``True``, new files are queued for
+        background transcription (non-blocking).
 
         Args:
             auto_transcribe: If True, queue newly discovered files for
                 background transcription.
 
         Returns:
-            Dict with counts: discovered, new, queued, errors
+            Dict with counts: discovered, new, queued, skipped, errors
         """
         if self._syncing:
             return {"status": "already_running"}
@@ -181,9 +190,21 @@ class CallRecordingSyncer:
         discovered = 0
         new_files = 0
         queued = 0
+        skipped = 0
         errors = 0
 
         try:
+            # Reset recordings stuck in 'transcribing' state
+            stale_count = recording_db.reset_stale_transcribing(
+                stale_minutes=_STALE_TRANSCRIBING_MINUTES
+            )
+            if stale_count:
+                logger.info(f"Reset {stale_count} stale transcribing job(s)")
+
+            # Pre-fetch all known content hashes so we can skip already-tracked
+            # files without running expensive metadata lookups or entity resolution
+            known_hashes = recording_db.get_known_hashes()
+
             audio_files = self.scanner.scan()
             discovered = len(audio_files)
 
@@ -194,12 +215,19 @@ class CallRecordingSyncer:
                     "discovered": 0,
                     "new": 0,
                     "queued": 0,
+                    "skipped": 0,
                     "errors": 0,
+                    "stale_reset": stale_count,
                 }
 
             logger.info(f"Scan found {discovered} audio files")
 
             for af in audio_files:
+                # Fast path: skip files already tracked in the DB
+                if af.content_hash in known_hashes:
+                    skipped += 1
+                    continue
+
                 # Resolve metadata from file tags + filename
                 filename_meta = _parse_filename_metadata(af.filename)
 
@@ -266,6 +294,7 @@ class CallRecordingSyncer:
 
             logger.info(
                 f"Scan complete: {discovered} found, {new_files} new, "
+                f"{skipped} already tracked, "
                 f"{queued} queued for transcription, {errors} errors"
             )
 
@@ -274,7 +303,9 @@ class CallRecordingSyncer:
                 "discovered": discovered,
                 "new": new_files,
                 "queued": queued,
+                "skipped": skipped,
                 "errors": errors,
+                "stale_reset": stale_count,
             }
 
         except Exception as e:
@@ -707,6 +738,11 @@ class CallRecordingSyncer:
         errors = 0
 
         try:
+            # Reset stale transcribing jobs first
+            recording_db.reset_stale_transcribing(
+                stale_minutes=_STALE_TRANSCRIBING_MINUTES
+            )
+
             # Auto-detect empty collection → force mode
             if not force:
                 try:
@@ -719,6 +755,9 @@ class CallRecordingSyncer:
                 except Exception:
                     pass
 
+            # Pre-fetch known hashes to skip already-tracked files
+            known_hashes = recording_db.get_known_hashes()
+
             audio_files = self.scanner.scan()
             if not audio_files:
                 return {"status": "complete", "synced": 0, "skipped": 0, "errors": 0}
@@ -726,10 +765,17 @@ class CallRecordingSyncer:
             for af in audio_files[:max_files]:
                 source_id = af.source_id
 
-                # Dedup
+                # Dedup: skip files already approved in Qdrant
                 if not force and self.rag._message_exists(source_id):
                     skipped += 1
                     continue
+
+                # Skip files already tracked as transcribed/approved
+                if af.content_hash in known_hashes:
+                    existing = recording_db.get_file(af.content_hash)
+                    if existing and existing.get("status") in ("transcribed", "approved"):
+                        skipped += 1
+                        continue
 
                 # Register + transcribe
                 participants = self._resolve_participants(af)
