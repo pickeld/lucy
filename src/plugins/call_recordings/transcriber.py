@@ -266,10 +266,12 @@ class WhisperTranscriber:
 
             from pyannote.audio import Pipeline
 
+            # Ensure HF_TOKEN is in env — huggingface_hub reads it automatically
+            os.environ["HF_TOKEN"] = token
+
             logger.info("Loading pyannote speaker diarization pipeline...")
             self._diarization_pipeline = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
-                token=token,
             )
 
             # Move to GPU if available
