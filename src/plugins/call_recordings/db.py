@@ -60,6 +60,8 @@ def init_table() -> None:
                 phone_number    TEXT DEFAULT '',
                 error_message   TEXT DEFAULT '',
                 source_id       TEXT DEFAULT '',
+                transcription_started_at TEXT DEFAULT '',
+                transcription_progress   TEXT DEFAULT '',
                 created_at      TEXT DEFAULT (datetime('now')),
                 updated_at      TEXT DEFAULT (datetime('now'))
             )
@@ -72,10 +74,33 @@ def init_table() -> None:
             CREATE INDEX IF NOT EXISTS idx_crf_hash
             ON call_recording_files(content_hash)
         """)
+
+        # Migrations for existing databases
+        _migrate_progress_columns(conn)
+
         conn.commit()
         logger.info("call_recording_files table initialized")
     finally:
         conn.close()
+
+
+def _migrate_progress_columns(conn: sqlite3.Connection) -> None:
+    """Add transcription progress columns if missing (migration)."""
+    try:
+        conn.execute("SELECT transcription_started_at FROM call_recording_files LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute(
+            "ALTER TABLE call_recording_files ADD COLUMN transcription_started_at TEXT DEFAULT ''"
+        )
+        logger.info("Migration: added transcription_started_at column")
+
+    try:
+        conn.execute("SELECT transcription_progress FROM call_recording_files LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute(
+            "ALTER TABLE call_recording_files ADD COLUMN transcription_progress TEXT DEFAULT ''"
+        )
+        logger.info("Migration: added transcription_progress column")
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +216,9 @@ def update_status(
 ) -> bool:
     """Update the status of a file record.
 
+    When transitioning to 'transcribing', records the start timestamp.
+    When transitioning away from 'transcribing', clears progress fields.
+
     Args:
         content_hash: File content hash
         status: New status (pending, transcribing, transcribed, approved, error)
@@ -201,13 +229,64 @@ def update_status(
     """
     conn = _get_connection()
     try:
+        now_utc = datetime.now(timezone.utc).isoformat()
+
+        if status == "transcribing":
+            # Record when transcription started; reset progress
+            cursor = conn.execute(
+                """
+                UPDATE call_recording_files
+                SET status = ?, error_message = ?,
+                    transcription_started_at = ?,
+                    transcription_progress = 'Starting…',
+                    updated_at = datetime('now')
+                WHERE content_hash = ?
+                """,
+                (status, error_message, now_utc, content_hash),
+            )
+        else:
+            # Clear progress fields when leaving transcribing state
+            cursor = conn.execute(
+                """
+                UPDATE call_recording_files
+                SET status = ?, error_message = ?,
+                    transcription_progress = '',
+                    updated_at = datetime('now')
+                WHERE content_hash = ?
+                """,
+                (status, error_message, content_hash),
+            )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def update_progress(
+    content_hash: str,
+    progress: str,
+) -> bool:
+    """Update the transcription progress message for a file.
+
+    Called periodically during transcription to report live progress
+    (e.g., "Transcribing: 45s / 120s" or "Loading model…").
+
+    Args:
+        content_hash: File content hash
+        progress: Human-readable progress string
+
+    Returns:
+        True if row was updated.
+    """
+    conn = _get_connection()
+    try:
         cursor = conn.execute(
             """
             UPDATE call_recording_files
-            SET status = ?, error_message = ?, updated_at = datetime('now')
-            WHERE content_hash = ?
+            SET transcription_progress = ?, updated_at = datetime('now')
+            WHERE content_hash = ? AND status = 'transcribing'
             """,
-            (status, error_message, content_hash),
+            (progress, content_hash),
         )
         conn.commit()
         return cursor.rowcount > 0
@@ -252,6 +331,7 @@ def update_transcription(
                 participants = ?,
                 contact_name = CASE WHEN contact_name = '' THEN ? ELSE contact_name END,
                 error_message = '',
+                transcription_progress = '',
                 updated_at = datetime('now')
             WHERE content_hash = ?
             """,

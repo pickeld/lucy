@@ -16,9 +16,10 @@ import math
 import os
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -797,6 +798,7 @@ class WhisperTranscriber:
         beam_size: int = 5,
         word_timestamps: bool = False,
         initial_prompt: Optional[str] = None,
+        on_progress: Optional[Callable[[str], None]] = None,
     ) -> TranscriptionResult:
         """Transcribe an audio file using faster-whisper.
 
@@ -812,6 +814,10 @@ class WhisperTranscriber:
                 Useful for finer-grained diarization alignment.
             initial_prompt: Optional prompt text to condition the model.
                 Useful for domain vocabulary or spelling hints.
+            on_progress: Optional callback ``fn(message: str)`` called
+                periodically to report transcription progress.  Used by
+                the sync layer to write live progress to the DB so the
+                UI can display it.
 
         Returns:
             TranscriptionResult with full text (speaker-labeled when
@@ -822,16 +828,22 @@ class WhisperTranscriber:
             ImportError: If faster-whisper is not installed
             ValueError: If the audio file contains no decodable audio
         """
+        _report = on_progress or (lambda _msg: None)
+
         path = Path(audio_path)
         if not path.exists():
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
         # Pre-validate: check audio stream exists and has duration
+        _report("Validating audio…")
         self._validate_audio(path)
 
+        _report("Loading model…")
         self._ensure_model_loaded()
 
-        logger.info(f"Transcribing: {path.name} ({path.stat().st_size / 1024:.0f} KB)")
+        file_size_kb = path.stat().st_size / 1024
+        logger.info(f"Transcribing: {path.name} ({file_size_kb:.0f} KB)")
+        _report("Starting transcription…")
 
         # Build transcription kwargs
         transcribe_kwargs = dict(
@@ -863,10 +875,15 @@ class WhisperTranscriber:
                 ) from e
             raise
 
+        # Total audio duration from info (used for progress percentage)
+        audio_duration = info.duration if info.duration else 0
+
         # Consume the segment generator and collect results
         segments = []
         total_confidence = 0.0
         total_duration = 0.0
+        last_progress_time = time.monotonic()
+        _PROGRESS_INTERVAL_S = 3.0  # Throttle DB writes to every 3s
 
         for seg in segments_gen:
             segment_data = {
@@ -902,9 +919,25 @@ class WhisperTranscriber:
             if seg.end > total_duration:
                 total_duration = seg.end
 
+            # Report progress (throttled)
+            now = time.monotonic()
+            if now - last_progress_time >= _PROGRESS_INTERVAL_S:
+                last_progress_time = now
+                pos_s = int(seg.end)
+                if audio_duration > 0:
+                    pct = min(99, int(seg.end / audio_duration * 100))
+                    _report(
+                        f"Transcribing: {pos_s}s / {int(audio_duration)}s ({pct}%) "
+                        f"— {len(segments)} segments"
+                    )
+                else:
+                    _report(f"Transcribing: {pos_s}s — {len(segments)} segments")
+
         if not segments:
             logger.warning(f"Whisper returned no segments for {path.name}")
             return TranscriptionResult(text="", confidence=0.0)
+
+        _report(f"Transcription done — {len(segments)} segments, post-processing…")
 
         # Language from detection info
         language_detected = info.language
@@ -921,6 +954,7 @@ class WhisperTranscriber:
         # --- Speaker diarization (optional) ---
         speakers_detected = 0
         if self._enable_diarization:
+            _report(f"Running speaker diarization ({duration_seconds}s audio)…")
             diarization_turns = self._diarize(path)
             if diarization_turns:
                 segments = self._assign_speakers_to_segments(segments, diarization_turns)
@@ -930,6 +964,7 @@ class WhisperTranscriber:
                 ))
                 # Build speaker-labeled text
                 text = self._format_text_with_speakers(segments)
+                _report(f"Diarization complete — {speakers_detected} speakers")
             else:
                 # Diarization unavailable or failed — plain text
                 text = " ".join(seg["text"] for seg in segments if seg.get("text")).strip()

@@ -207,15 +207,22 @@ class CallRecordingSyncer:
                 phone_number = filename_meta.get("phone_number") or ""
                 fn_participants = filename_meta.get("participants") or ""
 
-                # Resolve contact name:
-                # 1. If phone detected → look up entity store
-                # 2. If name detected from filename → use directly
+                # Resolve contact name + phone from entity store:
+                # 1. If phone detected → look up entity store for display name
+                # 2. If name detected from filename → look up entity store for phone
                 contact_name = ""
                 if phone_number:
                     contact_name = self._lookup_contact_by_phone(phone_number)
                 elif fn_participants and not fn_participants.replace(" ", "").isdigit():
-                    # Filename had a name (not a phone number)
+                    # Filename had a name (not a phone number) — try to
+                    # find the entity and fill in the phone number
                     contact_name = fn_participants
+                    entity_info = self._lookup_entity_by_name(fn_participants)
+                    if entity_info:
+                        # Prefer entity display name over raw filename parse
+                        contact_name = entity_info.get("display_name") or contact_name
+                        if not phone_number and entity_info.get("phone"):
+                            phone_number = entity_info["phone"]
 
                 # Auto-detect participants from tags or filename
                 participants = self._resolve_participants(af)
@@ -350,12 +357,22 @@ class CallRecordingSyncer:
                 recording_db.update_status(content_hash, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        # Mark as transcribing
+        # Mark as transcribing (records start time + resets progress)
         recording_db.update_status(content_hash, "transcribing")
+
+        # Build a progress callback that writes to the DB
+        def _on_progress(message: str) -> None:
+            try:
+                recording_db.update_progress(content_hash, message)
+            except Exception:
+                pass  # Non-critical — don't let DB writes break transcription
 
         try:
             logger.info(f"Transcribing: {filename}")
-            transcription = self.transcriber.transcribe(transcribe_path)
+            transcription = self.transcriber.transcribe(
+                transcribe_path,
+                on_progress=_on_progress,
+            )
 
             if not transcription.text or len(transcription.text.strip()) < MIN_CONTENT_CHARS:
                 recording_db.update_status(
@@ -787,6 +804,44 @@ class CallRecordingSyncer:
             logger.debug(f"Entity lookup by phone failed for {phone}: {e}")
 
         return ""
+
+    def _lookup_entity_by_name(self, name: str) -> Optional[Dict[str, str]]:
+        """Look up a person in the entity store by name or alias.
+
+        Used when a filename contains a contact name (not a phone number)
+        to retrieve the phone number and canonical display name from the
+        entity store.
+
+        Args:
+            name: Contact name parsed from filename
+
+        Returns:
+            Dict with ``display_name`` and ``phone`` keys, or ``None``
+            if not found.
+        """
+        if not name:
+            return None
+
+        try:
+            import entity_db
+
+            person = entity_db.get_person_by_name(name)
+            if person:
+                display = (
+                    person.get("display_name")
+                    or person.get("canonical_name")
+                    or name
+                )
+                phone = person.get("phone") or ""
+                logger.info(
+                    f"Resolved name '{name}' → entity '{display}' "
+                    f"(id={person.get('id')}, phone={phone or 'N/A'})"
+                )
+                return {"display_name": str(display), "phone": str(phone)}
+        except Exception as e:
+            logger.debug(f"Entity lookup by name failed for '{name}': {e}")
+
+        return None
 
     def _resolve_participants(self, audio_file: AudioFile) -> List[str]:
         """Extract participant names from audio tags and filename."""

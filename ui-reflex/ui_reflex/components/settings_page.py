@@ -657,7 +657,7 @@ def _status_badge(status: rx.Var[str]) -> rx.Component:
                     "px-2 py-0.5 rounded-full bg-red-100 text-red-700 inline-block",
                     rx.cond(
                         status == "transcribing",
-                        "px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 inline-block",
+                        "px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 inline-block animate-pulse",
                         "px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 inline-block",
                     ),
                 ),
@@ -701,6 +701,30 @@ def _recording_row(item: dict) -> rx.Component:
                     align="center",
                     gap="2",
                     wrap="wrap",
+                ),
+                # Transcription progress (visible only while transcribing)
+                rx.cond(
+                    (item["status"] == "transcribing")
+                    & (item["transcription_progress"] != ""),
+                    rx.flex(
+                        rx.icon("loader-circle", size=12, class_name="animate-spin text-yellow-600"),
+                        rx.text(
+                            item["transcription_progress"],
+                            class_name="text-xs text-yellow-700",
+                        ),
+                        rx.cond(
+                            item["transcription_started_at"] != "",
+                            rx.text(
+                                "(started " + item["transcription_started_at"][:19] + ")",  # type: ignore[operator]
+                                class_name="text-xs text-gray-400",
+                            ),
+                            rx.fragment(),
+                        ),
+                        align="center",
+                        gap="2",
+                        class_name="mt-1",
+                    ),
+                    rx.fragment(),
                 ),
                 # Editable metadata row
                 rx.flex(

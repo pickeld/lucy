@@ -1891,10 +1891,15 @@ class AppState(rx.State):
 
     # ----- Call Recordings files table -----
 
-    async def _load_recording_files(self):
-        """Fetch recording files from the backend and populate the table."""
+    async def _load_recording_files(self) -> bool:
+        """Fetch recording files from the backend and populate the table.
+
+        Returns:
+            True if any files are currently in 'transcribing' state.
+        """
         self.call_recordings_files_loading = True
         result = await api_client.fetch_call_recording_files()
+        has_transcribing = False
         if "error" in result and result["error"]:
             self.call_recordings_files = []
             self.call_recordings_counts = {}
@@ -1907,7 +1912,12 @@ class AppState(rx.State):
             ]
             counts = result.get("counts", {})
             self.call_recordings_counts = {k: str(v) for k, v in counts.items()}
+            # Check if any files are still transcribing
+            has_transcribing = any(
+                f.get("status") == "transcribing" for f in raw_files
+            )
         self.call_recordings_files_loading = False
+        return has_transcribing
 
     async def load_recording_files(self):
         """Public handler to load/refresh the recordings table."""
@@ -1958,15 +1968,50 @@ class AppState(rx.State):
         await self._load_recording_files()
 
     async def retry_transcription(self, content_hash: str):
-        """Retry transcription for a failed recording."""
-        self.call_recordings_scan_message = "⏳ Retrying transcription…"
+        """Retry transcription for a recording.
+
+        Triggers background transcription and polls for progress updates
+        every 5 seconds until the file is no longer in 'transcribing' state.
+        """
+        import asyncio
+
+        self.call_recordings_scan_message = "⏳ Transcription queued…"
         yield
+
         result = await api_client.transcribe_recording(content_hash)
-        if "error" in result:
+        if "error" in result and result.get("status") != "queued":
             self.call_recordings_scan_message = f"❌ {result['error']}"
-        else:
-            self.call_recordings_scan_message = "✅ Transcription complete"
-        await self._load_recording_files()
+            await self._load_recording_files()
+            return
+
+        self.call_recordings_scan_message = "⏳ Transcribing — progress updates every 5s…"
+
+        # Poll for progress updates until transcription completes
+        max_polls = 360  # 30 minutes max
+        for _ in range(max_polls):
+            has_transcribing = await self._load_recording_files()
+            yield  # Push updated file list to UI
+
+            if not has_transcribing:
+                # Transcription finished (or errored)
+                # Check the final status
+                final_files = self.call_recordings_files
+                target = next(
+                    (f for f in final_files if f.get("content_hash") == content_hash),
+                    None,
+                )
+                if target and target.get("status") == "transcribed":
+                    self.call_recordings_scan_message = "✅ Transcription complete"
+                elif target and target.get("status") == "error":
+                    err = target.get("error_message", "Unknown error")
+                    self.call_recordings_scan_message = f"❌ Transcription failed: {err}"
+                else:
+                    self.call_recordings_scan_message = "✅ Transcription complete"
+                return
+
+            await asyncio.sleep(5)
+
+        self.call_recordings_scan_message = "⚠️ Transcription still running — refresh manually"
 
     async def save_recording_metadata(self, content_hash: str, field: str, value: str):
         """Save an edited metadata field for a recording."""
