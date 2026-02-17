@@ -2,4 +2,6 @@
 2. create google events
 3. integrate gmail
 4. identify faces
-5. 
+5. rich response > location / contacts/ events
+6. pushbullet integraion for sending notificaion.
+7. scheduled (dayly / weekly / monthly / cuystom) query for planning and highlights
