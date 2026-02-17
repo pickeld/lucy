@@ -348,7 +348,7 @@ class WhisperTranscriber:
 
         Thread-safe and version-aware:
         - pyannote >= 4.0: uses ``token=`` kwarg, FFmpeg-only I/O
-        - pyannote 3.x: uses ``use_auth_token=`` kwarg, applies legacy shims
+        - pyannote 3.x: uses ``use_auth_token=`` kwarg
 
         Returns True if the pipeline is ready, False if unavailable.
         """
@@ -421,9 +421,8 @@ class WhisperTranscriber:
             pass
 
         try:
-            # --- Compatibility: torchaudio shims (only for pyannote < 4.0) ---
+            # --- Compatibility: huggingface_hub shim (only for pyannote < 4.0) ---
             if not is_v4_plus:
-                self._apply_torchaudio_shims()
                 self._apply_huggingface_hub_shim()
 
             if is_v4_plus:
@@ -488,53 +487,6 @@ class WhisperTranscriber:
                     logger.debug("Restored original torch.load")
                 except ImportError:
                     pass
-
-    def _apply_torchaudio_shims(self):
-        """Apply torchaudio compatibility shims for pyannote 3.x.
-
-        Only called when pyannote < 4.0 — newer versions dropped
-        torchaudio soundfile/sox backends entirely.
-        """
-        try:
-            import torchaudio
-
-            patched = []
-
-            # AudioMetaData was removed in torchaudio >= 2.6
-            if not hasattr(torchaudio, "AudioMetaData"):
-                dummy_cls = getattr(torchaudio, "AudioInfo", None)
-                if dummy_cls is None:
-                    from dataclasses import make_dataclass
-                    dummy_cls = make_dataclass(
-                        "AudioMetaData",
-                        [
-                            ("sample_rate", int, 0),
-                            ("num_frames", int, 0),
-                            ("num_channels", int, 0),
-                            ("bits_per_sample", int, 0),
-                            ("encoding", str, ""),
-                        ],
-                    )
-                torchaudio.AudioMetaData = dummy_cls
-                patched.append("AudioMetaData")
-
-            # list_audio_backends was removed
-            if not hasattr(torchaudio, "list_audio_backends"):
-                torchaudio.list_audio_backends = lambda: ["soundfile"]
-                patched.append("list_audio_backends")
-
-            # get_audio_backend was removed
-            if not hasattr(torchaudio, "get_audio_backend"):
-                torchaudio.get_audio_backend = lambda: "soundfile"
-                patched.append("get_audio_backend")
-
-            if patched:
-                logger.debug(
-                    f"Applied torchaudio compatibility shims (pyannote <4.0): "
-                    f"{', '.join(patched)}"
-                )
-        except ImportError:
-            pass
 
     def _apply_huggingface_hub_shim(self):
         """Patch huggingface_hub for pyannote 3.x use_auth_token compat.
