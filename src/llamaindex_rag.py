@@ -1663,6 +1663,31 @@ class LlamaIndexRAG:
                 return f"{source_label} | {formatted_time} | Document '{chat_name}':\n{text}"
         
         # -----------------------------------------------------------------
+        # Call recordings: prefer _node_content (full transcript chunk, up to
+        # 6000 chars) over the 'message' metadata field which is truncated
+        # to 2000 chars.  The full transcript is essential for the LLM to
+        # cite the correct passage — e.g. when a user asks "who did princess
+        # training?" the relevant sentence may be past the 2000-char mark.
+        # -----------------------------------------------------------------
+        if source == "call_recording":
+            # Try message field first (may be truncated to 2000 chars)
+            text = message
+            # Prefer _node_content which stores the full embedding text
+            # (header + complete transcript chunk)
+            node_content = payload.get("_node_content")
+            if node_content and isinstance(node_content, str):
+                try:
+                    nc_text = json.loads(node_content).get("text", "")
+                    if nc_text and len(nc_text) > len(text or ""):
+                        text = nc_text
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            
+            if text:
+                formatted_time = format_timestamp(str(timestamp))
+                return f"{source_label} | {formatted_time} | {sender} in {chat_name}:\n{text}"
+        
+        # -----------------------------------------------------------------
         # Standard messages (WhatsApp, Gmail, etc.) use the 'message' field
         # -----------------------------------------------------------------
         if message:
@@ -2638,27 +2663,37 @@ class LlamaIndexRAG:
             logger.debug(f"Context expansion failed (non-critical): {e}")
             return results
     
+    # Sources whose multi-chunk documents should be expanded to include
+    # all sibling chunks when any single chunk matches.  Each entry maps
+    # the ``source`` payload value to the expected ``source_id`` prefix.
+    _EXPANDABLE_SOURCES: Dict[str, str] = {
+        "paperless": "paperless:",
+        "call_recording": "call_recording:",
+    }
+    
     def expand_document_chunks(
         self,
         results: List[NodeWithScore],
         max_total: int = 30,
     ) -> List[NodeWithScore]:
-        """Expand results by fetching ALL sibling chunks from matched Paperless documents.
+        """Expand results by fetching ALL sibling chunks from matched multi-chunk documents.
         
-        When a Paperless document chunk is found in search results, this method
-        fetches all other chunks from the same document using the source_id prefix.
-        This ensures the LLM sees the complete document content — not just the
-        chunk that happened to match the query semantically.
+        When a multi-chunk document (Paperless document or call recording
+        transcript) is found in search results, this method fetches all
+        other chunks from the same document using the source_id.  This
+        ensures the LLM sees the complete content — not just the chunk
+        that happened to match the query semantically.
         
-        For example, if the query "how many children does David have?" matches a
-        custody clause chunk of a divorce agreement, this will also fetch the
-        preamble chunk that lists the children's names and birthdates.
+        For example:
+        - A custody clause chunk → also fetches the children's names chunk
+        - A call recording chunk about weather → also fetches the chunk
+          that mentions "princess training" later in the same call
         
-        Only applies to multi-chunk Paperless documents (source_id starts with
-        "paperless:"). WhatsApp messages and single-chunk documents are unaffected.
+        Applies to multi-chunk Paperless documents and call recordings.
+        WhatsApp messages and single-chunk documents are unaffected.
         
         Args:
-            results: Original search results (may include Paperless document chunks)
+            results: Original search results (may include multi-chunk documents)
             max_total: Maximum total nodes to return after expansion
             
         Returns:
@@ -2668,8 +2703,10 @@ class LlamaIndexRAG:
             return results
         
         try:
-            # Collect unique Paperless document IDs from results
-            # source_id format for Paperless: "paperless:{doc_id}"
+            # Collect unique document IDs from results for expandable sources
+            # source_id formats:
+            #   Paperless:       "paperless:{doc_id}"
+            #   Call recordings:  "call_recording:{content_hash}"
             doc_ids: set = set()
             existing_ids: set = set()
             
@@ -2681,9 +2718,10 @@ class LlamaIndexRAG:
                 metadata = getattr(node, "metadata", {})
                 source = metadata.get("source", "")
                 source_id = metadata.get("source_id", "")
-                # Only expand Paperless multi-chunk documents
-                if source == "paperless" and source_id.startswith("paperless:"):
-                    doc_id = source_id  # e.g. "paperless:123"
+                # Check if this source type supports chunk expansion
+                expected_prefix = self._EXPANDABLE_SOURCES.get(source)
+                if expected_prefix and source_id.startswith(expected_prefix):
+                    doc_id = source_id
                     # Check if this document has multiple chunks
                     chunk_total = metadata.get("chunk_total")
                     if chunk_total and int(chunk_total) > 1:

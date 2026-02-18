@@ -598,7 +598,12 @@ class CallRecordingSyncer:
             nodes = []
             for idx, chunk in enumerate(chunks):
                 chunk_meta = dict(base_metadata)
-                chunk_meta["message"] = chunk[:2000]
+                # Store the full chunk text in metadata so that
+                # _extract_text_from_payload can display the complete
+                # transcript in source citations.  Previously truncated
+                # to 2000 chars, which hid relevant content from the
+                # LLM context and user-facing source display.
+                chunk_meta["message"] = chunk
 
                 if len(chunks) > 1:
                     chunk_meta["chunk_index"] = str(idx)
