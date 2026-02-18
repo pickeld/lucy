@@ -613,8 +613,8 @@ def _speaker_row(entry: dict) -> rx.Component:
         rx.el.input(
             type="text",
             placeholder="Enter name…",
-            default_value=entry["new_name"],
-            on_blur=AppState.set_speaker_name(entry["old_label"]),
+            value=entry["new_name"],
+            on_change=AppState.set_speaker_name(entry["old_label"]),
             class_name=(
                 "text-sm bg-white border border-gray-200 rounded-lg "
                 "px-2 py-1.5 outline-none focus:border-accent flex-1"
@@ -673,28 +673,24 @@ def _detail_panel(item: dict) -> rx.Component:
                         AppState.recordings_speaker_map,
                         _speaker_row,
                     ),
-                    # Swap button (for first two speakers)
-                    rx.cond(
-                        AppState.recordings_speaker_map.length() >= 2,  # type: ignore[union-attr]
-                        rx.flex(
-                            rx.icon_button(
-                                rx.icon("arrow-up-down", size=14),
-                                on_click=AppState.swap_speakers,
-                                variant="ghost",
-                                size="1",
-                                class_name="text-gray-400 hover:text-accent",
-                                title="Swap first two speakers",
-                            ),
-                            rx.text(
-                                "Swap",
-                                class_name="text-xs text-gray-400",
-                            ),
-                            align="center",
-                            gap="1",
-                            justify="center",
-                            class_name="mb-2",
+                    # Swap button (swaps first two speaker names)
+                    rx.flex(
+                        rx.icon_button(
+                            rx.icon("arrow-up-down", size=14),
+                            on_click=AppState.swap_speakers,
+                            variant="ghost",
+                            size="1",
+                            class_name="text-gray-400 hover:text-accent",
+                            title="Swap first two speakers",
                         ),
-                        rx.fragment(),
+                        rx.text(
+                            "Swap",
+                            class_name="text-xs text-gray-400",
+                        ),
+                        align="center",
+                        gap="1",
+                        justify="center",
+                        class_name="mb-2",
                     ),
                     # Hint
                     rx.text(
