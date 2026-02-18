@@ -31,5 +31,16 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # Make port 8765 available to the world outside this container
 EXPOSE 8765
 
-# Run the application with hot reload for development
-CMD ["python", "-u", "src/app.py"]
+# Run with gunicorn for production-grade concurrency.
+# --workers 4 --threads 2 = 8 concurrent request handlers.
+# --reload enables auto-restart on code changes (for development).
+# --timeout 300 allows long-running RAG queries to complete.
+# For pure local development, use: python -u src/app.py
+CMD ["gunicorn", "--bind", "0.0.0.0:8765", \
+     "--workers", "4", \
+     "--threads", "2", \
+     "--timeout", "300", \
+     "--reload", \
+     "--access-logfile", "-", \
+     "--chdir", "/app/src", \
+     "app:app"]

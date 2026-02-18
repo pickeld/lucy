@@ -37,6 +37,9 @@ celery[redis]>=5.3.0
 # Rate limiting
 flask-limiter>=3.0
 
+# Production WSGI server (multi-worker, multi-threaded)
+gunicorn>=21.2.0
+
 # Gmail OAuth2 + API
 google-api-python-client>=2.0
 google-auth>=2.0

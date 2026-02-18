@@ -22,7 +22,9 @@ def _get_client() -> httpx.AsyncClient:
     if _client is None or _client.is_closed:
         _client = httpx.AsyncClient(
             base_url=API_URL,
-            timeout=300,
+            # Default timeout — overridden per-request for fast endpoints.
+            # Long default accommodates RAG queries and transcription syncs.
+            timeout=120,
             limits=httpx.Limits(
                 max_keepalive_connections=5,
                 max_connections=10,
@@ -68,7 +70,7 @@ async def check_health() -> dict[str, Any]:
 
 async def fetch_conversations(limit: int = 50) -> list[dict[str, Any]]:
     try:
-        resp = await _get_client().get("/conversations", params={"limit": limit})
+        resp = await _get_client().get("/conversations", params={"limit": limit}, timeout=10)
         if resp.status_code == 200:
             return resp.json().get("conversations", [])
     except (httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadError):
@@ -82,7 +84,7 @@ async def fetch_conversations(limit: int = 50) -> list[dict[str, Any]]:
 
 async def fetch_conversation(conversation_id: str) -> dict[str, Any] | None:
     try:
-        resp = await _get_client().get(f"/conversations/{conversation_id}")
+        resp = await _get_client().get(f"/conversations/{conversation_id}", timeout=10)
         if resp.status_code == 200:
             return resp.json()
     except Exception as e:
@@ -92,7 +94,7 @@ async def fetch_conversation(conversation_id: str) -> dict[str, Any] | None:
 
 async def delete_conversation(conversation_id: str) -> bool:
     try:
-        resp = await _get_client().delete(f"/conversations/{conversation_id}")
+        resp = await _get_client().delete(f"/conversations/{conversation_id}", timeout=10)
         return resp.status_code == 200
     except Exception:
         return False
@@ -175,7 +177,7 @@ async def rag_query(
         payload["sort_order"] = sort_order
 
     try:
-        resp = await _get_client().post("/rag/query", json=payload)
+        resp = await _get_client().post("/rag/query", json=payload, timeout=120)
         if resp.status_code == 200:
             return resp.json()
         else:
@@ -674,7 +676,7 @@ async def transcribe_recording(content_hash: str) -> dict[str, Any]:
     try:
         resp = await _get_client().post(
             f"/plugins/call_recordings/files/{content_hash}/transcribe",
-            timeout=600,
+            timeout=30,  # endpoint returns 202 immediately; actual work is async
         )
         return resp.json()
     except httpx.ReadTimeout:
@@ -690,7 +692,7 @@ async def restart_recording(content_hash: str) -> dict[str, Any]:
     try:
         resp = await _get_client().post(
             f"/plugins/call_recordings/files/{content_hash}/restart",
-            timeout=600,
+            timeout=30,  # endpoint returns 202 immediately; actual work is async
         )
         return resp.json()
     except httpx.ReadTimeout:

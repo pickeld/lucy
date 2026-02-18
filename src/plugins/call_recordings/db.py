@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 
 _DB_PATH: Optional[str] = None
 
+# Thread-local storage for connection reuse — avoids opening/closing a fresh
+# SQLite connection on every single DB call.
+import threading as _threading
+_local = _threading.local()
+
 
 def _resolve_db_path() -> str:
     """Resolve the database path — same location as settings_db."""
@@ -29,59 +34,73 @@ def _resolve_db_path() -> str:
 
 
 def _get_connection() -> sqlite3.Connection:
-    """Get a new SQLite connection with WAL mode and row factory."""
-    conn = sqlite3.connect(_resolve_db_path())
+    """Get a thread-local SQLite connection (reused within the same thread).
+
+    Uses threading.local() so each gunicorn/Celery worker thread gets its
+    own persistent connection, eliminating the open/close overhead.
+    """
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
+        try:
+            conn.execute("SELECT 1")
+            return conn
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            _local.conn = None
+
+    conn = sqlite3.connect(_resolve_db_path(), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    _local.conn = conn
     return conn
 
 
 def init_table() -> None:
     """Create the call_recording_files table if it doesn't exist."""
     conn = _get_connection()
-    try:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS call_recording_files (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                content_hash    TEXT UNIQUE NOT NULL,
-                filename        TEXT NOT NULL,
-                file_path       TEXT NOT NULL,
-                file_size       INTEGER DEFAULT 0,
-                extension       TEXT DEFAULT '',
-                modified_at     TEXT DEFAULT '',
-                status          TEXT DEFAULT 'pending',
-                transcript_text TEXT DEFAULT '',
-                language        TEXT DEFAULT '',
-                duration_seconds INTEGER DEFAULT 0,
-                confidence      REAL DEFAULT 0.0,
-                participants    TEXT DEFAULT '[]',
-                contact_name    TEXT DEFAULT '',
-                phone_number    TEXT DEFAULT '',
-                error_message   TEXT DEFAULT '',
-                source_id       TEXT DEFAULT '',
-                transcription_started_at TEXT DEFAULT '',
-                transcription_progress   TEXT DEFAULT '',
-                created_at      TEXT DEFAULT (datetime('now')),
-                updated_at      TEXT DEFAULT (datetime('now'))
-            )
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_crf_status
-            ON call_recording_files(status)
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_crf_hash
-            ON call_recording_files(content_hash)
-        """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS call_recording_files (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            content_hash    TEXT UNIQUE NOT NULL,
+            filename        TEXT NOT NULL,
+            file_path       TEXT NOT NULL,
+            file_size       INTEGER DEFAULT 0,
+            extension       TEXT DEFAULT '',
+            modified_at     TEXT DEFAULT '',
+            status          TEXT DEFAULT 'pending',
+            transcript_text TEXT DEFAULT '',
+            language        TEXT DEFAULT '',
+            duration_seconds INTEGER DEFAULT 0,
+            confidence      REAL DEFAULT 0.0,
+            participants    TEXT DEFAULT '[]',
+            contact_name    TEXT DEFAULT '',
+            phone_number    TEXT DEFAULT '',
+            error_message   TEXT DEFAULT '',
+            source_id       TEXT DEFAULT '',
+            transcription_started_at TEXT DEFAULT '',
+            transcription_progress   TEXT DEFAULT '',
+            created_at      TEXT DEFAULT (datetime('now')),
+            updated_at      TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_crf_status
+        ON call_recording_files(status)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_crf_hash
+        ON call_recording_files(content_hash)
+    """)
 
-        # Migrations for existing databases
-        _migrate_progress_columns(conn)
+    # Migrations for existing databases
+    _migrate_progress_columns(conn)
 
-        conn.commit()
-        logger.info("call_recording_files table initialized")
-    finally:
-        conn.close()
+    conn.commit()
+    logger.info("call_recording_files table initialized")
 
 
 def _migrate_progress_columns(conn: sqlite3.Connection) -> None:
@@ -128,57 +147,51 @@ def upsert_file(
         The row as a dict.
     """
     conn = _get_connection()
-    try:
-        # Check if already tracked
-        row = conn.execute(
-            "SELECT * FROM call_recording_files WHERE content_hash = ?",
-            (content_hash,),
-        ).fetchone()
-        if row:
-            return dict(row)
+    # Check if already tracked
+    row = conn.execute(
+        "SELECT * FROM call_recording_files WHERE content_hash = ?",
+        (content_hash,),
+    ).fetchone()
+    if row:
+        return dict(row)
 
-        participants_json = json.dumps(participants or [])
-        conn.execute(
-            """
-            INSERT INTO call_recording_files
-                (content_hash, filename, file_path, file_size, extension,
-                 modified_at, status, participants, contact_name, phone_number)
-            VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
-            """,
-            (
-                content_hash,
-                filename,
-                file_path,
-                file_size,
-                extension,
-                modified_at,
-                participants_json,
-                contact_name,
-                phone_number,
-            ),
-        )
-        conn.commit()
+    participants_json = json.dumps(participants or [])
+    conn.execute(
+        """
+        INSERT INTO call_recording_files
+            (content_hash, filename, file_path, file_size, extension,
+             modified_at, status, participants, contact_name, phone_number)
+        VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+        """,
+        (
+            content_hash,
+            filename,
+            file_path,
+            file_size,
+            extension,
+            modified_at,
+            participants_json,
+            contact_name,
+            phone_number,
+        ),
+    )
+    conn.commit()
 
-        row = conn.execute(
-            "SELECT * FROM call_recording_files WHERE content_hash = ?",
-            (content_hash,),
-        ).fetchone()
-        return dict(row) if row else {}
-    finally:
-        conn.close()
+    row = conn.execute(
+        "SELECT * FROM call_recording_files WHERE content_hash = ?",
+        (content_hash,),
+    ).fetchone()
+    return dict(row) if row else {}
 
 
 def get_file(content_hash: str) -> Optional[Dict[str, Any]]:
     """Get a single file record by content hash."""
     conn = _get_connection()
-    try:
-        row = conn.execute(
-            "SELECT * FROM call_recording_files WHERE content_hash = ?",
-            (content_hash,),
-        ).fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
+    row = conn.execute(
+        "SELECT * FROM call_recording_files WHERE content_hash = ?",
+        (content_hash,),
+    ).fetchone()
+    return dict(row) if row else None
 
 
 def list_files(
@@ -191,22 +204,19 @@ def list_files(
         List of row dicts, ordered by created_at descending.
     """
     conn = _get_connection()
-    try:
-        if status:
-            rows = conn.execute(
-                "SELECT * FROM call_recording_files WHERE status = ? "
-                "ORDER BY created_at DESC LIMIT ?",
-                (status, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM call_recording_files "
-                "ORDER BY created_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
+    if status:
+        rows = conn.execute(
+            "SELECT * FROM call_recording_files WHERE status = ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (status, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM call_recording_files "
+            "ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def update_status(
@@ -228,38 +238,35 @@ def update_status(
         True if row was updated.
     """
     conn = _get_connection()
-    try:
-        now_utc = datetime.now(timezone.utc).isoformat()
+    now_utc = datetime.now(timezone.utc).isoformat()
 
-        if status == "transcribing":
-            # Record when transcription started; reset progress
-            cursor = conn.execute(
-                """
-                UPDATE call_recording_files
-                SET status = ?, error_message = ?,
-                    transcription_started_at = ?,
-                    transcription_progress = 'Starting…',
-                    updated_at = datetime('now')
-                WHERE content_hash = ?
-                """,
-                (status, error_message, now_utc, content_hash),
-            )
-        else:
-            # Clear progress fields when leaving transcribing state
-            cursor = conn.execute(
-                """
-                UPDATE call_recording_files
-                SET status = ?, error_message = ?,
-                    transcription_progress = '',
-                    updated_at = datetime('now')
-                WHERE content_hash = ?
-                """,
-                (status, error_message, content_hash),
-            )
-        conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        conn.close()
+    if status == "transcribing":
+        # Record when transcription started; reset progress
+        cursor = conn.execute(
+            """
+            UPDATE call_recording_files
+            SET status = ?, error_message = ?,
+                transcription_started_at = ?,
+                transcription_progress = 'Starting…',
+                updated_at = datetime('now')
+            WHERE content_hash = ?
+            """,
+            (status, error_message, now_utc, content_hash),
+        )
+    else:
+        # Clear progress fields when leaving transcribing state
+        cursor = conn.execute(
+            """
+            UPDATE call_recording_files
+            SET status = ?, error_message = ?,
+                transcription_progress = '',
+                updated_at = datetime('now')
+            WHERE content_hash = ?
+            """,
+            (status, error_message, content_hash),
+        )
+    conn.commit()
+    return cursor.rowcount > 0
 
 
 def update_progress(
@@ -279,19 +286,16 @@ def update_progress(
         True if row was updated.
     """
     conn = _get_connection()
-    try:
-        cursor = conn.execute(
-            """
-            UPDATE call_recording_files
-            SET transcription_progress = ?, updated_at = datetime('now')
-            WHERE content_hash = ? AND status = 'transcribing'
-            """,
-            (progress, content_hash),
-        )
-        conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        conn.close()
+    cursor = conn.execute(
+        """
+        UPDATE call_recording_files
+        SET transcription_progress = ?, updated_at = datetime('now')
+        WHERE content_hash = ? AND status = 'transcribing'
+        """,
+        (progress, content_hash),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
 
 
 def update_transcription(
@@ -319,36 +323,33 @@ def update_transcription(
     """
     participants_json = json.dumps(participants or [])
     conn = _get_connection()
-    try:
-        cursor = conn.execute(
-            """
-            UPDATE call_recording_files
-            SET status = 'transcribed',
-                transcript_text = ?,
-                language = ?,
-                duration_seconds = ?,
-                confidence = ?,
-                participants = ?,
-                contact_name = CASE WHEN contact_name = '' THEN ? ELSE contact_name END,
-                error_message = '',
-                transcription_progress = '',
-                updated_at = datetime('now')
-            WHERE content_hash = ?
-            """,
-            (
-                transcript_text,
-                language,
-                duration_seconds,
-                confidence,
-                participants_json,
-                contact_name,
-                content_hash,
-            ),
-        )
-        conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        conn.close()
+    cursor = conn.execute(
+        """
+        UPDATE call_recording_files
+        SET status = 'transcribed',
+            transcript_text = ?,
+            language = ?,
+            duration_seconds = ?,
+            confidence = ?,
+            participants = ?,
+            contact_name = CASE WHEN contact_name = '' THEN ? ELSE contact_name END,
+            error_message = '',
+            transcription_progress = '',
+            updated_at = datetime('now')
+        WHERE content_hash = ?
+        """,
+        (
+            transcript_text,
+            language,
+            duration_seconds,
+            confidence,
+            participants_json,
+            contact_name,
+            content_hash,
+        ),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
 
 
 def update_metadata(
@@ -384,13 +385,10 @@ def update_metadata(
     params.append(content_hash)
 
     conn = _get_connection()
-    try:
-        sql = f"UPDATE call_recording_files SET {', '.join(updates)} WHERE content_hash = ?"
-        cursor = conn.execute(sql, params)
-        conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        conn.close()
+    sql = f"UPDATE call_recording_files SET {', '.join(updates)} WHERE content_hash = ?"
+    cursor = conn.execute(sql, params)
+    conn.commit()
+    return cursor.rowcount > 0
 
 
 def mark_approved(content_hash: str, source_id: str) -> bool:
@@ -404,19 +402,16 @@ def mark_approved(content_hash: str, source_id: str) -> bool:
         True if row was updated.
     """
     conn = _get_connection()
-    try:
-        cursor = conn.execute(
-            """
-            UPDATE call_recording_files
-            SET status = 'approved', source_id = ?, updated_at = datetime('now')
-            WHERE content_hash = ?
-            """,
-            (source_id, content_hash),
-        )
-        conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        conn.close()
+    cursor = conn.execute(
+        """
+        UPDATE call_recording_files
+        SET status = 'approved', source_id = ?, updated_at = datetime('now')
+        WHERE content_hash = ?
+        """,
+        (source_id, content_hash),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
 
 
 def delete_file(content_hash: str) -> bool:
@@ -426,15 +421,12 @@ def delete_file(content_hash: str) -> bool:
         True if a row was deleted.
     """
     conn = _get_connection()
-    try:
-        cursor = conn.execute(
-            "DELETE FROM call_recording_files WHERE content_hash = ?",
-            (content_hash,),
-        )
-        conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        conn.close()
+    cursor = conn.execute(
+        "DELETE FROM call_recording_files WHERE content_hash = ?",
+        (content_hash,),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
 
 
 def get_counts() -> Dict[str, int]:
@@ -444,13 +436,10 @@ def get_counts() -> Dict[str, int]:
         Dict with status -> count, e.g. {"pending": 3, "transcribed": 5, ...}
     """
     conn = _get_connection()
-    try:
-        rows = conn.execute(
-            "SELECT status, COUNT(*) as cnt FROM call_recording_files GROUP BY status"
-        ).fetchall()
-        return {r["status"]: r["cnt"] for r in rows}
-    finally:
-        conn.close()
+    rows = conn.execute(
+        "SELECT status, COUNT(*) as cnt FROM call_recording_files GROUP BY status"
+    ).fetchall()
+    return {r["status"]: r["cnt"] for r in rows}
 
 
 def get_known_hashes() -> set:
@@ -460,13 +449,10 @@ def get_known_hashes() -> set:
     without running expensive metadata lookups or entity resolution.
     """
     conn = _get_connection()
-    try:
-        rows = conn.execute(
-            "SELECT content_hash FROM call_recording_files"
-        ).fetchall()
-        return {r["content_hash"] for r in rows}
-    finally:
-        conn.close()
+    rows = conn.execute(
+        "SELECT content_hash FROM call_recording_files"
+    ).fetchall()
+    return {r["content_hash"] for r in rows}
 
 
 def reset_stale_transcribing(stale_minutes: int = 30) -> int:
@@ -484,30 +470,27 @@ def reset_stale_transcribing(stale_minutes: int = 30) -> int:
         Number of rows reset.
     """
     conn = _get_connection()
-    try:
-        cutoff = datetime.now(timezone.utc).timestamp() - stale_minutes * 60
-        cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
+    cutoff = datetime.now(timezone.utc).timestamp() - stale_minutes * 60
+    cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
 
-        cursor = conn.execute(
-            """
-            UPDATE call_recording_files
-            SET status = 'pending',
-                error_message = 'Reset: transcription appeared stuck (no progress for >' || ? || ' min)',
-                transcription_progress = '',
-                updated_at = datetime('now')
-            WHERE status = 'transcribing'
-              AND transcription_started_at != ''
-              AND transcription_started_at < ?
-            """,
-            (str(stale_minutes), cutoff_iso),
+    cursor = conn.execute(
+        """
+        UPDATE call_recording_files
+        SET status = 'pending',
+            error_message = 'Reset: transcription appeared stuck (no progress for >' || ? || ' min)',
+            transcription_progress = '',
+            updated_at = datetime('now')
+        WHERE status = 'transcribing'
+          AND transcription_started_at != ''
+          AND transcription_started_at < ?
+        """,
+        (str(stale_minutes), cutoff_iso),
+    )
+    conn.commit()
+    count = cursor.rowcount
+    if count:
+        logger.info(
+            f"Reset {count} stale transcribing recording(s) "
+            f"(started > {stale_minutes} min ago)"
         )
-        conn.commit()
-        count = cursor.rowcount
-        if count:
-            logger.info(
-                f"Reset {count} stale transcribing recording(s) "
-                f"(started > {stale_minutes} min ago)"
-            )
-        return count
-    finally:
-        conn.close()
+    return count

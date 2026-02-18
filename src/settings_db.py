@@ -233,15 +233,38 @@ SELECT_OPTIONS: Dict[str, List[str]] = {
 # Database connection helper
 # ---------------------------------------------------------------------------
 
+# Thread-local storage for connection reuse — avoids opening/closing a fresh
+# SQLite connection on every single get_setting_value() call.
+import threading as _threading
+_local = _threading.local()
+
+
 def _get_connection() -> sqlite3.Connection:
-    """Get a new SQLite connection (connection-per-request for thread safety).
-    
+    """Get a thread-local SQLite connection (reused within the same thread).
+
+    Uses threading.local() so each gunicorn worker thread gets its own
+    persistent connection, eliminating the overhead of open/close on every call.
+
     Returns:
         sqlite3.Connection with row_factory set to sqlite3.Row
     """
-    conn = sqlite3.connect(DB_PATH)
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
+        try:
+            conn.execute("SELECT 1")  # quick liveness check
+            return conn
+        except Exception:
+            # Connection went stale — close and recreate
+            try:
+                conn.close()
+            except Exception:
+                pass
+            _local.conn = None
+
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")  # Better concurrent read performance
+    _local.conn = conn
     return conn
 
 
@@ -260,8 +283,7 @@ def init_db() -> None:
     existing user-modified values are never overwritten).
     """
     conn = _get_connection()
-    try:
-        conn.execute("""
+    conn.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
@@ -271,18 +293,16 @@ def init_db() -> None:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        conn.commit()
-        
-        # Check if table is empty (first run)
-        row = conn.execute("SELECT COUNT(*) as cnt FROM settings").fetchone()
-        if row["cnt"] == 0:
-            _seed_defaults(conn)
-            _seed_from_env(conn)
-        else:
-            # Existing database — add any new settings from code updates
-            _seed_missing_defaults(conn)
-    finally:
-        conn.close()
+    conn.commit()
+    
+    # Check if table is empty (first run)
+    row = conn.execute("SELECT COUNT(*) as cnt FROM settings").fetchone()
+    if row["cnt"] == 0:
+        _seed_defaults(conn)
+        _seed_from_env(conn)
+    else:
+        # Existing database — add any new settings from code updates
+        _seed_missing_defaults(conn)
 
 
 def _seed_defaults(conn: sqlite3.Connection) -> None:
@@ -368,9 +388,41 @@ _ENV_OVERRIDE_KEYS = frozenset({
 })
 
 
+# ---------------------------------------------------------------------------
+# In-process TTL cache for get_setting_value()
+# ---------------------------------------------------------------------------
+# Eliminates 10-20+ SQLite round-trips per request.  Settings change rarely
+# (only via the UI Settings page), so a 60-second TTL is a good trade-off.
+
+import time as _time
+
+_SETTINGS_CACHE: dict[str, tuple[Optional[str], float]] = {}
+_SETTINGS_CACHE_TTL: float = 60.0  # seconds
+
+
+def invalidate_settings_cache(key: str | None = None) -> None:
+    """Clear the in-process settings cache.
+
+    Called automatically by set_settings() and delete_setting() so that
+    UI config changes take effect immediately within the same process.
+
+    Args:
+        key: If provided, only invalidate that key.  If ``None``, flush all.
+    """
+    if key is not None:
+        _SETTINGS_CACHE.pop(key, None)
+    else:
+        _SETTINGS_CACHE.clear()
+
+
 def get_setting_value(key: str) -> Optional[str]:
     """Get a single setting value by key.
     
+    Uses an in-process TTL cache (60 s) to avoid repeated SQLite lookups
+    for the same key within a short window.  Cache is automatically
+    invalidated when settings are modified via set_settings() or
+    delete_setting().
+
     For infrastructure settings (hosts, ports, URLs), environment variables
     take precedence over SQLite. This allows Docker and local dev to coexist
     with the same SQLite database.
@@ -381,22 +433,32 @@ def get_setting_value(key: str) -> Optional[str]:
     Returns:
         The setting value as string, or None if not found
     """
-    # For infrastructure keys, check env var first
+    # For infrastructure keys, check env var first (bypass cache)
     if key in _ENV_OVERRIDE_KEYS:
         env_key = ENV_KEY_MAP.get(key)
         if env_key:
             env_value = os.environ.get(env_key)
             if env_value is not None and env_value.strip():
                 return env_value.strip()
-    
+
+    # Check in-process cache
+    now = _time.monotonic()
+    cached = _SETTINGS_CACHE.get(key)
+    if cached is not None:
+        value, ts = cached
+        if (now - ts) < _SETTINGS_CACHE_TTL:
+            return value
+
+    # Cache miss — query SQLite
     conn = _get_connection()
-    try:
-        row = conn.execute(
-            "SELECT value FROM settings WHERE key = ?", (key,)
-        ).fetchone()
-        return row["value"] if row else None
-    finally:
-        conn.close()
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key = ?", (key,)
+    ).fetchone()
+    value = row["value"] if row else None
+
+    # Store in cache
+    _SETTINGS_CACHE[key] = (value, now)
+    return value
 
 
 def get_setting_row(key: str) -> Optional[Dict[str, Any]]:
@@ -410,13 +472,10 @@ def get_setting_row(key: str) -> Optional[Dict[str, Any]]:
         or None if not found
     """
     conn = _get_connection()
-    try:
-        row = conn.execute(
-            "SELECT * FROM settings WHERE key = ?", (key,)
-        ).fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
+    row = conn.execute(
+        "SELECT * FROM settings WHERE key = ?", (key,)
+    ).fetchone()
+    return dict(row) if row else None
 
 
 def set_setting(key: str, value: str) -> bool:
@@ -430,15 +489,13 @@ def set_setting(key: str, value: str) -> bool:
         True if the setting was updated, False if key not found
     """
     conn = _get_connection()
-    try:
-        cursor = conn.execute(
-            "UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?",
-            (value, key)
-        )
-        conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        conn.close()
+    cursor = conn.execute(
+        "UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?",
+        (value, key)
+    )
+    conn.commit()
+    invalidate_settings_cache(key)
+    return cursor.rowcount > 0
 
 
 def delete_setting(key: str) -> bool:
@@ -453,12 +510,10 @@ def delete_setting(key: str) -> bool:
         True if the setting was deleted, False if key not found
     """
     conn = _get_connection()
-    try:
-        cursor = conn.execute("DELETE FROM settings WHERE key = ?", (key,))
-        conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        conn.close()
+    cursor = conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+    conn.commit()
+    invalidate_settings_cache(key)
+    return cursor.rowcount > 0
 
 
 def set_settings(updates: Dict[str, str]) -> List[str]:
@@ -472,18 +527,17 @@ def set_settings(updates: Dict[str, str]) -> List[str]:
     """
     conn = _get_connection()
     updated_keys = []
-    try:
-        for key, value in updates.items():
-            cursor = conn.execute(
-                "UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?",
-                (str(value), key)
-            )
-            if cursor.rowcount > 0:
-                updated_keys.append(key)
-        conn.commit()
-        return updated_keys
-    finally:
-        conn.close()
+    for key, value in updates.items():
+        cursor = conn.execute(
+            "UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?",
+            (str(value), key)
+        )
+        if cursor.rowcount > 0:
+            updated_keys.append(key)
+    conn.commit()
+    # Invalidate cache for all updated keys
+    invalidate_settings_cache()
+    return updated_keys
 
 
 def get_all_settings() -> Dict[str, Dict[str, Any]]:
@@ -493,26 +547,23 @@ def get_all_settings() -> Dict[str, Dict[str, Any]]:
         Dict of category -> {key: {value, type, description, updated_at}}
     """
     conn = _get_connection()
-    try:
-        rows = conn.execute(
-            "SELECT * FROM settings ORDER BY category, key"
-        ).fetchall()
-        
-        grouped: Dict[str, Dict[str, Any]] = {}
-        for row in rows:
-            category = row["category"]
-            if category not in grouped:
-                grouped[category] = {}
-            grouped[category][row["key"]] = {
-                "value": row["value"],
-                "type": row["type"],
-                "description": row["description"],
-                "updated_at": row["updated_at"],
-            }
-        
-        return grouped
-    finally:
-        conn.close()
+    rows = conn.execute(
+        "SELECT * FROM settings ORDER BY category, key"
+    ).fetchall()
+    
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        category = row["category"]
+        if category not in grouped:
+            grouped[category] = {}
+        grouped[category][row["key"]] = {
+            "value": row["value"],
+            "type": row["type"],
+            "description": row["description"],
+            "updated_at": row["updated_at"],
+        }
+    
+    return grouped
 
 
 def get_settings_by_category(category: str) -> Dict[str, Dict[str, Any]]:
@@ -525,23 +576,20 @@ def get_settings_by_category(category: str) -> Dict[str, Dict[str, Any]]:
         Dict of key -> {value, type, description, updated_at}
     """
     conn = _get_connection()
-    try:
-        rows = conn.execute(
-            "SELECT * FROM settings WHERE category = ? ORDER BY key",
-            (category,)
-        ).fetchall()
-        
-        return {
-            row["key"]: {
-                "value": row["value"],
-                "type": row["type"],
-                "description": row["description"],
-                "updated_at": row["updated_at"],
-            }
-            for row in rows
+    rows = conn.execute(
+        "SELECT * FROM settings WHERE category = ? ORDER BY key",
+        (category,)
+    ).fetchall()
+    
+    return {
+        row["key"]: {
+            "value": row["value"],
+            "type": row["type"],
+            "description": row["description"],
+            "updated_at": row["updated_at"],
         }
-    finally:
-        conn.close()
+        for row in rows
+    }
 
 
 def get_categories() -> List[str]:
@@ -551,19 +599,16 @@ def get_categories() -> List[str]:
         Sorted list of category names
     """
     conn = _get_connection()
-    try:
-        rows = conn.execute(
-            "SELECT DISTINCT category FROM settings ORDER BY category"
-        ).fetchall()
-        
-        # Sort by CATEGORY_META order, then alphabetically for unknown categories
-        categories = [row["category"] for row in rows]
-        return sorted(
-            categories,
-            key=lambda c: CATEGORY_META.get(c, {}).get("order", "99")
-        )
-    finally:
-        conn.close()
+    rows = conn.execute(
+        "SELECT DISTINCT category FROM settings ORDER BY category"
+    ).fetchall()
+    
+    # Sort by CATEGORY_META order, then alphabetically for unknown categories
+    categories = [row["category"] for row in rows]
+    return sorted(
+        categories,
+        key=lambda c: CATEGORY_META.get(c, {}).get("order", "99")
+    )
 
 
 def reset_to_defaults(category: Optional[str] = None) -> int:
@@ -577,20 +622,18 @@ def reset_to_defaults(category: Optional[str] = None) -> int:
         Number of settings reset
     """
     conn = _get_connection()
-    try:
-        count = 0
-        for key, default_value, cat, type_, desc in DEFAULT_SETTINGS:
-            if category and cat != category:
-                continue
-            cursor = conn.execute(
-                "UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?",
-                (default_value, key)
-            )
-            count += cursor.rowcount
-        conn.commit()
-        return count
-    finally:
-        conn.close()
+    count = 0
+    for key, default_value, cat, type_, desc in DEFAULT_SETTINGS:
+        if category and cat != category:
+            continue
+        cursor = conn.execute(
+            "UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?",
+            (default_value, key)
+        )
+        count += cursor.rowcount
+    conn.commit()
+    invalidate_settings_cache()
+    return count
 
 
 def mask_secret(value: str) -> str:
@@ -660,30 +703,27 @@ def register_plugin_settings(
         _REVERSE_ENV_MAP = {v: k for k, v in ENV_KEY_MAP.items()}
     
     conn = _get_connection()
-    try:
-        count = 0
-        for key, default_value, category, type_, description in settings:
-            cursor = conn.execute(
-                """INSERT OR IGNORE INTO settings (key, value, category, type, description)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (key, default_value, category, type_, description)
-            )
-            count += cursor.rowcount
-        
-        # Overlay env values for any newly inserted settings
-        if env_key_map and count > 0:
-            for sqlite_key, env_key in env_key_map.items():
-                env_value = os.environ.get(env_key)
-                if env_value is not None and env_value.strip():
-                    conn.execute(
-                        "UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ? AND value = ''",
-                        (env_value.strip(), sqlite_key)
-                    )
-        
-        conn.commit()
-        return count
-    finally:
-        conn.close()
+    count = 0
+    for key, default_value, category, type_, description in settings:
+        cursor = conn.execute(
+            """INSERT OR IGNORE INTO settings (key, value, category, type, description)
+               VALUES (?, ?, ?, ?, ?)""",
+            (key, default_value, category, type_, description)
+        )
+        count += cursor.rowcount
+    
+    # Overlay env values for any newly inserted settings
+    if env_key_map and count > 0:
+        for sqlite_key, env_key in env_key_map.items():
+            env_value = os.environ.get(env_key)
+            if env_value is not None and env_value.strip():
+                conn.execute(
+                    "UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ? AND value = ''",
+                    (env_value.strip(), sqlite_key)
+                )
+    
+    conn.commit()
+    return count
 
 
 # ---------------------------------------------------------------------------
