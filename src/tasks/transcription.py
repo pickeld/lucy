@@ -11,12 +11,19 @@ Tasks:
     transcribe_recording  — Transcribe a single audio file by content hash
 """
 
+import json
 import traceback
 
 from celery import shared_task
 from celery.utils.log import get_task_logger
 
 logger = get_task_logger(__name__)
+
+# Redis key prefix for transcription completion notifications.
+# The Celery task RPUSHes the result JSON to this key when done;
+# the Flask /wait endpoint BLPOPs it to wake up the waiting client.
+_NOTIFY_KEY_PREFIX = "transcription:done:"
+_NOTIFY_TTL = 300  # seconds — auto-expire stale notifications
 
 
 def _get_syncer():
@@ -56,6 +63,28 @@ def _get_syncer():
             logger.warning(f"Transcriber hot-swap check failed: {e}")
 
     return syncer
+
+
+def _notify_completion(content_hash: str, result: dict) -> None:
+    """Push transcription result to a Redis list so waiting clients wake up.
+
+    Uses RPUSH + EXPIRE so the key auto-cleans if nobody is waiting.
+    Non-critical — failures are logged but do not affect the task result.
+    """
+    try:
+        from utils.redis_conn import get_redis_client
+
+        key = f"{_NOTIFY_KEY_PREFIX}{content_hash}"
+        payload = json.dumps({
+            "content_hash": content_hash,
+            "status": result.get("status", "unknown"),
+        })
+        client = get_redis_client()
+        client.rpush(key, payload)
+        client.expire(key, _NOTIFY_TTL)
+        logger.debug(f"[task] Published completion notification for {content_hash}")
+    except Exception as e:
+        logger.warning(f"[task] Failed to publish notification for {content_hash}: {e}")
 
 
 @shared_task(
@@ -100,6 +129,7 @@ def transcribe_recording(self, content_hash: str) -> dict:
         logger.info(
             f"[task] Transcription complete for {content_hash}: status={status}"
         )
+        _notify_completion(content_hash, result)
         return result
 
     except Exception as exc:
@@ -137,4 +167,6 @@ def transcribe_recording(self, content_hash: str) -> dict:
             f"[task] DEAD LETTER: Transcription permanently failed for "
             f"{content_hash} after {self.request.retries} retries"
         )
-        return {"status": "error", "error": str(exc), "retries": self.request.retries}
+        dead_result = {"status": "error", "error": str(exc), "retries": self.request.retries}
+        _notify_completion(content_hash, dead_result)
+        return dead_result

@@ -568,6 +568,84 @@ class CallRecordingsPlugin(ChannelPlugin):
             }), 202
 
         # =====================================================================
+        # WAIT — block until transcription completes (push-based)
+        # =====================================================================
+
+        @bp.route("/files/<content_hash>/wait", methods=["GET"])
+        def wait_for_transcription(content_hash):
+            """Block until transcription for this file completes.
+
+            Uses Redis BLPOP on a notification key that the Celery task
+            pushes to when it finishes.  Returns immediately if the file
+            is already in a terminal state (transcribed, approved, error).
+
+            Query parameters:
+                timeout: Max seconds to wait (default 300, max 600)
+
+            Returns:
+                200 with final status when transcription completes
+                408 if timeout is reached before completion
+            """
+            import json as _json
+
+            from utils.redis_conn import get_redis_client
+
+            # Quick check: if file is already done, return immediately
+            record = recording_db.get_file(content_hash)
+            if not record:
+                return jsonify({"status": "error", "error": "File not found"}), 404
+
+            current_status = record.get("status", "")
+            if current_status in ("transcribed", "approved", "error"):
+                return jsonify({
+                    "status": current_status,
+                    "content_hash": content_hash,
+                }), 200
+
+            # Block on Redis notification from the Celery worker
+            timeout = min(int(request.args.get("timeout", 300)), 600)
+            notify_key = f"transcription:done:{content_hash}"
+
+            try:
+                client = get_redis_client()
+                result = client.blpop([notify_key], timeout=timeout)
+
+                if result is None:
+                    # Timeout — check DB one more time (task may have finished
+                    # just before we started waiting)
+                    record = recording_db.get_file(content_hash)
+                    final_status = record.get("status", "unknown") if record else "unknown"
+                    if final_status in ("transcribed", "approved", "error"):
+                        return jsonify({
+                            "status": final_status,
+                            "content_hash": content_hash,
+                        }), 200
+                    return jsonify({
+                        "status": "timeout",
+                        "content_hash": content_hash,
+                        "message": f"Transcription not complete after {timeout}s",
+                    }), 408
+
+                # result is (key, value) tuple
+                _, payload = result
+                try:
+                    data = _json.loads(payload)
+                except (TypeError, _json.JSONDecodeError):
+                    data = {"status": "unknown"}
+
+                return jsonify({
+                    "status": data.get("status", "unknown"),
+                    "content_hash": content_hash,
+                }), 200
+
+            except Exception as e:
+                logger.error(f"Wait endpoint error for {content_hash}: {e}")
+                return jsonify({
+                    "status": "error",
+                    "error": f"Wait failed: {str(e)}",
+                }), 500
+
+        # =====================================================================
         # APPROVE — index a transcribed file into Qdrant
         # =====================================================================
 

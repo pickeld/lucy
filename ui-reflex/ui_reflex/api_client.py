@@ -687,6 +687,38 @@ async def transcribe_recording(content_hash: str) -> dict[str, Any]:
 
 
 
+async def wait_for_transcription(
+    content_hash: str, timeout: int = 300,
+) -> dict[str, Any]:
+    """Wait for a transcription to complete (push-based via Redis BLPOP).
+
+    The Flask endpoint blocks until the Celery worker pushes a completion
+    notification to Redis.  Returns immediately if the file is already
+    in a terminal state.
+
+    Args:
+        content_hash: File content hash
+        timeout: Max seconds to wait (server caps at 600)
+
+    Returns:
+        Dict with status (transcribed/error/timeout)
+    """
+    try:
+        resp = await _get_client().get(
+            f"/plugins/call_recordings/files/{content_hash}/wait",
+            params={"timeout": min(timeout, 600)},
+            # HTTP timeout slightly longer than the server BLPOP timeout
+            # to avoid the client timing out before the server responds
+            timeout=timeout + 10,
+        )
+        return resp.json()
+    except httpx.ReadTimeout:
+        return {"status": "timeout", "content_hash": content_hash}
+    except Exception as e:
+        logger.error(f"Error waiting for transcription: {e}")
+        return {"status": "error", "error": str(e)}
+
+
 async def restart_recording(content_hash: str) -> dict[str, Any]:
     """Restart a stuck transcription by resetting status and re-queuing."""
     try:
