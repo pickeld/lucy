@@ -1044,6 +1044,32 @@ async def fetch_entity_graph(limit: int = 100) -> dict[str, Any]:
     return {"nodes": [], "edges": []}
 
 
+async def fetch_full_entity_graph(
+    limit_persons: int = 100,
+    limit_assets: int = 10,
+    include_asset_edges: bool = True,
+) -> dict[str, Any]:
+    """Fetch full graph data including persons, assets, and all edge types.
+
+    Returns nodes and edges for interactive Neo4j-style visualization.
+    """
+    try:
+        resp = await _get_client().get(
+            "/entities/graph/full",
+            params={
+                "limit_persons": limit_persons,
+                "limit_assets": limit_assets,
+                "include_asset_edges": "true" if include_asset_edges else "false",
+            },
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        logger.error(f"Error fetching full entity graph: {e}")
+    return {"nodes": [], "edges": []}
+
+
 # =========================================================================
 # SCHEDULED INSIGHTS
 # =========================================================================

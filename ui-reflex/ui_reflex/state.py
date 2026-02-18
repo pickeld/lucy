@@ -309,6 +309,11 @@ class AppState(rx.State):
     entity_graph_edges: list[dict[str, Any]] = []
     entity_graph_loading: bool = False
     entity_graph_html: str = ""
+    # --- Full graph (interactive visualization) ---
+    full_graph_nodes: list[dict[str, Any]] = []
+    full_graph_edges: list[dict[str, Any]] = []
+    full_graph_loading: bool = False
+    full_graph_stats: dict[str, str] = {}
 
     # --- Scheduled Insights ---
     insights_tasks: list[dict[str, Any]] = []
@@ -3261,6 +3266,38 @@ class AppState(rx.State):
         self.entity_graph_nodes = filtered_nodes  # type: ignore[assignment]
         self.entity_graph_edges = edges  # type: ignore[assignment]
         self.entity_graph_loading = False
+
+    async def load_full_entity_graph(self):
+        """Fetch full graph data (persons + assets + all edge types) for interactive visualization."""
+        self.full_graph_loading = True
+        yield
+        data = await api_client.fetch_full_entity_graph(
+            limit_persons=100,
+            limit_assets=10,
+            include_asset_edges=True,
+        )
+        nodes = data.get("nodes", [])
+        edges = data.get("edges", [])
+
+        # Compute stats
+        person_count = sum(1 for n in nodes if n.get("type") == "person")
+        asset_count = sum(1 for n in nodes if n.get("type") == "asset")
+        ii_edges = sum(1 for e in edges if e.get("edge_category") == "identity_identity")
+        ia_edges = sum(1 for e in edges if e.get("edge_category") == "identity_asset")
+        aa_edges = sum(1 for e in edges if e.get("edge_category") == "asset_asset")
+
+        self.full_graph_nodes = nodes  # type: ignore[assignment]
+        self.full_graph_edges = edges  # type: ignore[assignment]
+        self.full_graph_stats = {
+            "persons": str(person_count),
+            "assets": str(asset_count),
+            "identity_edges": str(ii_edges),
+            "asset_links": str(ia_edges),
+            "asset_edges": str(aa_edges),
+            "total_nodes": str(len(nodes)),
+            "total_edges": str(len(edges)),
+        }
+        self.full_graph_loading = False
 
     async def load_merge_candidates(self):
         """Fetch merge suggestions from the backend."""

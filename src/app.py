@@ -1397,6 +1397,34 @@ def entity_graph():
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
+@app.route("/entities/graph/full", methods=["GET"])
+def entity_graph_full():
+    """Get full graph data including person nodes, asset nodes, and all edge types.
+    
+    Returns a rich graph suitable for interactive Neo4j-style visualization
+    with identity↔identity, identity↔asset, and asset↔asset edges.
+    
+    Query params:
+        limit_persons: Max person nodes (default: 100)
+        limit_assets: Max assets per person (default: 10)
+        include_asset_edges: Include asset↔asset edges (default: true)
+    """
+    try:
+        limit_persons = request.args.get("limit_persons", 100, type=int)
+        limit_assets = request.args.get("limit_assets", 10, type=int)
+        include_asset_edges = request.args.get("include_asset_edges", "true").lower() == "true"
+        graph = entity_db.get_full_graph_data(
+            limit_persons=limit_persons,
+            limit_assets_per_person=limit_assets,
+            include_asset_edges=include_asset_edges,
+        )
+        return jsonify(graph), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Full entity graph error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
 @app.route("/entities/<int:person_id>/display-name", methods=["POST"])
 def update_entity_display_name(person_id: int):
     """Recalculate and update the bilingual display name for a person.

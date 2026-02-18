@@ -2051,6 +2051,193 @@ def get_graph_data(limit: int = 100) -> Dict[str, Any]:
         conn.close()
 
 
+def get_full_graph_data(
+    limit_persons: int = 100,
+    limit_assets_per_person: int = 10,
+    include_asset_edges: bool = True,
+) -> Dict[str, Any]:
+    """Build a full graph with person nodes, asset nodes, and all edge types.
+
+    Returns a graph suitable for interactive visualization (Neo4j-style).
+
+    Node types:
+        - person: {id, type, label, phone, fact_count, alias_count, total_assets}
+        - asset: {id, type, label, source, timestamp, asset_type}
+
+    Edge types:
+        - identity↔identity: {source, target, type, confidence}
+        - identity↔asset: {source, target, type, role}
+        - asset↔asset: {source, target, type, confidence}
+
+    Args:
+        limit_persons: Max person nodes to include
+        limit_assets_per_person: Max assets per person
+        include_asset_edges: Whether to include asset↔asset edges
+
+    Returns:
+        Dict with 'nodes' list and 'edges' list
+    """
+    conn = _get_connection()
+    try:
+        nodes: List[Dict[str, Any]] = []
+        edges: List[Dict[str, Any]] = []
+        person_ids_in_graph: set = set()
+        asset_refs_in_graph: set = set()
+
+        # --- Person nodes (same query as get_graph_data but simplified) ---
+        persons = conn.execute(
+            """SELECT p.id, p.canonical_name, p.phone, p.is_group
+               FROM persons p
+               WHERE p.is_group = FALSE
+               ORDER BY p.canonical_name
+               LIMIT ?""",
+            (limit_persons,),
+        ).fetchall()
+
+        for p in persons:
+            pid = p["id"]
+            person_ids_in_graph.add(pid)
+
+            alias_count = conn.execute(
+                "SELECT COUNT(*) as cnt FROM person_aliases WHERE person_id = ?",
+                (pid,),
+            ).fetchone()["cnt"]
+
+            fact_count = conn.execute(
+                "SELECT COUNT(*) as cnt FROM person_facts WHERE person_id = ?",
+                (pid,),
+            ).fetchone()["cnt"]
+
+            asset_rows = conn.execute(
+                """SELECT asset_type, COUNT(*) as cnt
+                   FROM person_assets WHERE person_id = ?
+                   GROUP BY asset_type""",
+                (pid,),
+            ).fetchall()
+            total_assets = sum(r["cnt"] for r in asset_rows)
+
+            nodes.append({
+                "id": f"person:{pid}",
+                "type": "person",
+                "label": p["canonical_name"],
+                "phone": p["phone"] or "",
+                "alias_count": alias_count,
+                "fact_count": fact_count,
+                "total_assets": total_assets,
+            })
+
+        # --- Identity↔identity edges ---
+        if person_ids_in_graph:
+            placeholders = ",".join("?" for _ in person_ids_in_graph)
+            ids_list = list(person_ids_in_graph)
+            rel_rows = conn.execute(
+                f"""SELECT r.person_id, r.related_person_id,
+                           r.relationship_type, r.confidence
+                    FROM person_relationships r
+                    WHERE r.person_id IN ({placeholders})
+                      AND r.related_person_id IN ({placeholders})""",
+                ids_list + ids_list,
+            ).fetchall()
+
+            for r in rel_rows:
+                edges.append({
+                    "source": f"person:{r['person_id']}",
+                    "target": f"person:{r['related_person_id']}",
+                    "type": r["relationship_type"],
+                    "edge_category": "identity_identity",
+                    "confidence": r["confidence"],
+                })
+
+        # --- Asset nodes + identity↔asset edges ---
+        for pid in person_ids_in_graph:
+            asset_links = conn.execute(
+                """SELECT asset_type, asset_ref, role, confidence
+                   FROM person_assets
+                   WHERE person_id = ?
+                   ORDER BY created_at DESC
+                   LIMIT ?""",
+                (pid, limit_assets_per_person),
+            ).fetchall()
+
+            for link in asset_links:
+                aref = link["asset_ref"]
+                atype = link["asset_type"]
+
+                # Add asset node if not already added
+                if aref not in asset_refs_in_graph:
+                    asset_refs_in_graph.add(aref)
+
+                    # Derive a short label from the asset_ref
+                    label = aref
+                    if ":" in aref:
+                        parts = aref.split(":")
+                        label = parts[-1][:30] if parts else aref[:30]
+
+                    nodes.append({
+                        "id": f"asset:{aref}",
+                        "type": "asset",
+                        "asset_type": atype,
+                        "label": label,
+                        "source": atype,
+                    })
+
+                # Identity↔asset edge
+                edges.append({
+                    "source": f"person:{pid}",
+                    "target": f"asset:{aref}",
+                    "type": link["role"],
+                    "edge_category": "identity_asset",
+                    "confidence": link["confidence"],
+                })
+
+        # --- Asset↔asset edges ---
+        if include_asset_edges and asset_refs_in_graph:
+            placeholders = ",".join("?" for _ in asset_refs_in_graph)
+            refs_list = list(asset_refs_in_graph)
+
+            aa_rows = conn.execute(
+                f"""SELECT src_asset_ref, dst_asset_ref, relation_type, confidence
+                    FROM asset_asset_edges
+                    WHERE src_asset_ref IN ({placeholders})
+                       OR dst_asset_ref IN ({placeholders})
+                    LIMIT 500""",
+                refs_list + refs_list,
+            ).fetchall()
+
+            for r in aa_rows:
+                src = r["src_asset_ref"]
+                dst = r["dst_asset_ref"]
+
+                # Add missing nodes for assets discovered via edges
+                for ref in (src, dst):
+                    if ref not in asset_refs_in_graph and not ref.startswith("thread:"):
+                        asset_refs_in_graph.add(ref)
+                        nodes.append({
+                            "id": f"asset:{ref}",
+                            "type": "asset",
+                            "asset_type": "linked",
+                            "label": ref.split(":")[-1][:30] if ":" in ref else ref[:30],
+                            "source": "linked",
+                        })
+
+                edges.append({
+                    "source": f"asset:{src}",
+                    "target": f"asset:{dst}",
+                    "type": r["relation_type"],
+                    "edge_category": "asset_asset",
+                    "confidence": r["confidence"],
+                })
+
+        logger.info(
+            f"Full graph: {len(nodes)} nodes ({len(person_ids_in_graph)} persons, "
+            f"{len(asset_refs_in_graph)} assets), {len(edges)} edges"
+        )
+
+        return {"nodes": nodes, "edges": edges}
+    finally:
+        conn.close()
+
+
 def cleanup_garbage_persons() -> Dict[str, Any]:
     """Remove persons with invalid/garbage names from the entity store.
 
