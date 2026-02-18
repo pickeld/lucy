@@ -582,7 +582,21 @@ class CallRecordingSyncer:
                 # Person-asset graph: default empty, populated below
                 "person_ids": [],
                 "mentioned_person_ids": [],
+                # Asset-asset graph: structural pointers
+                "asset_id": "",
+                "parent_asset_id": "",
+                "thread_id": "",
+                "chunk_group_id": "",
             }
+
+            # Asset-asset graph: set structural pointers
+            try:
+                from asset_linker import generate_asset_id
+                cr_asset_id = generate_asset_id("call_recording", content_hash)
+                base_metadata["asset_id"] = cr_asset_id
+                base_metadata["chunk_group_id"] = f"cr:{content_hash}"
+            except Exception as al_err:
+                logger.debug(f"Asset linking failed for {filename} (non-critical): {al_err}")
 
             # Add phone number if available
             if record.get("phone_number"):
@@ -649,6 +663,25 @@ class CallRecordingSyncer:
                 logger.warning(
                     f"Partial ingest for {filename}: {added}/{len(nodes)} nodes"
                 )
+
+            # Create chunk_of + transcript_of edges for multi-chunk recordings
+            if len(nodes) > 1:
+                try:
+                    from asset_linker import link_chunk, link_transcript
+                    for idx in range(len(nodes)):
+                        chunk_sid = f"{source_id}:{idx}"
+                        link_chunk(
+                            parent_ref=source_id,
+                            chunk_ref=chunk_sid,
+                            provenance="call_recording_sync",
+                        )
+                        link_transcript(
+                            transcript_ref=chunk_sid,
+                            recording_ref=source_id,
+                            provenance="call_recording_sync",
+                        )
+                except Exception:
+                    pass  # Non-critical
 
             # Mark as approved in DB
             recording_db.mark_approved(content_hash, source_id)

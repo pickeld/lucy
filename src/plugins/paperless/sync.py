@@ -471,7 +471,21 @@ class DocumentSyncer:
                             # Person-asset graph: default empty, populated below
                             "person_ids": [],
                             "mentioned_person_ids": [],
+                            # Asset-asset graph: structural pointers
+                            "asset_id": "",
+                            "parent_asset_id": "",
+                            "thread_id": "",
+                            "chunk_group_id": "",
                         }
+                        
+                        # Asset-asset graph: set structural pointers
+                        try:
+                            from asset_linker import generate_asset_id
+                            pl_asset_id = generate_asset_id("paperless", str(doc_id))
+                            base_metadata["asset_id"] = pl_asset_id
+                            base_metadata["chunk_group_id"] = f"pl:{doc_id}"
+                        except Exception as al_err:
+                            logger.debug(f"Asset linking failed for '{title}' (non-critical): {al_err}")
                         
                         # Person-asset graph: resolve correspondent → person_id
                         try:
@@ -525,6 +539,20 @@ class DocumentSyncer:
                         chunk_ok = added == len(chunk_nodes)
                         
                         if chunk_ok:
+                            # Create chunk_of edges for multi-chunk documents
+                            if len(chunks) > 1:
+                                try:
+                                    from asset_linker import link_chunk
+                                    for idx in range(len(chunks)):
+                                        chunk_sid = f"{source_id}:{idx}"
+                                        link_chunk(
+                                            parent_ref=source_id,
+                                            chunk_ref=chunk_sid,
+                                            provenance="paperless_sync",
+                                        )
+                                except Exception:
+                                    pass  # Non-critical
+                            
                             synced += 1
                             if len(chunks) > 1:
                                 logger.info(

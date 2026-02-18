@@ -623,11 +623,28 @@ class EmailSyncer:
                             "sync_run_id": self._sync_run_id,
                             "indexed_at": int(time.time()),
                             # Person-asset graph: default empty, populated below
-                            "person_ids": [],
-                            "mentioned_person_ids": [],
-                        }
-
-                        # Person-asset graph: resolve sender → person_id
+                                "person_ids": [],
+                                "mentioned_person_ids": [],
+                            # Asset-asset graph: structural pointers
+                                "asset_id": "",
+                                "parent_asset_id": "",
+                                "thread_id": "",
+                                "chunk_group_id": "",
+                            }
+    
+                            # Asset-asset graph: set structural pointers
+                            try:
+                                from asset_linker import generate_asset_id, link_thread_member
+                                email_asset_id = generate_asset_id("gmail", msg_id)
+                                base_metadata["asset_id"] = email_asset_id
+                                base_metadata["thread_id"] = parsed.thread_id
+                                base_metadata["chunk_group_id"] = f"gm:{msg_id}"
+                                if parsed.thread_id:
+                                    link_thread_member(parsed.thread_id, source_id, provenance="gmail_sync")
+                            except Exception as al_err:
+                                logger.debug(f"Asset linking failed for email '{parsed.subject}' (non-critical): {al_err}")
+    
+                            # Person-asset graph: resolve sender → person_id
                         try:
                             from person_resolver import resolve_and_link
                             person_ids, mentioned_ids = resolve_and_link(
@@ -733,10 +750,23 @@ class EmailSyncer:
                                         c for c in att_chunks if is_quality_chunk(c)
                                     ]
 
+                                    att_source_id_base = f"gmail:{msg_id}:att:{att.filename}"
+                                    # Asset-asset graph: create attachment_of edge
+                                    try:
+                                        from asset_linker import generate_asset_id, link_attachment
+                                        att_asset_id = generate_asset_id("gmail", f"{msg_id}:att:{att.filename}")
+                                        link_attachment(
+                                            parent_ref=source_id,
+                                            child_ref=att_source_id_base,
+                                            provenance="gmail_sync",
+                                        )
+                                    except Exception:
+                                        att_asset_id = ""
+
                                     for aidx, achunk in enumerate(att_chunks):
                                         att_meta = {
                                             "source": "gmail",
-                                            "source_id": f"gmail:{msg_id}:att:{att.filename}",
+                                            "source_id": att_source_id_base,
                                             "parent_source_id": source_id,
                                             "content_type": "document",
                                             "chat_name": f"{parsed.subject} — {att.filename}",
@@ -745,13 +775,17 @@ class EmailSyncer:
                                             "message": achunk,
                                             "folder": ",".join(parsed.labels),
                                             "attachment_name": att.filename,
+                                            # Asset-asset graph fields
+                                            "asset_id": att_asset_id,
+                                            "parent_asset_id": base_metadata.get("asset_id", ""),
+                                            "thread_id": parsed.thread_id,
+                                            "chunk_group_id": f"gm:{msg_id}:att:{att.filename}",
                                         }
                                         if len(att_chunks) > 1:
                                             att_meta["chunk_index"] = str(aidx)
                                             att_meta["chunk_total"] = str(len(att_chunks))
 
                                         from llamaindex_rag import deterministic_node_id
-                                        att_source_id = f"gmail:{msg_id}:att:{att.filename}"
                                         att_node = TextNode(
                                             text=(
                                                 f"Email Attachment: {att.filename}\n"
@@ -759,7 +793,7 @@ class EmailSyncer:
                                                 f"{achunk}"
                                             ),
                                             metadata=att_meta,
-                                            id_=deterministic_node_id("gmail", att_source_id, aidx),
+                                            id_=deterministic_node_id("gmail", att_source_id_base, aidx),
                                         )
                                         self.rag.ingest_nodes([att_node])
                                         attachment_count += 1

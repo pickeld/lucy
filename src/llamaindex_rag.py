@@ -1343,6 +1343,18 @@ class LlamaIndexRAG:
             chunk_text = "\n".join(chunk_lines)
             
             # Create a TextNode for the chunk
+            chunk_source_id = f"chunk:{chat_id}:{first_ts}:{last_ts}"
+            
+            # Asset-asset graph metadata for conversation chunks
+            chunk_asset_id = ""
+            chunk_group_id = ""
+            try:
+                from asset_linker import generate_asset_id
+                chunk_asset_id = generate_asset_id("whatsapp", chunk_source_id)
+                chunk_group_id = f"wa_chunk:{chat_id}"
+            except Exception:
+                pass
+            
             chunk_node = TextNode(
                 text=chunk_text,
                 metadata={
@@ -1356,10 +1368,15 @@ class LlamaIndexRAG:
                     "first_timestamp": int(first_ts) if first_ts.isdigit() else 0,
                     "message_count": len(messages),
                     "senders": list({m["sender"] for m in messages}),
-                    "source_id": f"chunk:{chat_id}:{first_ts}:{last_ts}",
+                    "source_id": chunk_source_id,
+                    # Asset-asset graph fields
+                    "asset_id": chunk_asset_id,
+                    "thread_id": chat_id,
+                    "chunk_group_id": chunk_group_id,
+                    "parent_asset_id": "",
                 },
                 id_=deterministic_node_id(
-                    "whatsapp", f"chunk:{chat_id}:{first_ts}:{last_ts}", 0
+                    "whatsapp", chunk_source_id, 0
                 ),
             )
             
@@ -1468,6 +1485,17 @@ class LlamaIndexRAG:
                     doc.metadata.mentioned_person_ids = mentioned_ids
             except Exception as e:
                 logger.debug(f"Person resolution failed (non-critical): {e}")
+            
+            # Asset-asset graph: set structural pointers for cross-channel coherence.
+            # Non-blocking — failure never prevents message storage.
+            try:
+                from asset_linker import generate_asset_id, link_thread_member
+                asset_id = generate_asset_id("whatsapp", source_id)
+                doc.metadata.asset_id = asset_id
+                doc.metadata.thread_id = chat_id  # All messages in a chat share the thread
+                link_thread_member(chat_id, source_id, provenance="whatsapp_msg")
+            except Exception as e:
+                logger.debug(f"Asset linking failed (non-critical): {e}")
             
             # Convert to LlamaIndex TextNode with standardized schema
             node = doc.to_llama_index_node()
