@@ -257,7 +257,6 @@ class AppState(rx.State):
     call_recordings_counts: dict[str, str] = {}
     call_recordings_scan_message: str = ""
     call_recordings_filter_name: str = ""
-    call_recordings_filter_status: str = ""  # "" = all
 
     # --- Recordings page (dedicated /recordings) ---
     recordings_expanded_hash: str = ""            # Which row is expanded
@@ -269,7 +268,7 @@ class AppState(rx.State):
     recordings_sort_asc: bool = False             # Sort direction (desc by default)
     recordings_my_name: str = ""                  # Cached "My Name" setting
     recordings_auto_transcribe: bool = True       # Auto-transcribe toggle
-    recordings_tab: str = "active"                # "active" or "approved"
+    recordings_active_statuses: list[str] = []    # Multi-select status filter (empty = all)
 
     # --- Tab state ---
     settings_tab: str = "ai"   # Active main tab
@@ -325,9 +324,14 @@ class AppState(rx.State):
         """Set the call recordings name filter."""
         self.call_recordings_filter_name = value
 
-    def set_call_recordings_filter_status(self, value: str):
-        """Set the call recordings status filter."""
-        self.call_recordings_filter_status = value
+    def toggle_recording_status(self, status: str):
+        """Toggle a status in/out of the active status filter list."""
+        new = list(self.recordings_active_statuses)
+        if status in new:
+            new.remove(status)
+        else:
+            new.append(status)
+        self.recordings_active_statuses = new
 
     # --- Recordings page setters ---
 
@@ -355,10 +359,6 @@ class AppState(rx.State):
         else:
             self.recordings_sort_column = value
             self.recordings_sort_asc = False
-
-    def set_recordings_tab(self, value: str):
-        """Set the recordings page tab (active/approved)."""
-        self.recordings_tab = value
 
     def set_rename_text(self, value: str):
         """Set the conversation rename text."""
@@ -622,10 +622,10 @@ class AppState(rx.State):
 
     @rx.var(cache=True)
     def filtered_recording_files(self) -> list[dict[str, str]]:
-        """Call recording files filtered by name and status."""
+        """Call recording files filtered by name and active statuses."""
         files = self.call_recordings_files
         needle = self.call_recordings_filter_name.strip().lower()
-        status = self.call_recordings_filter_status.strip().lower()
+        active = self.recordings_active_statuses
 
         if needle:
             files = [
@@ -635,8 +635,8 @@ class AppState(rx.State):
                 or needle in (f.get("phone_number", "") or "").lower()
             ]
 
-        if status:
-            files = [f for f in files if f.get("status", "") == status]
+        if active:
+            files = [f for f in files if f.get("status", "") in active]
 
         return files
 
@@ -651,14 +651,12 @@ class AppState(rx.State):
 
         files = self.call_recordings_files
 
-        # Apply tab filter: "active" shows non-approved, "approved" shows approved
-        if self.recordings_tab == "approved":
-            files = [f for f in files if f.get("status", "") == "approved"]
-        else:
-            files = [f for f in files if f.get("status", "") != "approved"]
+        # Apply multi-select status filter (empty = show all)
+        active = self.recordings_active_statuses
+        if active:
+            files = [f for f in files if f.get("status", "") in active]
 
         needle = self.call_recordings_filter_name.strip().lower()
-        status = self.call_recordings_filter_status.strip().lower()
 
         # Apply text search filter
         if needle:
@@ -669,10 +667,6 @@ class AppState(rx.State):
                 or needle in (f.get("phone_number", "") or "").lower()
                 or needle in (f.get("transcript_text", "") or "").lower()
             ]
-
-        # Apply status filter
-        if status:
-            files = [f for f in files if f.get("status", "") == status]
 
         # Apply date range filter
         date_from = self.recordings_filter_date_from.strip()
@@ -770,8 +764,19 @@ class AppState(rx.State):
 
     @rx.var(cache=True)
     def recordings_status_counts(self) -> dict[str, str]:
-        """Status counts for the recordings page header badges."""
-        counts: dict[str, int] = {}
+        """Status counts for the recordings page header badges.
+
+        Always includes all expected status keys with '0' defaults
+        so that the UI badges never hit a missing-key error.
+        """
+        counts: dict[str, int] = {
+            "pending": 0,
+            "transcribing": 0,
+            "transcribed": 0,
+            "approved": 0,
+            "error": 0,
+            "total": 0,
+        }
         for f in self.call_recordings_files:
             s = f.get("status", "unknown")
             counts[s] = counts.get(s, 0) + 1
@@ -2487,7 +2492,7 @@ class AppState(rx.State):
     def clear_recordings_filters(self):
         """Reset all recordings page filters."""
         self.call_recordings_filter_name = ""
-        self.call_recordings_filter_status = ""
+        self.recordings_active_statuses = []
         self.recordings_filter_date_from = ""
         self.recordings_filter_date_to = ""
 

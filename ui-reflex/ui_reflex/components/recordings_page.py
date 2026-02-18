@@ -15,9 +15,10 @@ from ..state import AppState
 
 
 def recordings_page() -> rx.Component:
-    """Full recordings management page with Active / Approved tabs.
+    """Full recordings management page with toggleable status filters.
 
-    Layout: header + tabs are fixed at top; only the table scrolls.
+    Layout: header is fixed at top; only the table scrolls.
+    Status badges in the header are toggleable multi-select filters.
     """
     return rx.flex(
         # Fixed header area (no scroll)
@@ -34,55 +35,6 @@ def recordings_page() -> rx.Component:
                     class_name="mb-3 px-3 py-2 bg-gray-50 rounded-lg border border-gray-200",
                 ),
                 rx.fragment(),
-            ),
-            # Tab buttons (fixed)
-            rx.flex(
-                rx.button(
-                    rx.flex(
-                        rx.icon("file-audio", size=14),
-                        rx.text("Active"),
-                        rx.box(
-                            rx.text(
-                                AppState.recordings_status_counts["pending"],
-                                class_name="text-xs font-bold",
-                            ),
-                            class_name="px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded-full min-w-[20px] text-center",
-                        ),
-                        align="center",
-                        gap="2",
-                    ),
-                    on_click=AppState.set_recordings_tab("active"),
-                    variant=rx.cond(
-                        AppState.recordings_tab == "active",
-                        "solid",
-                        "outline",
-                    ),
-                    size="2",
-                ),
-                rx.button(
-                    rx.flex(
-                        rx.icon("circle-check", size=14),
-                        rx.text("Approved"),
-                        rx.box(
-                            rx.text(
-                                AppState.recordings_status_counts["approved"],
-                                class_name="text-xs font-bold",
-                            ),
-                            class_name="px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full min-w-[20px] text-center",
-                        ),
-                        align="center",
-                        gap="2",
-                    ),
-                    on_click=AppState.set_recordings_tab("approved"),
-                    variant=rx.cond(
-                        AppState.recordings_tab == "approved",
-                        "solid",
-                        "outline",
-                    ),
-                    size="2",
-                ),
-                gap="2",
-                class_name="mt-2",
             ),
             class_name="shrink-0 max-w-[1100px] mx-auto w-full px-4 pt-6",
         ),
@@ -106,7 +58,7 @@ def recordings_page() -> rx.Component:
 
 
 def _header() -> rx.Component:
-    """Page header with title, stats badges, and action buttons."""
+    """Page header with title, toggleable status badges, and action buttons."""
     return rx.flex(
         # Left: back + title
         rx.flex(
@@ -122,13 +74,14 @@ def _header() -> rx.Component:
             align="center",
             gap="3",
         ),
-        # Right: action buttons
+        # Right: toggleable status badges + action buttons
         rx.flex(
-            _stat_badge("Total", AppState.recordings_status_counts["total"], "gray"),
-            _stat_badge("Pending", AppState.recordings_status_counts["pending"], "yellow"),
-            _stat_badge("Transcribed", AppState.recordings_status_counts["transcribed"], "blue"),
-            _stat_badge("Approved", AppState.recordings_status_counts["approved"], "green"),
-            _stat_badge("Errors", AppState.recordings_status_counts["error"], "red"),
+            _stat_badge("Total", AppState.recordings_status_counts["total"], "gray", None),
+            _stat_badge("Pending", AppState.recordings_status_counts["pending"], "yellow", "pending"),
+            _stat_badge("Transcribing", AppState.recordings_status_counts["transcribing"], "orange", "transcribing"),
+            _stat_badge("Transcribed", AppState.recordings_status_counts["transcribed"], "blue", "transcribed"),
+            _stat_badge("Approved", AppState.recordings_status_counts["approved"], "green", "approved"),
+            _stat_badge("Errors", AppState.recordings_status_counts["error"], "red", "error"),
             # Auto-transcribe toggle
             rx.flex(
                 rx.switch(
@@ -198,16 +151,55 @@ def _header() -> rx.Component:
     )
 
 
-def _stat_badge(label: str, value: rx.Var, color: str) -> rx.Component:
-    """Small stat badge for the header."""
-    color_map = {
-        "gray": "bg-gray-100 text-gray-700",
-        "yellow": "bg-yellow-100 text-yellow-700",
-        "blue": "bg-blue-100 text-blue-700",
-        "green": "bg-green-100 text-green-700",
-        "red": "bg-red-100 text-red-700",
+def _stat_badge(
+    label: str, value: rx.Var, color: str, status_key: str | None,
+) -> rx.Component:
+    """Toggleable status badge for the header.
+
+    When *status_key* is not None, clicking toggles that status in
+    the multi-select filter.  When None (e.g. "Total"), clicking
+    clears all status filters.
+    """
+    # Color maps for inactive (outline) and active (filled) states
+    _inactive = {
+        "gray": "bg-gray-50 text-gray-400 border border-gray-200",
+        "yellow": "bg-yellow-50 text-yellow-400 border border-yellow-200",
+        "orange": "bg-orange-50 text-orange-400 border border-orange-200",
+        "blue": "bg-blue-50 text-blue-400 border border-blue-200",
+        "green": "bg-green-50 text-green-400 border border-green-200",
+        "red": "bg-red-50 text-red-400 border border-red-200",
     }
-    cls = color_map.get(color, "bg-gray-100 text-gray-700")
+    _active = {
+        "gray": "bg-gray-200 text-gray-800 border border-gray-400 ring-1 ring-gray-300",
+        "yellow": "bg-yellow-200 text-yellow-800 border border-yellow-400 ring-1 ring-yellow-300",
+        "orange": "bg-orange-200 text-orange-800 border border-orange-400 ring-1 ring-orange-300",
+        "blue": "bg-blue-200 text-blue-800 border border-blue-400 ring-1 ring-blue-300",
+        "green": "bg-green-200 text-green-800 border border-green-400 ring-1 ring-green-300",
+        "red": "bg-red-200 text-red-800 border border-red-400 ring-1 ring-red-300",
+    }
+    inactive_cls = _inactive.get(color, _inactive["gray"])
+    active_cls = _active.get(color, _active["gray"])
+
+    if status_key is None:
+        # "Total" badge — always uses active style; clicking clears all filters
+        return rx.box(
+            rx.flex(
+                rx.text(value, class_name="text-sm font-bold"),
+                rx.text(label, class_name="text-xs opacity-70"),
+                align="center",
+                gap="1",
+            ),
+            on_click=AppState.clear_recordings_filters,
+            class_name=f"px-2 py-1 rounded-lg cursor-pointer transition-all {active_cls}",
+            title="Click to clear all status filters",
+        )
+
+    # Toggleable status badge
+    is_active = AppState.recordings_active_statuses.contains(status_key)  # type: ignore[attr-defined]
+    # When no statuses are selected, all are shown (treat as all active)
+    no_filter = AppState.recordings_active_statuses.length() == 0  # type: ignore[attr-defined]
+    show_active = is_active | no_filter
+
     return rx.box(
         rx.flex(
             rx.text(value, class_name="text-sm font-bold"),
@@ -215,7 +207,13 @@ def _stat_badge(label: str, value: rx.Var, color: str) -> rx.Component:
             align="center",
             gap="1",
         ),
-        class_name=f"px-2 py-1 rounded-lg {cls}",
+        on_click=AppState.toggle_recording_status(status_key),
+        class_name=rx.cond(
+            show_active,
+            f"px-2 py-1 rounded-lg cursor-pointer transition-all {active_cls}",
+            f"px-2 py-1 rounded-lg cursor-pointer transition-all {inactive_cls} opacity-60",
+        ),
+        title=f"Toggle {label} filter",
     )
 
 
@@ -225,22 +223,8 @@ def _stat_badge(label: str, value: rx.Var, color: str) -> rx.Component:
 
 
 def _filter_toolbar() -> rx.Component:
-    """Filter bar with status, date range, and search."""
+    """Filter bar with date range and search (status filtering via header badges)."""
     return rx.flex(
-        # Status filter
-        rx.select(
-            ["All", "pending", "transcribing", "transcribed", "approved", "error"],
-            value=rx.cond(
-                AppState.call_recordings_filter_status == "",
-                "All",
-                AppState.call_recordings_filter_status,
-            ),
-            on_change=lambda v: AppState.set_call_recordings_filter_status(  # type: ignore
-                rx.cond(v == "All", "", v)  # type: ignore[arg-type]
-            ),
-            size="2",
-            class_name="w-36",
-        ),
         # Date from
         rx.el.input(
             type="date",
