@@ -308,6 +308,7 @@ class AppState(rx.State):
     entity_graph_nodes: list[dict[str, Any]] = []
     entity_graph_edges: list[dict[str, Any]] = []
     entity_graph_loading: bool = False
+    entity_graph_html: str = ""
 
     # --- Scheduled Insights ---
     insights_tasks: list[dict[str, Any]] = []
@@ -2924,9 +2925,49 @@ class AppState(rx.State):
         self.entity_loading = False
 
     async def search_entities(self):
-        """Search entities using current entity_search value."""
+        """Search entities using current entity_search value.
+        
+        When in merge mode, preserves already-selected persons at the top
+        of the list even if they don't match the current search query.
+        """
         q = self.entity_search.strip()
-        await self._load_entity_list(q if q else None)
+        
+        if self.entity_merge_mode and self.entity_merge_selection:
+            # Save current selection before reloading
+            saved_selection = list(self.entity_merge_selection)
+            
+            # Load search results
+            await self._load_entity_list(q if q else None)
+            
+            # Restore selection (it's preserved in state, but the persons
+            # may not be in the filtered list — fetch them individually)
+            self.entity_merge_selection = saved_selection
+            
+            # Ensure selected persons appear in the list
+            current_ids = {p["id"] for p in self.entity_persons}
+            missing_ids = [pid for pid in saved_selection if pid not in current_ids]
+            
+            if missing_ids:
+                for pid in missing_ids:
+                    data = await api_client.fetch_entity(int(pid))
+                    if "error" not in data:
+                        display_name = str(data.get("display_name", "") or data.get("canonical_name", ""))
+                        aliases_raw = data.get("aliases", [])
+                        alias_count = len(aliases_raw) if isinstance(aliases_raw, list) else 0
+                        facts_raw = data.get("facts", {})
+                        fact_count = len(facts_raw) if isinstance(facts_raw, dict) else 0
+                        
+                        self.entity_persons.insert(0, {
+                            "id": str(data.get("id", "")),
+                            "canonical_name": display_name,
+                            "phone": str(data.get("phone", "") or ""),
+                            "whatsapp_id": str(data.get("whatsapp_id", "") or ""),
+                            "alias_count": str(alias_count),
+                            "fact_count": str(fact_count),
+                            "aliases_preview": "",
+                        })
+        else:
+            await self._load_entity_list(q if q else None)
 
     async def select_entity(self, person_id: str):
         """Load full person detail for the side panel."""
@@ -3185,12 +3226,40 @@ class AppState(rx.State):
             self.entity_save_message = result.get("message", "No change needed")
 
     async def load_entity_graph(self):
-        """Fetch person-relationship-asset graph data."""
+        """Fetch person-relationship-asset graph data for display."""
         self.entity_graph_loading = True
         yield
-        data = await api_client.fetch_entity_graph(limit=100)
-        self.entity_graph_nodes = data.get("nodes", [])  # type: ignore[assignment]
-        self.entity_graph_edges = data.get("edges", [])  # type: ignore[assignment]
+        data = await api_client.fetch_entity_graph(limit=200)
+        nodes = data.get("nodes", [])
+        edges = data.get("edges", [])
+
+        # Filter: only show persons with relationships, assets, or facts
+        edge_person_ids: set = set()
+        for e in edges:
+            edge_person_ids.add(str(e.get("source_id", "")))
+            edge_person_ids.add(str(e.get("target_id", "")))
+
+        filtered_nodes: list = []
+        for n in nodes:
+            nid = n.get("id", "")
+            total = int(n.get("total_assets", "0"))
+            facts = int(n.get("fact_count", "0"))
+            has_rel = str(nid) in edge_person_ids
+            if total > 0 or has_rel or facts > 0:
+                # Add a badge field for display
+                badges = []
+                if has_rel:
+                    badges.append("🔗 has relationships")
+                summary = n.get("asset_summary", "")
+                if summary:
+                    badges.append(f"📦 {summary}")
+                if facts > 0:
+                    badges.append(f"📋 {n.get('fact_count', '0')} facts")
+                n["badges"] = " · ".join(badges) if badges else ""
+                filtered_nodes.append(n)
+
+        self.entity_graph_nodes = filtered_nodes  # type: ignore[assignment]
+        self.entity_graph_edges = edges  # type: ignore[assignment]
         self.entity_graph_loading = False
 
     async def load_merge_candidates(self):

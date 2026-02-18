@@ -1634,9 +1634,22 @@ def merge_persons(
                 except sqlite3.IntegrityError:
                     pass
 
-            # Also re-point reverse relationships (where source was the related_person)
+            # Also re-point reverse relationships (where source was the related_person).
+            # First delete any that would conflict with existing target relationships,
+            # then update the remaining ones.
             conn.execute(
-                """UPDATE person_relationships
+                """DELETE FROM person_relationships
+                   WHERE related_person_id = ?
+                     AND person_id != ?
+                     AND (person_id, relationship_type) IN (
+                         SELECT person_id, relationship_type
+                         FROM person_relationships
+                         WHERE related_person_id = ?
+                     )""",
+                (source_id, target_id, target_id),
+            )
+            conn.execute(
+                """UPDATE OR IGNORE person_relationships
                    SET related_person_id = ?
                    WHERE related_person_id = ? AND person_id != ?""",
                 (target_id, source_id, target_id),
@@ -1914,10 +1927,23 @@ def get_graph_data(limit: int = 100) -> Dict[str, Any]:
     """
     conn = _get_connection()
     try:
-        # Fetch persons
+        # Fetch persons prioritized by connectivity:
+        # persons with relationships, assets, or facts come first
         persons = conn.execute(
-            "SELECT id, canonical_name, phone, is_group FROM persons "
-            "WHERE is_group = FALSE ORDER BY canonical_name LIMIT ?",
+            """SELECT p.id, p.canonical_name, p.phone, p.is_group,
+                      COALESCE(asset_cnt.cnt, 0) AS _assets,
+                      COALESCE(fact_cnt.cnt, 0) AS _facts,
+                      COALESCE(rel_cnt.cnt, 0) AS _rels
+               FROM persons p
+               LEFT JOIN (SELECT person_id, COUNT(*) as cnt FROM person_assets GROUP BY person_id) asset_cnt
+                   ON asset_cnt.person_id = p.id
+               LEFT JOIN (SELECT person_id, COUNT(*) as cnt FROM person_facts GROUP BY person_id) fact_cnt
+                   ON fact_cnt.person_id = p.id
+               LEFT JOIN (SELECT person_id, COUNT(*) as cnt FROM person_relationships GROUP BY person_id) rel_cnt
+                   ON rel_cnt.person_id = p.id
+               WHERE p.is_group = FALSE
+               ORDER BY (_rels > 0) DESC, (_assets > 0) DESC, (_facts > 0) DESC, p.canonical_name
+               LIMIT ?""",
             (limit,),
         ).fetchall()
 
@@ -1949,15 +1975,20 @@ def get_graph_data(limit: int = 100) -> Dict[str, Any]:
             ).fetchall()
             asset_counts = {r["asset_type"]: r["cnt"] for r in asset_rows}
             total_assets = sum(asset_counts.values())
+            # Format asset summary as a flat string for Reflex compatibility
+            # (Reflex foreach can't handle nested dicts well)
+            asset_summary = ", ".join(
+                f"{cnt} {atype}" for atype, cnt in sorted(asset_counts.items())
+            ) if asset_counts else ""
 
             nodes.append({
-                "id": pid,
+                "id": str(pid),
                 "label": p["canonical_name"],
                 "phone": p["phone"] or "",
-                "alias_count": alias_count,
-                "fact_count": fact_count,
-                "asset_counts": asset_counts,
-                "total_assets": total_assets,
+                "alias_count": str(alias_count),
+                "fact_count": str(fact_count),
+                "total_assets": str(total_assets),
+                "asset_summary": asset_summary,
             })
 
         # Fetch relationships between persons in the graph

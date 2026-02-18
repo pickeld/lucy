@@ -1293,7 +1293,7 @@ def _suggestion_card(candidate: dict) -> rx.Component:
 
 
 def _graph_tab() -> rx.Component:
-    """Graph visualization tab — persons, relationships, and asset counts."""
+    """Graph view — connected persons with relationships and asset links."""
     return rx.flex(
         # Controls
         rx.flex(
@@ -1306,25 +1306,25 @@ def _graph_tab() -> rx.Component:
                 class_name="bg-blue-500 text-white hover:bg-blue-600",
             ),
             rx.text(
-                "Shows person relationships and linked asset counts",
+                "Shows only persons with relationships, assets, or facts",
                 class_name="text-xs text-gray-400 italic ml-2",
             ),
             gap="2",
             align="center",
             class_name="mb-4",
         ),
-        # Graph content
+        # Content
         rx.cond(
             AppState.entity_graph_nodes.length() > 0,  # type: ignore[union-attr]
             rx.flex(
-                # Stats summary
+                # Stats
                 rx.flex(
-                    _graph_stat("👤", AppState.entity_graph_nodes.length(), "Persons"),  # type: ignore[union-attr]
+                    _graph_stat("👤", AppState.entity_graph_nodes.length(), "Connected Persons"),  # type: ignore[union-attr]
                     _graph_stat("🔗", AppState.entity_graph_edges.length(), "Relationships"),  # type: ignore[union-attr]
                     gap="3",
                     class_name="mb-4",
                 ),
-                # Relationship edges
+                # Relationships section
                 rx.cond(
                     AppState.entity_graph_edges.length() > 0,  # type: ignore[union-attr]
                     _section_card(
@@ -1338,15 +1338,18 @@ def _graph_tab() -> rx.Component:
                     ),
                     rx.fragment(),
                 ),
-                # Person nodes grid with asset counts
-                rx.box(
-                    rx.foreach(
-                        AppState.entity_graph_nodes,
-                        _graph_person_node,
-                    ),
-                    class_name=(
-                        "grid gap-3"
-                        " grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
+                # Connected persons grid
+                _section_card(
+                    "Connected Persons", "users",
+                    rx.box(
+                        rx.foreach(
+                            AppState.entity_graph_nodes,
+                            _graph_person_node,
+                        ),
+                        class_name=(
+                            "grid gap-3"
+                            " grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
+                        ),
                     ),
                 ),
                 direction="column",
@@ -1356,7 +1359,7 @@ def _graph_tab() -> rx.Component:
                 AppState.entity_graph_loading,
                 rx.flex(
                     rx.spinner(size="3"),
-                    rx.text("Loading graph…", class_name="text-sm text-gray-400 ml-2"),
+                    rx.text("Loading…", class_name="text-sm text-gray-400 ml-2"),
                     align="center",
                     justify="center",
                     class_name="py-12",
@@ -1369,7 +1372,7 @@ def _graph_tab() -> rx.Component:
                             class_name="text-gray-400 mt-2",
                         ),
                         rx.text(
-                            "Click 'Load Graph' to visualize person relationships and assets",
+                            "Click 'Load Graph' to see persons with relationships or linked assets",
                             class_name="text-sm text-gray-300 mt-1",
                         ),
                         direction="column",
@@ -1437,24 +1440,12 @@ def _graph_person_node(node: dict) -> rx.Component:
             gap="3",
             class_name="mt-2",
         ),
-        # Asset count badges
+        # Badges line (relationships, assets, facts summary)
         rx.cond(
-            node["total_assets"].to(int) > 0,
-            rx.flex(
-                rx.flex(
-                    rx.icon("database", size=12, class_name="text-blue-400"),
-                    rx.text(
-                        node["total_assets"],
-                        class_name="text-xs font-semibold text-blue-600",
-                    ),
-                    rx.text("assets", class_name="text-xs text-blue-400"),
-                    align="center",
-                    gap="1",
-                ),
-                gap="2",
-                class_name=(
-                    "mt-2 pt-2 border-t border-gray-100"
-                ),
+            node["badges"] != "",
+            rx.text(
+                node["badges"],
+                class_name="text-xs text-blue-500 mt-2 pt-2 border-t border-gray-100",
             ),
             rx.fragment(),
         ),

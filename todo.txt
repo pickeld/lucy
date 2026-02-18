@@ -6,3 +6,4 @@ authentication for the ui / backend
 5. rich response > location / contacts/ events
 6. pushbullet integraion for sending notificaion.
 7. scheduled (dayly / weekly / monthly / cuystom) query for planning and highlights
+8. toast notifications 
