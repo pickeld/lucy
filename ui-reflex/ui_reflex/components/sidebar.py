@@ -1,5 +1,6 @@
 """Dark sidebar component — ChatGPT-style conversation list.
 
+Supports collapsed (icons-only, 60px) and expanded (280px) modes.
 Uses a flat list of items (headers + conversations) from state
 to avoid nested rx.foreach — Reflex requires typed vars for iteration.
 """
@@ -10,37 +11,88 @@ from ..state import AppState
 
 
 def sidebar() -> rx.Component:
-    """Full sidebar: fixed 280px, dark background."""
+    """Collapsible sidebar: 280px expanded, 60px collapsed."""
     return rx.box(
         rx.flex(
-            _new_chat_button(),
-            _search_bar(),
-            # Conversation list (scrollable)
-            rx.box(
-                rx.foreach(
-                    AppState.sidebar_items,
-                    _render_sidebar_item,
-                ),
-                rx.cond(
-                    ~AppState.has_conversations,
-                    rx.text(
-                        "No previous chats",
-                        class_name="text-sidebar-muted text-sm text-center py-8",
+            _toggle_button(),
+            rx.cond(
+                AppState.sidebar_collapsed,
+                # ---- Collapsed mode: icons only ----
+                rx.fragment(
+                    _collapsed_new_chat(),
+                    rx.box(
+                        rx.foreach(
+                            AppState.sidebar_items,
+                            _render_collapsed_item,
+                        ),
+                        class_name="flex-1 overflow-y-auto sidebar-scroll px-1",
                     ),
-                    rx.fragment(),
+                    _collapsed_bottom(),
                 ),
-                class_name="flex-1 overflow-y-auto sidebar-scroll px-2",
+                # ---- Expanded mode: full sidebar ----
+                rx.fragment(
+                    _new_chat_button(),
+                    _search_bar(),
+                    rx.box(
+                        rx.foreach(
+                            AppState.sidebar_items,
+                            _render_sidebar_item,
+                        ),
+                        rx.cond(
+                            ~AppState.has_conversations,
+                            rx.text(
+                                "No previous chats",
+                                class_name="text-sidebar-muted text-sm text-center py-8",
+                            ),
+                            rx.fragment(),
+                        ),
+                        class_name="flex-1 overflow-y-auto sidebar-scroll px-2",
+                    ),
+                    _bottom_section(),
+                ),
             ),
-            _bottom_section(),
             direction="column",
             class_name="h-full",
         ),
-        class_name="w-[280px] min-w-[280px] h-screen bg-sidebar border-r border-sidebar-border flex flex-col",
+        class_name=rx.cond(
+            AppState.sidebar_collapsed,
+            "sidebar-container w-[60px] min-w-[60px] h-screen bg-sidebar border-r border-sidebar-border flex flex-col",
+            "sidebar-container w-[280px] min-w-[280px] h-screen bg-sidebar border-r border-sidebar-border flex flex-col",
+        ),
     )
 
 
 # =========================================================================
-# NEW CHAT BUTTON
+# TOGGLE BUTTON
+# =========================================================================
+
+def _toggle_button() -> rx.Component:
+    """Collapse / expand toggle at the top of the sidebar."""
+    return rx.box(
+        rx.icon_button(
+            rx.cond(
+                AppState.sidebar_collapsed,
+                rx.icon("panel-left-open", size=18),
+                rx.icon("panel-left-close", size=18),
+            ),
+            on_click=AppState.toggle_sidebar,
+            variant="ghost",
+            size="2",
+            class_name=(
+                "text-sidebar-muted hover:text-sidebar-text "
+                "hover:bg-sidebar-hover cursor-pointer !bg-transparent"
+            ),
+        ),
+        class_name=rx.cond(
+            AppState.sidebar_collapsed,
+            "px-2 pt-3 pb-1 flex justify-center",
+            "px-3 pt-3 pb-1 flex justify-end",
+        ),
+    )
+
+
+# =========================================================================
+# EXPANDED MODE — NEW CHAT BUTTON
 # =========================================================================
 
 def _new_chat_button() -> rx.Component:
@@ -57,12 +109,32 @@ def _new_chat_button() -> rx.Component:
                 "transition-colors duration-150"
             ),
         ),
-        class_name="px-3 pt-3 pb-2",
+        class_name="px-3 pt-1 pb-2",
     )
 
 
 # =========================================================================
-# SEARCH BAR
+# COLLAPSED MODE — NEW CHAT (icon only)
+# =========================================================================
+
+def _collapsed_new_chat() -> rx.Component:
+    return rx.box(
+        rx.icon_button(
+            rx.icon("plus", size=18),
+            on_click=AppState.new_chat,
+            variant="outline",
+            class_name=(
+                "border border-dashed border-sidebar-border "
+                "text-sidebar-text bg-transparent hover:bg-sidebar-hover "
+                "hover:border-solid cursor-pointer !w-9 !h-9"
+            ),
+        ),
+        class_name="px-2 pt-1 pb-2 flex justify-center",
+    )
+
+
+# =========================================================================
+# SEARCH BAR (expanded only)
 # =========================================================================
 
 def _search_bar() -> rx.Component:
@@ -89,7 +161,7 @@ def _search_bar() -> rx.Component:
 
 
 # =========================================================================
-# SIDEBAR ITEM RENDERER (header or conversation)
+# EXPANDED SIDEBAR ITEM RENDERER (header or conversation)
 # =========================================================================
 
 def _render_sidebar_item(item: dict) -> rx.Component:
@@ -229,7 +301,51 @@ def _rename_mode() -> rx.Component:
 
 
 # =========================================================================
-# BOTTOM SECTION
+# COLLAPSED SIDEBAR ITEM RENDERER
+# =========================================================================
+
+def _render_collapsed_item(item: dict) -> rx.Component:
+    """Render a collapsed conversation item (dot or avatar-like circle)."""
+    return rx.cond(
+        item["type"] == "header",
+        # Skip headers in collapsed mode (just a thin separator)
+        rx.separator(class_name="border-sidebar-border my-1 mx-2"),
+        _render_collapsed_conversation(item),
+    )
+
+
+def _render_collapsed_conversation(item: dict) -> rx.Component:
+    """Collapsed conversation: show first letter as circle."""
+    convo_id = item["id"]
+    is_active = AppState.conversation_id == convo_id
+
+    return rx.tooltip(
+        rx.box(
+            rx.text(
+                item["title"].to(str)[0:2].to(str).upper(),
+                class_name="text-[0.65rem] font-bold text-sidebar-text",
+            ),
+            on_click=AppState.load_conversation(convo_id),
+            class_name=rx.cond(
+                is_active,
+                (
+                    "w-9 h-9 rounded-lg bg-sidebar-active border border-accent "
+                    "flex items-center justify-center cursor-default mx-auto my-0.5"
+                ),
+                (
+                    "w-9 h-9 rounded-lg hover:bg-sidebar-hover "
+                    "flex items-center justify-center cursor-pointer mx-auto my-0.5 "
+                    "transition-colors duration-150"
+                ),
+            ),
+        ),
+        content=item["title"],
+        side="right",
+    )
+
+
+# =========================================================================
+# EXPANDED BOTTOM SECTION
 # =========================================================================
 
 def _bottom_section() -> rx.Component:
@@ -309,3 +425,72 @@ def _bottom_section() -> rx.Component:
         class_name="pb-3",
     )
 
+
+# =========================================================================
+# COLLAPSED BOTTOM SECTION
+# =========================================================================
+
+def _collapsed_bottom() -> rx.Component:
+    """Collapsed bottom: just icon links."""
+    return rx.box(
+        rx.separator(class_name="border-sidebar-border mb-2"),
+        # Health dot (centered)
+        rx.flex(
+            rx.box(
+                class_name=rx.cond(
+                    AppState.api_status == "up",
+                    "w-2.5 h-2.5 rounded-full bg-status-green",
+                    rx.cond(
+                        AppState.api_status == "degraded",
+                        "w-2.5 h-2.5 rounded-full bg-status-yellow",
+                        "w-2.5 h-2.5 rounded-full bg-status-red",
+                    ),
+                ),
+            ),
+            justify="center",
+            class_name="py-1",
+        ),
+        # Settings icon
+        rx.flex(
+            rx.tooltip(
+                rx.link(
+                    rx.icon_button(
+                        rx.icon("settings", size=18),
+                        variant="ghost",
+                        class_name=(
+                            "text-sidebar-muted hover:text-sidebar-text "
+                            "hover:bg-sidebar-hover cursor-pointer !bg-transparent"
+                        ),
+                    ),
+                    href="/settings",
+                    underline="none",
+                ),
+                content="Settings",
+                side="right",
+            ),
+            justify="center",
+            class_name="py-0.5",
+        ),
+        # Entities icon
+        rx.flex(
+            rx.tooltip(
+                rx.link(
+                    rx.icon_button(
+                        rx.icon("users", size=18),
+                        variant="ghost",
+                        class_name=(
+                            "text-sidebar-muted hover:text-sidebar-text "
+                            "hover:bg-sidebar-hover cursor-pointer !bg-transparent"
+                        ),
+                    ),
+                    href="/entities",
+                    underline="none",
+                ),
+                content="Entities",
+                side="right",
+            ),
+            justify="center",
+            class_name="py-0.5",
+        ),
+        class_name="pb-3",
+    )

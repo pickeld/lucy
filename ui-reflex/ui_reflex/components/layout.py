@@ -6,7 +6,7 @@ from .sidebar import sidebar
 
 
 def layout(content: rx.Component) -> rx.Component:
-    """Two-panel layout: fixed dark sidebar (280px) + scrollable content."""
+    """Two-panel layout: collapsible dark sidebar + scrollable content."""
     return rx.flex(
         sidebar(),
         rx.box(

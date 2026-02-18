@@ -170,6 +170,7 @@ class AppState(rx.State):
 
     # --- UI state ---
     is_loading: bool = False
+    sidebar_collapsed: bool = False
     sidebar_search: str = ""
     show_settings: bool = False
     renaming_id: str = ""
@@ -301,6 +302,10 @@ class AppState(rx.State):
     def set_sidebar_search(self, value: str):
         """Set the sidebar search filter text."""
         self.sidebar_search = value
+
+    def toggle_sidebar(self):
+        """Toggle sidebar between collapsed (icons-only) and expanded."""
+        self.sidebar_collapsed = not self.sidebar_collapsed
 
     def set_call_recordings_filter_name(self, value: str):
         """Set the call recordings name filter."""

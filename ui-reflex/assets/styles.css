@@ -50,6 +50,12 @@ html, body {
     background-color: #555;
 }
 
+/* --- Sidebar collapse/expand transition --- */
+.sidebar-container {
+    transition: width 0.2s ease, min-width 0.2s ease;
+    overflow: hidden;
+}
+
 /* --- Conversation item: reveal actions on hover --- */
 .conv-item .conv-actions {
     opacity: 0;

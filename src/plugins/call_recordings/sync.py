@@ -219,9 +219,13 @@ class CallRecordingSyncer:
                         if not phone_number and entity_info.get("phone"):
                             phone_number = entity_info["phone"]
 
-                # Auto-detect participants from tags or filename
+                # Auto-detect participants from tags or filename.
+                # The filename-parsed name is more reliable than audio
+                # tags (which may contain the wrong contact, e.g. the
+                # phone owner instead of the call partner).
                 participants = self._resolve_participants(af)
-                if contact_name and participants == ["Unknown"]:
+                if contact_name:
+                    # Always prefer the filename/entity-resolved name
                     participants = [contact_name]
 
                 # Use date+time from filename if available
@@ -391,10 +395,13 @@ class CallRecordingSyncer:
                     f"(min={MIN_CONTENT_CHARS}) — storing for review"
                 )
 
-            # Resolve participants from tags + filename (for auto-fill)
-            # Build a minimal AudioFile for metadata resolution
+            # Use stored contact_name from the DB (set during scan from
+            # filename parsing + entity lookup).  Only fall back to
+            # participants[0] when no contact_name was stored.
             participants = json.loads(record.get("participants", "[]")) or []
-            contact_name = participants[0] if participants and participants[0] != "Unknown" else ""
+            contact_name = record.get("contact_name") or ""
+            if not contact_name:
+                contact_name = participants[0] if participants and participants[0] != "Unknown" else ""
 
             # Store transcription in DB
             recording_db.update_transcription(
@@ -855,6 +862,32 @@ class CallRecordingSyncer:
                     or name
                 )
                 phone = person.get("phone") or ""
+                wa_id = person.get("whatsapp_id") or ""
+
+                # Detect if "phone" is actually a WhatsApp Linked ID
+                # (not a real phone number).  LID contacts have
+                # whatsapp_id like "196121158754445@lid" and the WAHA
+                # API returns the same LID digits as the "number" field.
+                if phone and wa_id.endswith("@lid"):
+                    lid_digits = wa_id.replace("@lid", "")
+                    if phone.lstrip("+") == lid_digits:
+                        # "phone" is the LID number — discard it
+                        logger.debug(
+                            f"Discarding LID number as phone for '{name}': {phone}"
+                        )
+                        phone = ""
+
+                # If phone is still empty, try to derive from whatsapp_id
+                # but only for @c.us contacts (real phone-based IDs)
+                if not phone and wa_id.endswith("@c.us"):
+                    digits = wa_id.replace("@c.us", "")
+                    if digits.isdigit() and len(digits) >= 7:
+                        phone = f"+{digits}"
+
+                # Normalise: ensure phone has "+" prefix for display
+                if phone and phone[0].isdigit():
+                    phone = f"+{phone}"
+
                 logger.info(
                     f"Resolved name '{name}' → entity '{display}' "
                     f"(id={person.get('id')}, phone={phone or 'N/A'})"
