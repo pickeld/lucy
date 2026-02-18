@@ -502,30 +502,39 @@ def _paperless_actions() -> rx.Component:
 
 
 def _call_recordings_actions() -> rx.Component:
-    """Call Recordings — scan, upload, and review table."""
+    """Call Recordings — test connection + link to dedicated recordings page."""
     return rx.box(
-        # Action buttons row
+        # Test & quick actions
         rx.flex(
             rx.button(
-                rx.icon("search", size=14, class_name="mr-1"),
-                "Scan Files",
-                on_click=AppState.scan_recordings,
-                loading=AppState.call_recordings_files_loading,
+                rx.icon("wifi", size=14, class_name="mr-1"),
+                "Test Connection",
+                on_click=AppState.test_call_recordings_connection,
+                loading=AppState.call_recordings_test_status == "testing",
                 size="2",
                 class_name="bg-blue-500 text-white hover:bg-blue-600",
             ),
             rx.button(
-                rx.icon("refresh-cw", size=14, class_name="mr-1"),
-                "Refresh",
-                on_click=AppState.load_recording_files,
+                rx.icon("folder-search", size=14, class_name="mr-1"),
+                "Scan Files",
+                on_click=AppState.scan_recordings,
                 loading=AppState.call_recordings_files_loading,
-                variant="outline",
                 size="2",
+                variant="outline",
             ),
             gap="3",
             align="center",
         ),
-        # Status / scan message
+        # Test status message
+        rx.cond(
+            AppState.call_recordings_test_message != "",
+            rx.text(
+                AppState.call_recordings_test_message,
+                class_name="text-sm mt-2",
+            ),
+            rx.fragment(),
+        ),
+        # Scan status message
         rx.cond(
             AppState.call_recordings_scan_message != "",
             rx.text(
@@ -534,337 +543,36 @@ def _call_recordings_actions() -> rx.Component:
             ),
             rx.fragment(),
         ),
-        # Upload area (compact)
+        # Prominent link to the dedicated recordings manager page
         rx.box(
-            rx.upload(
+            rx.link(
                 rx.flex(
-                    rx.icon("cloud-upload", size=20, class_name="text-gray-400"),
-                    rx.text(
-                        "Drop audio files here or click to browse",
-                        class_name="text-sm text-gray-500",
-                    ),
-                    align="center",
-                    gap="2",
-                    class_name="py-3",
-                ),
-                id="call_recordings_upload",
-                accept={
-                    "audio/*": [
-                        ".mp3", ".wav", ".m4a", ".ogg", ".flac",
-                        ".wma", ".aac", ".opus", ".webm",
-                    ],
-                },
-                max_files=20,
-                on_drop=AppState.upload_call_recordings(  # type: ignore[arg-type]
-                    rx.upload_files(upload_id="call_recordings_upload"),
-                ),
-                border="2px dashed",
-                border_color="gray.200",
-                border_radius="lg",
-                class_name="w-full cursor-pointer hover:border-gray-400 transition-colors",
-            ),
-            rx.cond(
-                AppState.call_recordings_upload_message != "",
-                rx.text(
-                    AppState.call_recordings_upload_message,
-                    class_name="text-sm mt-2",
-                ),
-                rx.fragment(),
-            ),
-            class_name="mt-3",
-        ),
-        # Recordings table with filters
-        rx.box(
-            rx.flex(
-                rx.text(
-                    "Recordings",
-                    class_name="text-sm font-medium text-gray-700",
-                ),
-                # Filter controls
-                rx.el.input(
-                    type="text",
-                    placeholder="Search by name, phone…",
-                    value=AppState.call_recordings_filter_name,
-                    on_change=AppState.set_call_recordings_filter_name,  # type: ignore[arg-type]
-                    class_name=(
-                        "text-xs bg-gray-50 border border-gray-200 rounded "
-                        "px-2 py-1 w-40 outline-none focus:border-accent"
-                    ),
-                ),
-                rx.select(
-                    ["All", "pending", "transcribing", "transcribed", "approved", "error"],
-                    value=rx.cond(
-                        AppState.call_recordings_filter_status == "",
-                        "All",
-                        AppState.call_recordings_filter_status,
-                    ),
-                    on_change=lambda v: AppState.set_call_recordings_filter_status(  # type: ignore
-                        rx.cond(v == "All", "", v)  # type: ignore[arg-type]
-                    ),
-                    size="1",
-                    variant="ghost",
-                    class_name="text-xs",
-                ),
-                align="center",
-                gap="3",
-                class_name="mb-2",
-            ),
-            rx.cond(
-                AppState.call_recordings_files_loading,
-                rx.flex(
-                    rx.spinner(size="2"),
-                    rx.text("Loading…", class_name="text-sm text-gray-400 ml-2"),
-                    align="center",
-                    class_name="py-4",
-                ),
-                rx.cond(
-                    AppState.filtered_recording_files.length() > 0,  # type: ignore[union-attr]
+                    rx.icon("phone", size=20, class_name="text-accent"),
                     rx.box(
-                        rx.foreach(
-                            AppState.filtered_recording_files,
-                            _recording_row,
+                        rx.text(
+                            "Open Recordings Manager",
+                            class_name="text-sm font-semibold text-gray-800",
+                        ),
+                        rx.text(
+                            "View, filter, transcribe, and manage all call recordings "
+                            "with speaker assignment.",
+                            class_name="text-xs text-gray-400 mt-0.5",
                         ),
                     ),
-                    rx.text(
-                        "No recordings found. Upload files or click "
-                        "'Scan Files' to discover recordings.",
-                        class_name="text-sm text-gray-400 italic py-4",
+                    rx.icon("arrow-right", size=18, class_name="text-gray-400 ml-auto"),
+                    align="center",
+                    gap="3",
+                    class_name=(
+                        "px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl "
+                        "hover:bg-gray-100 hover:border-accent transition-colors cursor-pointer"
                     ),
                 ),
+                href="/recordings",
+                underline="none",
             ),
-            class_name="mt-4 pt-4 border-t border-gray-100",
+            class_name="mt-4",
         ),
         class_name="mt-4 pt-4 border-t border-gray-200",
-        on_mount=AppState.load_recording_files,
-    )
-
-
-def _status_badge(status: rx.Var[str]) -> rx.Component:
-    """Colored status badge for a recording file."""
-    return rx.box(
-        rx.text(
-            status,
-            class_name="text-xs font-medium capitalize",
-        ),
-        class_name=rx.cond(
-            status == "approved",
-            "px-2 py-0.5 rounded-full bg-green-100 text-green-700 inline-block",
-            rx.cond(
-                status == "transcribed",
-                "px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 inline-block",
-                rx.cond(
-                    status == "error",
-                    "px-2 py-0.5 rounded-full bg-red-100 text-red-700 inline-block",
-                    rx.cond(
-                        status == "transcribing",
-                        "px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 inline-block animate-pulse",
-                        "px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 inline-block",
-                    ),
-                ),
-            ),
-        ),
-    )
-
-
-def _recording_row(item: dict) -> rx.Component:
-    """Render a single recording file as a card row."""
-    return rx.box(
-        rx.flex(
-            # Left: status + filename + metadata
-            rx.box(
-                rx.flex(
-                    _status_badge(item["status"]),
-                    rx.text(
-                        item["filename"],
-                        class_name="text-sm font-medium text-gray-800 truncate",
-                    ),
-                    rx.cond(
-                        item["duration_seconds"] != "0",
-                        rx.text(
-                            rx.cond(
-                                item["duration_seconds"] != "",
-                                item["duration_seconds"] + "s",
-                                "",
-                            ),
-                            class_name="text-xs text-gray-400",
-                        ),
-                        rx.fragment(),
-                    ),
-                    rx.cond(
-                        item["language"] != "",
-                        rx.text(
-                            item["language"],
-                            class_name="text-xs text-gray-400 uppercase",
-                        ),
-                        rx.fragment(),
-                    ),
-                    align="center",
-                    gap="2",
-                    wrap="wrap",
-                ),
-                # Transcription progress (visible only while transcribing)
-                rx.cond(
-                    (item["status"] == "transcribing")
-                    & (item["transcription_progress"] != ""),
-                    rx.flex(
-                        rx.icon("loader-circle", size=12, class_name="animate-spin text-yellow-600"),
-                        rx.text(
-                            item["transcription_progress"],
-                            class_name="text-xs text-yellow-700",
-                        ),
-                        rx.cond(
-                            item["transcription_started_at"] != "",
-                            rx.text(
-                                "(started " + item["transcription_started_at"][:19] + ")",  # type: ignore[operator]
-                                class_name="text-xs text-gray-400",
-                            ),
-                            rx.fragment(),
-                        ),
-                        align="center",
-                        gap="2",
-                        class_name="mt-1",
-                    ),
-                    rx.fragment(),
-                ),
-                # Editable metadata row
-                rx.flex(
-                    rx.el.input(
-                        type="text",
-                        placeholder="Contact name…",
-                        default_value=item["contact_name"],
-                        on_blur=AppState.save_recording_metadata(
-                            item["content_hash"], "contact_name",
-                        ),
-                        class_name=(
-                            "text-xs bg-gray-50 border border-gray-200 rounded "
-                            "px-2 py-1 w-36 outline-none focus:border-accent"
-                        ),
-                    ),
-                    rx.el.input(
-                        type="text",
-                        placeholder="Phone…",
-                        default_value=item["phone_number"],
-                        on_blur=AppState.save_recording_metadata(
-                            item["content_hash"], "phone_number",
-                        ),
-                        class_name=(
-                            "text-xs bg-gray-50 border border-gray-200 rounded "
-                            "px-2 py-1 w-32 outline-none focus:border-accent"
-                        ),
-                    ),
-                    gap="2",
-                    class_name="mt-1",
-                ),
-                # Transcript preview (expandable)
-                rx.cond(
-                    item["transcript_text"] != "",
-                    rx.el.details(
-                        rx.el.summary(
-                            rx.text(
-                                item["transcript_text"][:200],  # type: ignore[index]
-                                class_name="text-xs text-gray-500 line-clamp-2 inline",
-                            ),
-                            class_name=(
-                                "text-xs text-blue-500 cursor-pointer "
-                                "hover:text-blue-700 mt-1 list-none "
-                                "[&::-webkit-details-marker]:hidden"
-                            ),
-                        ),
-                        rx.box(
-                            rx.text(
-                                item["transcript_text"],
-                                class_name="text-xs text-gray-600 whitespace-pre-wrap",
-                            ),
-                            class_name=(
-                                "mt-2 p-2 bg-gray-50 rounded border border-gray-200 "
-                                "max-h-64 overflow-y-auto"
-                            ),
-                        ),
-                        class_name="mt-1",
-                    ),
-                    rx.fragment(),
-                ),
-                # Error message
-                rx.cond(
-                    item["error_message"] != "",
-                    rx.text(
-                        item["error_message"],
-                        class_name="text-xs text-red-500 mt-1",
-                    ),
-                    rx.fragment(),
-                ),
-                class_name="flex-1 min-w-0",
-            ),
-            # Right: action buttons
-            rx.flex(
-                # Approve button (only for transcribed)
-                rx.cond(
-                    item["status"] == "transcribed",
-                    rx.icon_button(
-                        rx.icon("check", size=16),
-                        on_click=AppState.approve_recording(item["content_hash"]),
-                        variant="ghost",
-                        size="1",
-                        class_name="text-green-500 hover:text-green-700",
-                        title="Approve & index",
-                    ),
-                    rx.fragment(),
-                ),
-                # Restart button (only for transcribing — restarts stuck jobs)
-                rx.cond(
-                    item["status"] == "transcribing",
-                    rx.icon_button(
-                        rx.icon("rotate-ccw", size=16),
-                        on_click=AppState.restart_stuck_transcription(item["content_hash"]),
-                        variant="ghost",
-                        size="1",
-                        class_name="text-orange-500 hover:text-orange-700",
-                        title="Restart stuck transcription",
-                    ),
-                    rx.fragment(),
-                ),
-                # Transcribe / retranscribe button (all statuses except transcribing)
-                rx.cond(
-                    item["status"] != "transcribing",
-                    rx.icon_button(
-                        rx.icon("mic", size=16),
-                        on_click=AppState.retry_transcription(item["content_hash"]),
-                        variant="ghost",
-                        size="1",
-                        class_name="text-blue-500 hover:text-blue-700",
-                        title=rx.cond(
-                            (item["status"] == "transcribed") | (item["status"] == "approved"),
-                            "Re-transcribe",
-                            "Transcribe",
-                        ),
-                    ),
-                    rx.fragment(),
-                ),
-                # Delete button (always)
-                rx.cond(
-                    item["status"] != "approved",
-                    rx.icon_button(
-                        rx.icon("trash-2", size=16),
-                        on_click=AppState.delete_recording(item["content_hash"]),
-                        variant="ghost",
-                        size="1",
-                        class_name="text-red-400 hover:text-red-600",
-                        title="Delete",
-                    ),
-                    rx.fragment(),
-                ),
-                direction="column",
-                gap="1",
-                align="center",
-                class_name="shrink-0 ml-2",
-            ),
-            align="start",
-            gap="3",
-        ),
-        class_name=(
-            "px-3 py-3 border-b border-gray-100 last:border-b-0 "
-            "hover:bg-gray-50 transition-colors"
-        ),
     )
 
 

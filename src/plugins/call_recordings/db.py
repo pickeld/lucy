@@ -98,6 +98,7 @@ def init_table() -> None:
 
     # Migrations for existing databases
     _migrate_progress_columns(conn)
+    _migrate_speaker_columns(conn)
 
     conn.commit()
     logger.info("call_recording_files table initialized")
@@ -120,6 +121,18 @@ def _migrate_progress_columns(conn: sqlite3.Connection) -> None:
             "ALTER TABLE call_recording_files ADD COLUMN transcription_progress TEXT DEFAULT ''"
         )
         logger.info("Migration: added transcription_progress column")
+
+
+def _migrate_speaker_columns(conn: sqlite3.Connection) -> None:
+    """Add speaker label columns if missing (migration for recordings redesign)."""
+    for col in ("speaker_a_label", "speaker_b_label"):
+        try:
+            conn.execute(f"SELECT {col} FROM call_recording_files LIMIT 1")
+        except sqlite3.OperationalError:
+            conn.execute(
+                f"ALTER TABLE call_recording_files ADD COLUMN {col} TEXT DEFAULT ''"
+            )
+            logger.info(f"Migration: added {col} column")
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +390,53 @@ def update_metadata(
     if participants is not None:
         updates.append("participants = ?")
         params.append(json.dumps(participants))
+
+    if not updates:
+        return False
+
+    updates.append("updated_at = datetime('now')")
+    params.append(content_hash)
+
+    conn = _get_connection()
+    sql = f"UPDATE call_recording_files SET {', '.join(updates)} WHERE content_hash = ?"
+    cursor = conn.execute(sql, params)
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def update_speaker_labels(
+    content_hash: str,
+    speaker_a: str = "",
+    speaker_b: str = "",
+    updated_transcript: str = "",
+) -> bool:
+    """Update speaker labels and optionally the transcript text.
+
+    Stores the user-assigned names for Speaker A and Speaker B.
+    If *updated_transcript* is provided, also overwrites transcript_text
+    (used after find-and-replace of speaker labels in the text).
+
+    Args:
+        content_hash: File content hash
+        speaker_a: Display name for Speaker A
+        speaker_b: Display name for Speaker B
+        updated_transcript: New transcript text (empty = no change)
+
+    Returns:
+        True if row was updated.
+    """
+    updates: List[str] = []
+    params: List[Any] = []
+
+    if speaker_a is not None:
+        updates.append("speaker_a_label = ?")
+        params.append(speaker_a)
+    if speaker_b is not None:
+        updates.append("speaker_b_label = ?")
+        params.append(speaker_b)
+    if updated_transcript:
+        updates.append("transcript_text = ?")
+        params.append(updated_transcript)
 
     if not updates:
         return False

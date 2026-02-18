@@ -14,6 +14,7 @@ from .components.layout import layout
 from .components.chat_area import chat_area
 from .components.settings_page import settings_page
 from .components.entities_page import entities_page
+from .components.recordings_page import recordings_page
 
 
 # =========================================================================
@@ -33,6 +34,11 @@ def settings() -> rx.Component:
 def entities() -> rx.Component:
     """Entities page — sidebar + native entity management UI."""
     return layout(entities_page())
+
+
+def recordings() -> rx.Component:
+    """Recordings page — dedicated call recordings management."""
+    return layout(recordings_page())
 
 
 # =========================================================================
@@ -67,4 +73,11 @@ app.add_page(
     route="/entities",
     title="Entities — RAG Assistant",
     on_load=AppState.on_entities_load,
+)
+
+app.add_page(
+    recordings,
+    route="/recordings",
+    title="Recordings — RAG Assistant",
+    on_load=AppState.on_recordings_load,
 )

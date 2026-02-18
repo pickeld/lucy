@@ -785,6 +785,38 @@ async def scan_call_recordings(auto_transcribe: bool = True) -> dict[str, Any]:
         return {"error": str(e)}
 
 
+async def update_speaker_labels(
+    content_hash: str,
+    speaker_a: str = "",
+    speaker_b: str = "",
+) -> dict[str, Any]:
+    """Update speaker labels and rename in transcript text.
+
+    Args:
+        content_hash: File content hash
+        speaker_a: Display name for Speaker A
+        speaker_b: Display name for Speaker B
+
+    Returns:
+        Dict with status, updated labels, and needs_reindex flag.
+    """
+    try:
+        payload: dict[str, Any] = {}
+        if speaker_a:
+            payload["speaker_a"] = speaker_a
+        if speaker_b:
+            payload["speaker_b"] = speaker_b
+        resp = await _get_client().put(
+            f"/plugins/call_recordings/files/{content_hash}/speakers",
+            json=payload,
+            timeout=15,
+        )
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error updating speaker labels: {e}")
+        return {"error": str(e)}
+
+
 # =========================================================================
 # ENTITY STORE
 # =========================================================================

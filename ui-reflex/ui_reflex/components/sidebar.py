@@ -404,7 +404,6 @@ def _bottom_section() -> rx.Component:
                 ),
                 href="/settings",
                 underline="none",
-                class_name="flex-1",
             ),
             rx.link(
                 rx.flex(
@@ -419,8 +418,22 @@ def _bottom_section() -> rx.Component:
                 href="/entities",
                 underline="none",
             ),
+            rx.link(
+                rx.flex(
+                    rx.icon("phone", size=16, class_name="text-sidebar-muted"),
+                    rx.text("Recordings", class_name="text-sm text-sidebar-text ml-2"),
+                    align="center",
+                    class_name=(
+                        "px-3 py-2 rounded-lg hover:bg-sidebar-hover "
+                        "transition-colors duration-150 cursor-pointer"
+                    ),
+                ),
+                href="/recordings",
+                underline="none",
+            ),
             direction="row",
             gap="0",
+            wrap="wrap",
         ),
         class_name="pb-3",
     )
@@ -487,6 +500,27 @@ def _collapsed_bottom() -> rx.Component:
                     underline="none",
                 ),
                 content="Entities",
+                side="right",
+            ),
+            justify="center",
+            class_name="py-0.5",
+        ),
+        # Recordings icon
+        rx.flex(
+            rx.tooltip(
+                rx.link(
+                    rx.icon_button(
+                        rx.icon("phone", size=18),
+                        variant="ghost",
+                        class_name=(
+                            "text-sidebar-muted hover:text-sidebar-text "
+                            "hover:bg-sidebar-hover cursor-pointer !bg-transparent"
+                        ),
+                    ),
+                    href="/recordings",
+                    underline="none",
+                ),
+                content="Recordings",
                 side="right",
             ),
             justify="center",

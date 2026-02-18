@@ -144,6 +144,7 @@ SETTING_LABELS: dict[str, str] = {
     "call_recordings_sync_interval": "Sync Interval (seconds)",
     "call_recordings_enable_diarization": "Speaker Diarization",
     "call_recordings_assemblyai_model": "AssemblyAI Model",
+    "call_recordings_my_name": "My Name (Speaker Default)",
 }
 
 
@@ -257,6 +258,18 @@ class AppState(rx.State):
     call_recordings_filter_name: str = ""
     call_recordings_filter_status: str = ""  # "" = all
 
+    # --- Recordings page (dedicated /recordings) ---
+    recordings_expanded_hash: str = ""            # Which row is expanded
+    recordings_speaker_a: str = ""                # Speaker A dropdown value
+    recordings_speaker_b: str = ""                # Speaker B dropdown value
+    recordings_entity_names: list[str] = []       # Entity names for dropdown
+    recordings_filter_date_from: str = ""         # Date filter from
+    recordings_filter_date_to: str = ""           # Date filter to
+    recordings_sort_column: str = "modified_at"   # Sort column
+    recordings_sort_asc: bool = False             # Sort direction (desc by default)
+    recordings_my_name: str = ""                  # Cached "My Name" setting
+    recordings_tab: str = "active"                # "active" or "approved"
+
     # --- Tab state ---
     settings_tab: str = "ai"   # Active main tab
     plugin_tab: str = ""       # Active plugin sub-tab (empty = first plugin)
@@ -314,6 +327,36 @@ class AppState(rx.State):
     def set_call_recordings_filter_status(self, value: str):
         """Set the call recordings status filter."""
         self.call_recordings_filter_status = value
+
+    # --- Recordings page setters ---
+
+    def set_recordings_filter_date_from(self, value: str):
+        """Set the recordings date-from filter."""
+        self.recordings_filter_date_from = value
+
+    def set_recordings_filter_date_to(self, value: str):
+        """Set the recordings date-to filter."""
+        self.recordings_filter_date_to = value
+
+    def set_recordings_speaker_a(self, value: str):
+        """Set the Speaker A dropdown value."""
+        self.recordings_speaker_a = value
+
+    def set_recordings_speaker_b(self, value: str):
+        """Set the Speaker B dropdown value."""
+        self.recordings_speaker_b = value
+
+    def set_recordings_sort_column(self, value: str):
+        """Set sort column and toggle direction if same column clicked."""
+        if self.recordings_sort_column == value:
+            self.recordings_sort_asc = not self.recordings_sort_asc
+        else:
+            self.recordings_sort_column = value
+            self.recordings_sort_asc = False
+
+    def set_recordings_tab(self, value: str):
+        """Set the recordings page tab (active/approved)."""
+        self.recordings_tab = value
 
     def set_rename_text(self, value: str):
         """Set the conversation rename text."""
@@ -594,6 +637,117 @@ class AppState(rx.State):
             files = [f for f in files if f.get("status", "") == status]
 
         return files
+
+    @rx.var(cache=True)
+    def recordings_table_data(self) -> list[dict[str, str]]:
+        """Recording files filtered/sorted for the dedicated recordings page.
+
+        Enriches each record with parsed date, time, speaker count,
+        and formatted duration for table display.
+        """
+        import re as _re
+
+        files = self.call_recordings_files
+
+        # Apply tab filter: "active" shows non-approved, "approved" shows approved
+        if self.recordings_tab == "approved":
+            files = [f for f in files if f.get("status", "") == "approved"]
+        else:
+            files = [f for f in files if f.get("status", "") != "approved"]
+
+        needle = self.call_recordings_filter_name.strip().lower()
+        status = self.call_recordings_filter_status.strip().lower()
+
+        # Apply text search filter
+        if needle:
+            files = [
+                f for f in files
+                if needle in (f.get("filename", "") or "").lower()
+                or needle in (f.get("contact_name", "") or "").lower()
+                or needle in (f.get("phone_number", "") or "").lower()
+                or needle in (f.get("transcript_text", "") or "").lower()
+            ]
+
+        # Apply status filter
+        if status:
+            files = [f for f in files if f.get("status", "") == status]
+
+        # Apply date range filter
+        date_from = self.recordings_filter_date_from.strip()
+        date_to = self.recordings_filter_date_to.strip()
+        if date_from or date_to:
+            filtered = []
+            for f in files:
+                mod = (f.get("modified_at", "") or "")[:10]  # YYYY-MM-DD
+                if date_from and mod < date_from:
+                    continue
+                if date_to and mod > date_to:
+                    continue
+                filtered.append(f)
+            files = filtered
+
+        # Enrich with parsed fields
+        result: list[dict[str, str]] = []
+        for f in files:
+            enriched = dict(f)
+
+            # Parse date and time from modified_at
+            mod_at = f.get("modified_at", "") or ""
+            enriched["date"] = mod_at[:10] if len(mod_at) >= 10 else ""
+            enriched["time"] = mod_at[11:16] if len(mod_at) >= 16 else ""
+
+            # Format duration as M:SS
+            try:
+                dur = int(f.get("duration_seconds", "0") or "0")
+                mins, secs = divmod(dur, 60)
+                enriched["duration_fmt"] = f"{mins}:{secs:02d}"
+            except (ValueError, TypeError):
+                enriched["duration_fmt"] = ""
+
+            # Count speakers from transcript text
+            transcript = f.get("transcript_text", "") or ""
+            speaker_labels = set(_re.findall(r"^(.+?)(?:\s*:)", transcript, _re.MULTILINE))
+            enriched["speaker_count"] = str(len(speaker_labels)) if speaker_labels else "0"
+
+            # Use contact_name or filename stem as display name
+            enriched["display_name"] = (
+                f.get("contact_name", "")
+                or f.get("filename", "").rsplit(".", 1)[0]
+            )
+
+            result.append(enriched)
+
+        # Sort
+        sort_col = self.recordings_sort_column
+        reverse = not self.recordings_sort_asc
+        if sort_col:
+            result.sort(
+                key=lambda r: (r.get(sort_col, "") or "").lower(),
+                reverse=reverse,
+            )
+
+        return result
+
+    @rx.var(cache=True)
+    def recordings_status_counts(self) -> dict[str, str]:
+        """Status counts for the recordings page header badges."""
+        counts: dict[str, int] = {}
+        for f in self.call_recordings_files:
+            s = f.get("status", "unknown")
+            counts[s] = counts.get(s, 0) + 1
+        counts["total"] = len(self.call_recordings_files)
+        return {k: str(v) for k, v in counts.items()}
+
+    @rx.var(cache=True)
+    def recordings_speaker_options(self) -> list[str]:
+        """Speaker name options for the dropdown: My Name + entity names + contact."""
+        options: list[str] = []
+        if self.recordings_my_name:
+            options.append(self.recordings_my_name)
+        for name in self.recordings_entity_names:
+            if name and name not in options:
+                options.append(name)
+        return options
 
     @rx.var(cache=True)
     def health_label(self) -> str:
@@ -1129,6 +1283,36 @@ class AppState(rx.State):
         # Assign stats from the third result
         stats = results[2] if not isinstance(results[2], BaseException) else {}
         self.entity_stats = {k: str(v) for k, v in stats.items()}
+
+    async def on_recordings_load(self):
+        """Called when the /recordings page loads.
+
+        Loads recordings files, entity names for speaker dropdowns,
+        and the 'My Name' setting in parallel.
+        """
+        import asyncio
+
+        results = await asyncio.gather(
+            self.on_load(),
+            self._load_recording_files(),
+            api_client.fetch_entities(),
+            api_client.fetch_config(unmask=False),
+            return_exceptions=True,
+        )
+
+        # Entity names for speaker dropdown
+        entities = results[2] if not isinstance(results[2], BaseException) else []
+        self.recordings_entity_names = [
+            str(p.get("display_name", "") or p.get("canonical_name", ""))
+            for p in entities
+            if p.get("canonical_name")
+        ][:50]
+
+        # My Name setting
+        config = results[3] if not isinstance(results[3], BaseException) else {}
+        cr_settings = config.get("call_recordings", {}) if isinstance(config, dict) else {}
+        my_name_info = cr_settings.get("call_recordings_my_name", {})
+        self.recordings_my_name = str(my_name_info.get("value", "")) if isinstance(my_name_info, dict) else ""
 
     # =====================================================================
     # CONVERSATION MANAGEMENT
@@ -2127,6 +2311,52 @@ class AppState(rx.State):
             return
         await api_client.update_recording_metadata(content_hash, **kwargs)
         await self._load_recording_files()
+
+    # ----- Recordings page event handlers -----
+
+    def toggle_recording_detail(self, content_hash: str):
+        """Expand/collapse a recording row in the dedicated recordings page."""
+        if self.recordings_expanded_hash == content_hash:
+            self.recordings_expanded_hash = ""
+            self.recordings_speaker_a = ""
+            self.recordings_speaker_b = ""
+        else:
+            self.recordings_expanded_hash = content_hash
+            # Pre-fill speaker dropdowns from stored labels
+            for f in self.call_recordings_files:
+                if f.get("content_hash") == content_hash:
+                    self.recordings_speaker_a = f.get("speaker_a_label", "") or ""
+                    self.recordings_speaker_b = f.get("speaker_b_label", "") or ""
+                    break
+
+    async def save_speaker_labels(self, content_hash: str):
+        """Save speaker name assignments and rename in transcript text."""
+        speaker_a = self.recordings_speaker_a.strip()
+        speaker_b = self.recordings_speaker_b.strip()
+        if not speaker_a and not speaker_b:
+            self.call_recordings_scan_message = "❌ Enter at least one speaker name"
+            return
+
+        self.call_recordings_scan_message = "⏳ Updating speaker names…"
+        yield
+
+        result = await api_client.update_speaker_labels(
+            content_hash, speaker_a=speaker_a, speaker_b=speaker_b,
+        )
+        if "error" in result:
+            self.call_recordings_scan_message = f"❌ {result['error']}"
+        else:
+            self.call_recordings_scan_message = (
+                f"✅ Speakers updated: {result.get('speaker_a', '')} / {result.get('speaker_b', '')}"
+            )
+        await self._load_recording_files()
+
+    def clear_recordings_filters(self):
+        """Reset all recordings page filters."""
+        self.call_recordings_filter_name = ""
+        self.call_recordings_filter_status = ""
+        self.recordings_filter_date_from = ""
+        self.recordings_filter_date_to = ""
 
     async def reset_category(self, category: str):
         """Reset a settings category to defaults."""

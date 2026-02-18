@@ -159,6 +159,14 @@ class CallRecordingsPlugin(ChannelPlugin):
                 "select",
                 "AssemblyAI speech model: 'universal-2' (fast, $0.015/min) or 'universal-3-pro' (best, $0.12/min)",
             ),
+            # --- Speaker identification ---
+            (
+                "call_recordings_my_name",
+                "",
+                "call_recordings",
+                "text",
+                "Your display name — used as default for 'Speaker A' in call transcriptions",
+            ),
             # --- API Keys ---
             (
                 "assemblyai_api_key",
@@ -196,6 +204,7 @@ class CallRecordingsPlugin(ChannelPlugin):
             "call_recordings_sync_interval": "CALL_RECORDINGS_SYNC_INTERVAL",
             "call_recordings_diarization_model": "CALL_RECORDINGS_DIARIZATION_MODEL",
             "call_recordings_assemblyai_model": "CALL_RECORDINGS_ASSEMBLYAI_MODEL",
+            "call_recordings_my_name": "CALL_RECORDINGS_MY_NAME",
             "assemblyai_api_key": "ASSEMBLYAI_API_KEY",
             "hf_token": "HF_TOKEN",
         }
@@ -495,6 +504,80 @@ class CallRecordingsPlugin(ChannelPlugin):
             if not updated:
                 return jsonify({"error": "File not found or no changes"}), 404
             return jsonify({"status": "updated"}), 200
+
+        # =====================================================================
+        # SPEAKERS — rename speaker labels in transcript text
+        # =====================================================================
+
+        @bp.route("/files/<content_hash>/speakers", methods=["PUT"])
+        def update_speakers(content_hash):
+            """Rename speaker labels in the transcript text.
+
+            Performs find-and-replace on the transcript:
+            - "Speaker A:" → "<speaker_a>:"
+            - "Speaker B:" → "<speaker_b>:"
+
+            Also stores the label assignments in the DB so the UI
+            can pre-populate dropdowns on subsequent views.
+
+            JSON body:
+                speaker_a: str — display name for Speaker A
+                speaker_b: str — display name for Speaker B
+            """
+            import re as _re
+
+            data = request.get_json(silent=True) or {}
+            speaker_a = (data.get("speaker_a") or "").strip()
+            speaker_b = (data.get("speaker_b") or "").strip()
+
+            if not speaker_a and not speaker_b:
+                return jsonify({"error": "At least one speaker name required"}), 400
+
+            record = recording_db.get_file(content_hash)
+            if not record:
+                return jsonify({"error": "File not found"}), 404
+
+            transcript = record.get("transcript_text", "")
+            if not transcript:
+                return jsonify({"error": "No transcript text to update"}), 400
+
+            # Detect current speaker labels in the transcript.
+            # Diarised transcripts use "Speaker A:", "Speaker B:" or
+            # previously renamed labels stored in speaker_a_label/speaker_b_label.
+            old_a = record.get("speaker_a_label") or "Speaker A"
+            old_b = record.get("speaker_b_label") or "Speaker B"
+
+            updated_transcript = transcript
+            if speaker_a:
+                # Replace "OldLabel:" at the start of lines / after newlines
+                updated_transcript = _re.sub(
+                    rf"(?m)^{_re.escape(old_a)}(\s*:)",
+                    f"{speaker_a}\\1",
+                    updated_transcript,
+                )
+            if speaker_b:
+                updated_transcript = _re.sub(
+                    rf"(?m)^{_re.escape(old_b)}(\s*:)",
+                    f"{speaker_b}\\1",
+                    updated_transcript,
+                )
+
+            recording_db.update_speaker_labels(
+                content_hash=content_hash,
+                speaker_a=speaker_a or old_a,
+                speaker_b=speaker_b or old_b,
+                updated_transcript=updated_transcript,
+            )
+
+            # If the file is already approved, we should note it needs re-indexing
+            needs_reindex = record.get("status") == "approved"
+
+            return jsonify({
+                "status": "updated",
+                "speaker_a": speaker_a or old_a,
+                "speaker_b": speaker_b or old_b,
+                "needs_reindex": needs_reindex,
+            }), 200
 
         # =====================================================================
         # TRANSCRIBE — trigger transcription for a single file
