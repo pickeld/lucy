@@ -85,7 +85,11 @@ app.conf.update(
 
     # Logging
     worker_hijack_root_logger=False,  # Don't override our logging config
-)
 
-# Auto-discover tasks in the tasks package
-app.autodiscover_tasks(["tasks"])
+    # Explicitly register task modules (autodiscover doesn't work well
+    # when the Celery app itself lives inside the tasks package)
+    include=[
+        "tasks.whatsapp",
+        "tasks.transcription",
+    ],
+)
