@@ -52,7 +52,7 @@ def recordings_page() -> rx.Component:
                     ),
                     rx.tabs.trigger(
                         rx.flex(
-                            rx.icon("check-circle", size=14),
+                            rx.icon("circle-check", size=14),
                             rx.text("Approved"),
                             rx.box(
                                 rx.text(
@@ -517,7 +517,7 @@ def _action_buttons(item: dict) -> rx.Component:
         rx.cond(
             item["status"] == "transcribed",
             rx.icon_button(
-                rx.icon("check-circle", size=16),
+                rx.icon("circle-check", size=16),
                 on_click=AppState.approve_recording(item["content_hash"]),
                 variant="ghost",
                 size="1",
