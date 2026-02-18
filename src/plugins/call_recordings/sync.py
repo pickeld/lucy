@@ -372,15 +372,24 @@ class CallRecordingSyncer:
                 on_progress=_on_progress,
             )
 
-            if not transcription.text or len(transcription.text.strip()) < MIN_CONTENT_CHARS:
+            if not transcription.text or not transcription.text.strip():
                 recording_db.update_status(
                     content_hash, "error",
-                    f"Transcription too short ({len(transcription.text)} chars)",
+                    "Transcription returned empty text",
                 )
                 return {
                     "status": "error",
-                    "error": "Transcription too short",
+                    "error": "Transcription returned empty text",
                 }
+
+            # Short transcriptions are stored so the user can review them
+            is_short = len(transcription.text.strip()) < MIN_CONTENT_CHARS
+            if is_short:
+                logger.warning(
+                    f"Short transcription for {filename}: "
+                    f"{len(transcription.text.strip())} chars "
+                    f"(min={MIN_CONTENT_CHARS}) — storing for review"
+                )
 
             # Resolve participants from tags + filename (for auto-fill)
             # Build a minimal AudioFile for metadata resolution
@@ -490,7 +499,7 @@ class CallRecordingSyncer:
             }
 
         transcript_text = record.get("transcript_text", "")
-        if not transcript_text or len(transcript_text.strip()) < MIN_CONTENT_CHARS:
+        if not transcript_text or not transcript_text.strip():
             return {"status": "error", "error": "No transcription available"}
 
         source_id = f"call_recording:{content_hash}"

@@ -1951,8 +1951,12 @@ class AppState(rx.State):
                 if errors:
                     msg += f" — Errors: {'; '.join(errors)}"
                 self.call_recordings_upload_message = msg
-                # Refresh the files table after upload
+                # Refresh the files table and auto-poll transcription progress
+                self.call_recordings_scan_message = "⏳ Transcription in progress…"
                 await self._load_recording_files()
+                yield
+                async for _ in self._poll_transcription_status():
+                    yield
         except Exception as e:
             self.call_recordings_upload_message = f"❌ Upload error: {str(e)}"
 
@@ -2017,6 +2021,9 @@ class AppState(rx.State):
 
     async def approve_recording(self, content_hash: str):
         """Approve a transcribed recording and index it into Qdrant."""
+        self.call_recordings_scan_message = "⏳ Approving & indexing…"
+        yield  # Show immediate feedback before the (potentially slow) API call
+
         result = await api_client.approve_recording(content_hash)
         if "error" in result:
             self.call_recordings_scan_message = f"❌ {result['error']}"
@@ -2034,90 +2041,14 @@ class AppState(rx.State):
             self.call_recordings_scan_message = "✅ Recording deleted"
         await self._load_recording_files()
 
-    async def _poll_transcription(self, content_hash: str):
-        """Poll for transcription progress updates until the target file
-        leaves 'transcribing' state.
-
-        Yields after each poll so the Reflex state lock is released,
-        keeping the UI responsive to other events.  Correctly handles
-        transient API errors (empty file list) instead of falsely
-        claiming success.
-        """
-        import asyncio
-
-        max_polls = 360  # 30 minutes max (360 × 5s)
-        consecutive_errors = 0
-
-        for _ in range(max_polls):
-            has_transcribing = await self._load_recording_files()
-            yield  # Push updated file list to UI + release state lock
-
-            if not has_transcribing:
-                # Locate the specific target file in the latest file list
-                target = next(
-                    (f for f in self.call_recordings_files
-                     if f.get("content_hash") == content_hash),
-                    None,
-                )
-
-                if target is None:
-                    # File list is empty — likely a transient API error.
-                    # Don't falsely claim success; give it a few retries.
-                    consecutive_errors += 1
-                    if consecutive_errors >= 3:
-                        self.call_recordings_scan_message = (
-                            "⚠️ Lost connection to server — "
-                            "check transcription status manually"
-                        )
-                        return
-                    # Keep polling — the server might come back
-                    await asyncio.sleep(5)
-                    continue
-
-                # Reset error counter on successful fetch
-                consecutive_errors = 0
-
-                status = target.get("status", "")
-                if status == "transcribed":
-                    self.call_recordings_scan_message = "✅ Transcription complete"
-                    return
-                elif status == "error":
-                    err = target.get("error_message", "Unknown error")
-                    self.call_recordings_scan_message = f"❌ Transcription failed: {err}"
-                    return
-                elif status == "pending":
-                    # Celery hasn't picked it up yet — keep waiting
-                    self.call_recordings_scan_message = "⏳ Waiting for worker…"
-                elif status == "approved":
-                    self.call_recordings_scan_message = "✅ Already approved"
-                    return
-                else:
-                    self.call_recordings_scan_message = "✅ Transcription complete"
-                    return
-            else:
-                # Still transcribing — update progress from file record
-                consecutive_errors = 0
-                target = next(
-                    (f for f in self.call_recordings_files
-                     if f.get("content_hash") == content_hash),
-                    None,
-                )
-                if target:
-                    progress = target.get("transcription_progress", "")
-                    if progress:
-                        self.call_recordings_scan_message = f"⏳ {progress}"
-
-            await asyncio.sleep(5)
-
-        self.call_recordings_scan_message = (
-            "⚠️ Transcription still running — refresh manually"
-        )
-
     async def retry_transcription(self, content_hash: str):
-        """Retry transcription for a recording.
+        """Trigger transcription for a recording with auto-polling.
 
-        Triggers background transcription and polls for progress updates
-        every 5 seconds until the file is no longer in 'transcribing' state.
+        Sends the transcription request to the backend, then polls
+        every few seconds until the file leaves 'transcribing' state
+        (or a timeout is reached).  Uses ``yield`` + ``asyncio.sleep()``
+        to release the Reflex state lock between polls so the UI stays
+        responsive.
         """
         self.call_recordings_scan_message = "⏳ Transcription queued…"
         yield
@@ -2128,19 +2059,21 @@ class AppState(rx.State):
             await self._load_recording_files()
             return
 
-        self.call_recordings_scan_message = "⏳ Transcribing — progress updates every 5s…"
+        self.call_recordings_scan_message = "⏳ Transcription in progress…"
+        await self._load_recording_files()
+        yield
 
-        # Delegate to shared polling helper
-        async for _ in self._poll_transcription(content_hash):
+        # Poll until transcription completes (3s intervals, ~3 min max)
+        async for _ in self._poll_transcription_status():
             yield
 
     async def restart_stuck_transcription(self, content_hash: str):
-        """Restart a recording stuck in transcribing state.
+        """Restart a stuck transcription with auto-polling.
 
-        Calls the restart endpoint which resets the status and
-        re-queues the transcription, then polls for progress.
+        Resets the file status and re-queues transcription, then polls
+        until the transcription completes or times out.
         """
-        self.call_recordings_scan_message = "⏳ Restarting stuck transcription…"
+        self.call_recordings_scan_message = "⏳ Restarting transcription…"
         yield
 
         result = await api_client.restart_recording(content_hash)
@@ -2149,11 +2082,46 @@ class AppState(rx.State):
             await self._load_recording_files()
             return
 
-        self.call_recordings_scan_message = "⏳ Restarted — transcribing…"
+        self.call_recordings_scan_message = "⏳ Transcription in progress…"
+        await self._load_recording_files()
+        yield
 
-        # Delegate to shared polling helper
-        async for _ in self._poll_transcription(content_hash):
+        # Poll until transcription completes (3s intervals, ~3 min max)
+        async for _ in self._poll_transcription_status():
             yield
+
+    async def _poll_transcription_status(self):
+        """Poll the recording files list until no files are transcribing.
+
+        Yields after each poll so the caller can ``yield`` to release the
+        Reflex state lock and push UI updates to the browser.
+
+        Polls every 3 seconds for up to ~3 minutes (60 iterations).
+        """
+        import asyncio
+
+        _POLL_INTERVAL = 3    # seconds between polls
+        _MAX_POLLS = 60       # 60 × 3s = 3 minutes
+
+        for i in range(_MAX_POLLS):
+            await asyncio.sleep(_POLL_INTERVAL)
+            has_transcribing = await self._load_recording_files()
+            if has_transcribing:
+                elapsed = (i + 1) * _POLL_INTERVAL
+                self.call_recordings_scan_message = (
+                    f"⏳ Transcription in progress… ({elapsed}s)"
+                )
+            else:
+                self.call_recordings_scan_message = "✅ Transcription complete"
+                yield  # final UI update
+                return
+            yield  # release state lock, push UI update
+
+        # Timeout — stop polling but leave message
+        self.call_recordings_scan_message = (
+            "⏳ Transcription still running — use Refresh to check"
+        )
+        yield
 
     async def save_recording_metadata(self, content_hash: str, field: str, value: str):
         """Save an edited metadata field for a recording."""

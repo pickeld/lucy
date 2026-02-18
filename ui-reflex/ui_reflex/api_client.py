@@ -709,8 +709,15 @@ async def approve_recording(content_hash: str) -> dict[str, Any]:
             timeout=120,
         )
         return resp.json()
+    except (httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadError) as e:
+        logger.warning(f"Connection error approving recording — resetting client: {e}")
+        _reset_client()
+        return {"error": f"Connection error: {e}"}
+    except httpx.ReadTimeout:
+        return {"error": "Approve timed out — the indexing may still be running. Refresh to check."}
     except Exception as e:
         logger.error(f"Error approving recording: {e}")
+        _reset_client()
         return {"error": str(e)}
 
 

@@ -25,6 +25,9 @@ def _get_syncer():
     The syncer holds the transcriber (Whisper/AssemblyAI) and RAG references.
     On first call in a worker process the plugin will initialize, loading
     the Whisper model.  Subsequent calls reuse the cached instance.
+
+    Also triggers a hot-swap check so that provider setting changes
+    (e.g. local → assemblyai) take effect on the worker without a restart.
     """
     from plugins.registry import plugin_registry
 
@@ -41,6 +44,17 @@ def _get_syncer():
             "call_recordings plugin syncer not initialized. "
             "The plugin must be initialized before transcription tasks run."
         )
+
+    # Hot-swap the transcriber if the provider setting changed since the
+    # worker started (or since the last task).  This mirrors the check done
+    # in Flask endpoints but runs inside the Celery worker process.
+    ensure_fn = getattr(plugin, "_ensure_correct_transcriber", None)
+    if ensure_fn:
+        try:
+            ensure_fn()
+        except Exception as e:
+            logger.warning(f"Transcriber hot-swap check failed: {e}")
+
     return syncer
 
 
