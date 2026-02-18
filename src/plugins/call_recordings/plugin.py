@@ -513,25 +513,16 @@ class CallRecordingsPlugin(ChannelPlugin):
         def update_speakers(content_hash):
             """Rename speaker labels in the transcript text.
 
-            Performs find-and-replace on the transcript:
-            - "Speaker A:" → "<speaker_a>:"
-            - "Speaker B:" → "<speaker_b>:"
+            Supports two formats:
+            1. Generic (N speakers): {"speakers": [{"old": "Speaker A", "new": "David"}, ...]}
+            2. Legacy (2 speakers): {"speaker_a": "David", "speaker_b": "Amir"}
 
-            Also stores the label assignments in the DB so the UI
-            can pre-populate dropdowns on subsequent views.
-
-            JSON body:
-                speaker_a: str — display name for Speaker A
-                speaker_b: str — display name for Speaker B
+            Performs find-and-replace on the transcript for each mapping,
+            and stores the first two labels in speaker_a_label/speaker_b_label.
             """
             import re as _re
 
             data = request.get_json(silent=True) or {}
-            speaker_a = (data.get("speaker_a") or "").strip()
-            speaker_b = (data.get("speaker_b") or "").strip()
-
-            if not speaker_a and not speaker_b:
-                return jsonify({"error": "At least one speaker name required"}), 400
 
             record = recording_db.get_file(content_hash)
             if not record:
@@ -541,41 +532,57 @@ class CallRecordingsPlugin(ChannelPlugin):
             if not transcript:
                 return jsonify({"error": "No transcript text to update"}), 400
 
-            # Detect current speaker labels in the transcript.
-            # Diarised transcripts use "Speaker A:", "Speaker B:" or
-            # previously renamed labels stored in speaker_a_label/speaker_b_label.
-            old_a = record.get("speaker_a_label") or "Speaker A"
-            old_b = record.get("speaker_b_label") or "Speaker B"
+            # Build speaker mappings from either format
+            mappings: list[dict] = []  # [{old, new}, ...]
 
+            if "speakers" in data and isinstance(data["speakers"], list):
+                # New generic format: list of {old, new} pairs
+                for entry in data["speakers"]:
+                    old = (entry.get("old") or "").strip()
+                    new = (entry.get("new") or "").strip()
+                    if old and new:
+                        mappings.append({"old": old, "new": new})
+            else:
+                # Legacy 2-speaker format
+                old_a = record.get("speaker_a_label") or "Speaker A"
+                old_b = record.get("speaker_b_label") or "Speaker B"
+                speaker_a = (data.get("speaker_a") or "").strip()
+                speaker_b = (data.get("speaker_b") or "").strip()
+                if speaker_a:
+                    mappings.append({"old": old_a, "new": speaker_a})
+                if speaker_b:
+                    mappings.append({"old": old_b, "new": speaker_b})
+
+            if not mappings:
+                return jsonify({"error": "At least one speaker mapping required"}), 400
+
+            # Apply all find-and-replace operations
             updated_transcript = transcript
-            if speaker_a:
-                # Replace "OldLabel:" at the start of lines / after newlines
+            for m in mappings:
                 updated_transcript = _re.sub(
-                    rf"(?m)^{_re.escape(old_a)}(\s*:)",
-                    f"{speaker_a}\\1",
+                    rf"(?m)^{_re.escape(m['old'])}(\s*:)",
+                    f"{m['new']}\\1",
                     updated_transcript,
                 )
-            if speaker_b:
-                updated_transcript = _re.sub(
-                    rf"(?m)^{_re.escape(old_b)}(\s*:)",
-                    f"{speaker_b}\\1",
-                    updated_transcript,
-                )
+
+            # Store first two labels in the dedicated DB columns
+            speaker_a_final = mappings[0]["new"] if len(mappings) > 0 else ""
+            speaker_b_final = mappings[1]["new"] if len(mappings) > 1 else ""
 
             recording_db.update_speaker_labels(
                 content_hash=content_hash,
-                speaker_a=speaker_a or old_a,
-                speaker_b=speaker_b or old_b,
+                speaker_a=speaker_a_final,
+                speaker_b=speaker_b_final,
                 updated_transcript=updated_transcript,
             )
 
-            # If the file is already approved, we should note it needs re-indexing
             needs_reindex = record.get("status") == "approved"
 
             return jsonify({
                 "status": "updated",
-                "speaker_a": speaker_a or old_a,
-                "speaker_b": speaker_b or old_b,
+                "mappings_applied": len(mappings),
+                "speaker_a": speaker_a_final,
+                "speaker_b": speaker_b_final,
                 "needs_reindex": needs_reindex,
             }), 200
 

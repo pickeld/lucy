@@ -597,6 +597,36 @@ def _action_buttons(item: dict) -> rx.Component:
 
 
 # =========================================================================
+# SPEAKER ROW (for rx.foreach over speaker_map)
+# =========================================================================
+
+
+def _speaker_row(entry: dict) -> rx.Component:
+    """Render a single speaker assignment row: old label → new name input."""
+    return rx.flex(
+        rx.text(
+            entry["old_label"] + ":",  # type: ignore[operator]
+            class_name="text-sm text-gray-600 w-28 shrink-0 truncate",
+            title=entry["old_label"],
+        ),
+        rx.text("→", class_name="text-gray-400 shrink-0"),
+        rx.el.input(
+            type="text",
+            placeholder="Enter name…",
+            default_value=entry["new_name"],
+            on_blur=AppState.set_speaker_name(entry["old_label"]),
+            class_name=(
+                "text-sm bg-white border border-gray-200 rounded-lg "
+                "px-2 py-1.5 outline-none focus:border-accent flex-1"
+            ),
+        ),
+        align="center",
+        gap="2",
+        class_name="mb-1.5",
+    )
+
+
+# =========================================================================
 # DETAIL PANEL (expanded row)
 # =========================================================================
 
@@ -638,50 +668,37 @@ def _detail_panel(item: dict) -> rx.Component:
                     class_name="text-xs font-semibold text-gray-500 uppercase mb-2",
                 ),
                 rx.box(
-                    # Speaker A
-                    rx.flex(
-                        rx.text("Speaker A:", class_name="text-sm text-gray-600 w-24 shrink-0"),
-                        rx.select(
-                            AppState.recordings_speaker_options,
-                            value=AppState.recordings_speaker_a,
-                            on_change=AppState.set_recordings_speaker_a,
-                            size="2",
-                            class_name="flex-1",
-                        ),
-                        align="center",
-                        gap="2",
-                        class_name="mb-1",
+                    # Dynamic speaker rows from speaker_map
+                    rx.foreach(
+                        AppState.recordings_speaker_map,
+                        _speaker_row,
                     ),
-                    # Swap button
-                    rx.flex(
-                        rx.icon_button(
-                            rx.icon("arrow-up-down", size=14),
-                            on_click=AppState.swap_speakers,
-                            variant="ghost",
-                            size="1",
-                            class_name="text-gray-400 hover:text-accent",
-                            title="Swap Speaker A ↔ B",
+                    # Swap button (for first two speakers)
+                    rx.cond(
+                        AppState.recordings_speaker_map.length() >= 2,  # type: ignore[union-attr]
+                        rx.flex(
+                            rx.icon_button(
+                                rx.icon("arrow-up-down", size=14),
+                                on_click=AppState.swap_speakers,
+                                variant="ghost",
+                                size="1",
+                                class_name="text-gray-400 hover:text-accent",
+                                title="Swap first two speakers",
+                            ),
+                            rx.text(
+                                "Swap",
+                                class_name="text-xs text-gray-400",
+                            ),
+                            align="center",
+                            gap="1",
+                            justify="center",
+                            class_name="mb-2",
                         ),
-                        justify="center",
-                        class_name="mb-1",
+                        rx.fragment(),
                     ),
-                    # Speaker B
-                    rx.flex(
-                        rx.text("Speaker B:", class_name="text-sm text-gray-600 w-24 shrink-0"),
-                        rx.select(
-                            AppState.recordings_speaker_options,
-                            value=AppState.recordings_speaker_b,
-                            on_change=AppState.set_recordings_speaker_b,
-                            size="2",
-                            class_name="flex-1",
-                        ),
-                        align="center",
-                        gap="2",
-                        class_name="mb-2",
-                    ),
-                    # Hint: names are applied automatically on approve
+                    # Hint
                     rx.text(
-                        "💡 Speaker names are applied automatically when you approve",
+                        "💡 Names applied automatically on approve",
                         class_name="text-xs text-gray-400 italic text-center",
                     ),
                     class_name=(

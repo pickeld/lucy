@@ -438,6 +438,14 @@ def get_or_create_person(
     Returns:
         Person ID (integer)
     """
+    # Guard: if whatsapp_id is a Linked ID (@lid), the phone param
+    # may actually be the LID digits — not a real phone number.
+    # Discard it to avoid storing garbage in the phone column.
+    if phone and whatsapp_id and whatsapp_id.endswith("@lid"):
+        lid_digits = whatsapp_id.replace("@lid", "")
+        if phone.lstrip("+") == lid_digits:
+            phone = None
+
     conn = _get_connection()
     try:
         person_id: Optional[int] = None
@@ -1331,6 +1339,17 @@ def seed_from_whatsapp_contacts(contacts: List[Dict[str, Any]]) -> Dict[str, int
             skipped += 1
             continue
 
+        # Detect WhatsApp Linked ID (LID) contacts.
+        # Their "number" field contains the LID digits (e.g. 196121158754445),
+        # NOT a real phone number.  Don't store it as phone.
+        if whatsapp_id and whatsapp_id.endswith("@lid") and phone:
+            lid_digits = whatsapp_id.replace("@lid", "")
+            if phone == lid_digits:
+                logger.debug(
+                    f"Skipping LID number as phone for '{name}': {phone}"
+                )
+                phone = None
+
         conn = _get_connection()
         try:
             existing = conn.execute(
@@ -1357,7 +1376,7 @@ def seed_from_whatsapp_contacts(contacts: List[Dict[str, Any]]) -> Dict[str, int
         if pushname and pushname != name:
             add_alias(person_id, pushname, source="whatsapp_pushname")
 
-        # Add phone as alias for lookup convenience
+        # Add phone as alias for lookup convenience (only real phone numbers)
         if phone:
             add_alias(person_id, phone, script="numeric", source="whatsapp_contact")
 

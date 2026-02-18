@@ -787,6 +787,7 @@ async def scan_call_recordings(auto_transcribe: bool = True) -> dict[str, Any]:
 
 async def update_speaker_labels(
     content_hash: str,
+    speakers: list[dict[str, str]] | None = None,
     speaker_a: str = "",
     speaker_b: str = "",
 ) -> dict[str, Any]:
@@ -794,18 +795,23 @@ async def update_speaker_labels(
 
     Args:
         content_hash: File content hash
-        speaker_a: Display name for Speaker A
-        speaker_b: Display name for Speaker B
+        speakers: List of {"old": "Speaker A", "new": "David"} mappings
+        speaker_a: (Legacy) Display name for Speaker A
+        speaker_b: (Legacy) Display name for Speaker B
 
     Returns:
-        Dict with status, updated labels, and needs_reindex flag.
+        Dict with status and updated labels.
     """
     try:
         payload: dict[str, Any] = {}
-        if speaker_a:
-            payload["speaker_a"] = speaker_a
-        if speaker_b:
-            payload["speaker_b"] = speaker_b
+        if speakers:
+            payload["speakers"] = speakers
+        else:
+            # Legacy 2-speaker format
+            if speaker_a:
+                payload["speaker_a"] = speaker_a
+            if speaker_b:
+                payload["speaker_b"] = speaker_b
         resp = await _get_client().put(
             f"/plugins/call_recordings/files/{content_hash}/speakers",
             json=payload,

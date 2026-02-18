@@ -2280,29 +2280,37 @@ class AppState(rx.State):
     async def approve_recording(self, content_hash: str):
         """Approve a transcribed recording: apply speaker names then index.
 
-        Automatically applies speaker label assignments before approving,
-        so the indexed transcript has the correct names (not Speaker A/B).
+        Uses the dynamic speaker_map if the row is expanded, otherwise
+        auto-assigns from my_name + contact_name for the first two speakers.
         """
         self.call_recordings_scan_message = "⏳ Applying speaker names & approving…"
-        yield  # Show immediate feedback before the (potentially slow) API call
+        yield
 
-        # Auto-apply speaker names if set (from expanded row or auto-assigned)
-        speaker_a = ""
-        speaker_b = ""
-        if self.recordings_expanded_hash == content_hash:
-            speaker_a = self.recordings_speaker_a.strip()
-            speaker_b = self.recordings_speaker_b.strip()
+        # Build speaker mappings from the speaker_map state (if expanded)
+        # or auto-assign for the first two speakers
+        speakers: list[dict[str, str]] = []
+        if self.recordings_expanded_hash == content_hash and self.recordings_speaker_map:
+            speakers = [
+                {"old": e.get("old_label", ""), "new": e.get("new_name", "")}
+                for e in self.recordings_speaker_map
+                if e.get("new_name", "").strip()
+            ]
         else:
-            # Use stored labels or auto-assign from my_name + contact
+            # Auto-assign: first speaker = my_name, second = contact_name
+            my_name = self.recordings_my_name or "Me"
+            contact = ""
             for f in self.call_recordings_files:
                 if f.get("content_hash") == content_hash:
-                    speaker_a = f.get("speaker_a_label", "") or self.recordings_my_name or "Me"
-                    speaker_b = f.get("speaker_b_label", "") or f.get("contact_name", "") or "Unknown"
+                    contact = f.get("contact_name", "") or "Unknown"
                     break
+            speakers = [
+                {"old": "Speaker A", "new": my_name},
+                {"old": "Speaker B", "new": contact},
+            ]
 
-        if speaker_a or speaker_b:
+        if speakers:
             label_result = await api_client.update_speaker_labels(
-                content_hash, speaker_a=speaker_a, speaker_b=speaker_b,
+                content_hash, speakers=speakers,
             )
             if "error" in label_result:
                 self.call_recordings_scan_message = f"⚠️ Speaker names failed: {label_result['error']} — approving anyway"
