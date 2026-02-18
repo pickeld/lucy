@@ -261,7 +261,7 @@ def _render_task_card(task: dict) -> rx.Component:
         ),
         # Preview of latest result
         rx.cond(
-            task["latest_result"].to(str) != "" and task["latest_result"].to(str) != "None",
+            (task["latest_result"].to(str) != "") & (task["latest_result"].to(str) != "None"),
             rx.box(
                 rx.text(
                     "Latest: ",
@@ -377,7 +377,7 @@ def _render_result_item(result: dict) -> rx.Component:
                     class_name="text-sm font-medium text-gray-700 ml-2",
                 ),
                 rx.cond(
-                    result["cost_usd"] != "0" and result["cost_usd"] != "0.0",
+                    (result["cost_usd"] != "0") & (result["cost_usd"] != "0.0"),
                     rx.badge(
                         "$", result["cost_usd"],
                         variant="outline",
@@ -412,7 +412,7 @@ def _render_result_item(result: dict) -> rx.Component:
                 ),
                 # Error message if present
                 rx.cond(
-                    result["error_message"] != "" and result["error_message"] != "None",
+                    (result["error_message"] != "") & (result["error_message"] != "None"),
                     rx.box(
                         rx.text(
                             "Error: ", result["error_message"],
