@@ -128,13 +128,51 @@ def _empty_state() -> rx.Component:
 # =========================================================================
 
 def _task_list() -> rx.Component:
-    """Task cards — each expandable to show results inline."""
+    """Task cards + expandable results panel below selected task."""
     return rx.box(
-        rx.foreach(
-            AppState.insights_tasks,
-            _render_task_card,
+        # Task cards
+        rx.box(
+            rx.foreach(
+                AppState.insights_tasks,
+                _render_task_card,
+            ),
+            class_name="p-4 space-y-3",
         ),
-        class_name="p-4 space-y-3",
+        # Results panel — shown below task list when a task is selected
+        rx.cond(
+            AppState.insights_viewing_task_id > 0,
+            rx.box(
+                rx.cond(
+                    AppState.insights_results_loading,
+                    rx.flex(
+                        rx.spinner(size="2"),
+                        rx.text("Loading results…", class_name="ml-2 text-gray-500 text-sm"),
+                        align="center",
+                        class_name="py-4",
+                    ),
+                    rx.cond(
+                        AppState.insights_results.length() > 0,
+                        rx.box(
+                            rx.foreach(
+                                AppState.insights_results,
+                                _render_result_item,
+                            ),
+                            class_name="space-y-2",
+                        ),
+                        rx.flex(
+                            rx.text(
+                                "No results yet. Click 'Run Now' to execute this insight.",
+                                class_name="text-gray-500 text-sm",
+                            ),
+                            justify="center",
+                            class_name="py-6",
+                        ),
+                    ),
+                ),
+                class_name="px-4 pb-4",
+            ),
+            rx.fragment(),
+        ),
     )
 
 
@@ -147,48 +185,53 @@ def _render_task_card(task: dict) -> rx.Component:
     return rx.box(
         # Card header (always visible)
         rx.flex(
-            # Left: status dot + name (clickable area)
-            rx.flex(
-                rx.box(
-                    class_name=rx.cond(
-                        is_enabled,
-                        "w-2.5 h-2.5 rounded-full bg-green-500 mt-1.5 flex-shrink-0",
-                        "w-2.5 h-2.5 rounded-full bg-gray-300 mt-1.5 flex-shrink-0",
+            # Left: clickable task name area (entire left side is a button)
+            rx.button(
+                rx.flex(
+                    rx.box(
+                        class_name=rx.cond(
+                            is_enabled,
+                            "w-2.5 h-2.5 rounded-full bg-green-500 mt-1.5 flex-shrink-0",
+                            "w-2.5 h-2.5 rounded-full bg-gray-300 mt-1.5 flex-shrink-0",
+                        ),
                     ),
+                    rx.box(
+                        rx.flex(
+                            rx.text(
+                                task["name"],
+                                class_name="font-medium text-gray-900",
+                            ),
+                            rx.badge(
+                                task["schedule_type"],
+                                variant="outline",
+                                size="1",
+                                class_name="ml-2",
+                            ),
+                            align="center",
+                        ),
+                        rx.text(
+                            task["schedule_type"], ": ", task["schedule_value"],
+                            class_name="text-xs text-gray-500 mt-0.5",
+                        ),
+                        rx.cond(
+                            task["last_run_at"] != "",
+                            rx.text(
+                                "Last run: ", task["last_run_at"],
+                                class_name="text-xs text-gray-400 mt-0.5",
+                            ),
+                            rx.text(
+                                "Never run",
+                                class_name="text-xs text-gray-400 italic mt-0.5",
+                            ),
+                        ),
+                        class_name="ml-3 flex-1 min-w-0 text-left",
+                    ),
+                    align="start",
+                    class_name="w-full",
                 ),
-                rx.box(
-                    rx.flex(
-                        rx.text(
-                            task["name"],
-                            class_name="font-medium text-gray-900",
-                        ),
-                        rx.badge(
-                            task["schedule_type"],
-                            variant="outline",
-                            size="1",
-                            class_name="ml-2",
-                        ),
-                        align="center",
-                    ),
-                    rx.text(
-                        task["schedule_type"], ": ", task["schedule_value"],
-                        class_name="text-xs text-gray-500 mt-0.5",
-                    ),
-                    rx.cond(
-                        task["last_run_at"] != "",
-                        rx.text(
-                            "Last run: ", task["last_run_at"],
-                            class_name="text-xs text-gray-400 mt-0.5",
-                        ),
-                        rx.text(
-                            "Never run",
-                            class_name="text-xs text-gray-400 italic mt-0.5",
-                        ),
-                    ),
-                    class_name="ml-3 flex-1 min-w-0",
-                ),
-                align="start",
-                class_name="flex-1 min-w-0 cursor-pointer",
+                on_click=AppState.view_insight_results(task_id),
+                variant="ghost",
+                class_name="flex-1 min-w-0 cursor-pointer h-auto p-0 justify-start",
             ),
             # Right: action buttons
             rx.flex(
@@ -242,17 +285,10 @@ def _render_task_card(task: dict) -> rx.Component:
             justify="between",
             align="start",
         ),
-        # Expanded results section (inline, below the card header)
-        rx.cond(
-            is_expanded,
-            _inline_results_section(),
-            rx.fragment(),
-        ),
-        on_click=AppState.view_insight_results(task_id),
         class_name=rx.cond(
             is_expanded,
-            "p-4 rounded-lg border-2 border-amber-300 bg-amber-50 transition-colors cursor-pointer",
-            "p-4 rounded-lg border border-gray-200 hover:border-gray-300 bg-white transition-colors cursor-pointer",
+            "p-4 rounded-lg border-2 border-amber-300 bg-amber-50 transition-colors",
+            "p-4 rounded-lg border border-gray-200 hover:border-gray-300 bg-white transition-colors",
         ),
     )
 
@@ -300,177 +336,92 @@ def _inline_results_section() -> rx.Component:
 # =========================================================================
 
 def _render_result_item(result: dict) -> rx.Component:
-    """Render a single result entry — collapsed header, expandable answer."""
+    """Render a single result using native HTML details/summary for expand/collapse."""
     result_id = result["id"]
-    is_expanded = AppState.insights_expanded_result_id == result["id"].to(int)
 
-    return rx.box(
-        # Header row (always visible, clickable to expand)
-        rx.flex(
-            # Left: expand button + status + time
-            rx.icon_button(
-                rx.icon("file-text", size=14),
-                on_click=AppState.toggle_insight_result_expand(result_id),
-                variant=rx.cond(is_expanded, "solid", "ghost"),
-                size="1",
-                class_name="cursor-pointer flex-shrink-0",
+    return rx.el.details(
+        # Summary (always visible header — click to toggle)
+        rx.el.summary(
+            rx.flex(
+                rx.cond(
+                    result["status"] == "success",
+                    rx.icon("circle-check", size=14, class_name="text-green-600"),
+                    rx.cond(
+                        result["status"] == "error",
+                        rx.icon("circle-x", size=14, class_name="text-red-600"),
+                        rx.icon("circle-minus", size=14, class_name="text-gray-500"),
+                    ),
+                ),
+                rx.text(
+                    result["executed_at"],
+                    class_name="text-sm font-medium text-gray-700 ml-2",
+                ),
+                rx.cond(
+                    (result["cost_usd"] != "0") & (result["cost_usd"] != "0.0"),
+                    rx.badge(
+                        "$", result["cost_usd"],
+                        variant="outline",
+                        size="1",
+                        class_name="ml-2",
+                    ),
+                    rx.fragment(),
+                ),
+                rx.text(
+                    result["duration_ms"], "ms",
+                    class_name="text-xs text-gray-400 ml-2",
+                ),
+                # Rating buttons (in the header row)
+                rx.flex(
+                    rx.tooltip(
+                        rx.icon_button(
+                            rx.icon("thumbs-up", size=11),
+                            on_click=AppState.rate_insight_result(result_id, "1"),
+                            variant="ghost",
+                            size="1",
+                            color_scheme="green",
+                            class_name="cursor-pointer",
+                        ),
+                        content="Helpful",
+                    ),
+                    rx.tooltip(
+                        rx.icon_button(
+                            rx.icon("thumbs-down", size=11),
+                            on_click=AppState.rate_insight_result(result_id, "-1"),
+                            variant="ghost",
+                            size="1",
+                            color_scheme="red",
+                            class_name="cursor-pointer",
+                        ),
+                        content="Not helpful",
+                    ),
+                    gap="1",
+                    class_name="ml-auto",
+                ),
+                align="center",
+                class_name="w-full",
+            ),
+            class_name=(
+                "px-3 py-2 cursor-pointer hover:bg-gray-50 rounded-t-md "
+                "list-none flex items-center [&::-webkit-details-marker]:hidden"
+            ),
+        ),
+        # Expandable content (answer)
+        rx.box(
+            rx.markdown(
+                result["answer"],
+                class_name="prose prose-sm max-w-none text-gray-700",
             ),
             rx.cond(
-                result["status"] == "success",
-                rx.icon("circle-check", size=14, class_name="text-green-600 ml-1"),
-                rx.cond(
-                    result["status"] == "error",
-                    rx.icon("circle-x", size=14, class_name="text-red-600 ml-1"),
-                    rx.icon("circle-minus", size=14, class_name="text-gray-500 ml-1"),
+                (result["error_message"] != "") & (result["error_message"] != "None"),
+                rx.text(
+                    "Error: ", result["error_message"],
+                    class_name="text-sm text-red-600 mt-2",
                 ),
+                rx.fragment(),
             ),
-            rx.el.div(
-                rx.flex(
-                    rx.text(
-                        result["executed_at"],
-                        class_name="text-sm font-medium text-gray-700",
-                    ),
-                    rx.cond(
-                        (result["cost_usd"] != "0") & (result["cost_usd"] != "0.0"),
-                        rx.badge(
-                            "$", result["cost_usd"],
-                            variant="outline",
-                            size="1",
-                            class_name="ml-2",
-                        ),
-                        rx.fragment(),
-                    ),
-                    rx.text(
-                        result["duration_ms"], "ms",
-                        class_name="text-xs text-gray-400 ml-2",
-                    ),
-                    align="center",
-                ),
-                class_name="cursor-pointer flex-1 ml-1",
-                on_click=AppState.toggle_insight_result_expand(result_id),
-            ),
-            # Right: rating buttons
-            rx.flex(
-                rx.tooltip(
-                    rx.icon_button(
-                        rx.icon("thumbs-up", size=11),
-                        on_click=AppState.rate_insight_result(result_id, "1"),
-                        variant=rx.cond(
-                            result.get("rating", "0") == "1",
-                            "solid",
-                            "ghost",
-                        ),
-                        size="1",
-                        color_scheme="green",
-                        class_name="cursor-pointer",
-                    ),
-                    content="Helpful",
-                ),
-                rx.tooltip(
-                    rx.icon_button(
-                        rx.icon("thumbs-down", size=11),
-                        on_click=AppState.rate_insight_result(result_id, "-1"),
-                        variant=rx.cond(
-                            result.get("rating", "0") == "-1",
-                            "solid",
-                            "ghost",
-                        ),
-                        size="1",
-                        color_scheme="red",
-                        class_name="cursor-pointer",
-                    ),
-                    content="Not helpful",
-                ),
-                gap="1",
-                align="center",
-            ),
-            justify="between",
-            align="center",
+            class_name="px-3 pb-3 border-t border-gray-100 pt-2",
         ),
-        # Expanded content (answer + quality metrics + error)
-        rx.cond(
-            is_expanded,
-            rx.box(
-                # Quality metrics bar
-                rx.cond(
-                    result.get("qm_source_count", "") != "",
-                    rx.flex(
-                        rx.tooltip(
-                            rx.badge(
-                                rx.icon("file-text", size=10),
-                                " ", result.get("qm_source_count", ""),
-                                " sources",
-                                variant="surface",
-                                size="1",
-                            ),
-                            content="Documents retrieved and analyzed",
-                        ),
-                        rx.tooltip(
-                            rx.badge(
-                                rx.icon("messages-square", size=10),
-                                " ", result.get("qm_unique_chats", ""),
-                                " chats",
-                                variant="surface",
-                                size="1",
-                            ),
-                            content="Unique chats/conversations covered",
-                        ),
-                        rx.cond(
-                            result.get("qm_sub_queries", "") != "",
-                            rx.tooltip(
-                                rx.badge(
-                                    rx.icon("search", size=10),
-                                    " ", result.get("qm_sub_queries", ""),
-                                    " queries",
-                                    variant="surface",
-                                    size="1",
-                                ),
-                                content="Number of targeted search sub-queries",
-                            ),
-                            rx.fragment(),
-                        ),
-                        rx.cond(
-                            (result.get("qm_model", "") != "") & (result.get("qm_model", "") != "unknown"),
-                            rx.tooltip(
-                                rx.badge(
-                                    rx.icon("cpu", size=10),
-                                    " ", result.get("qm_model", ""),
-                                    variant="surface",
-                                    size="1",
-                                ),
-                                content="LLM model used",
-                            ),
-                            rx.fragment(),
-                        ),
-                        gap="2",
-                        wrap="wrap",
-                        class_name="mb-2",
-                    ),
-                    rx.fragment(),
-                ),
-                # Answer content
-                rx.markdown(
-                    result["answer"],
-                    class_name="prose prose-sm max-w-none text-gray-700",
-                ),
-                # Error message if present
-                rx.cond(
-                    (result["error_message"] != "") & (result["error_message"] != "None"),
-                    rx.text(
-                        "Error: ", result["error_message"],
-                        class_name="text-sm text-red-600 mt-2",
-                    ),
-                    rx.fragment(),
-                ),
-                class_name="mt-2 pt-2 border-t border-gray-100",
-            ),
-            rx.fragment(),
-        ),
-        class_name=rx.cond(
-            is_expanded,
-            "p-3 rounded-md bg-white border border-gray-200",
-            "p-3 rounded-md bg-white/80 hover:bg-white border border-transparent hover:border-gray-200 transition-colors",
-        ),
+        class_name="rounded-md bg-white border border-gray-200",
     )
 
 

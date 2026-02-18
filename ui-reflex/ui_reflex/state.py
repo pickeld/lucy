@@ -2749,26 +2749,27 @@ class AppState(rx.State):
         self.insights_message = "⏳ Loading results…"
         yield
 
-        import asyncio
-        task_data, results_data = await asyncio.gather(
-            api_client.fetch_scheduled_task(tid),
-            api_client.fetch_scheduled_task_results(tid, limit=20),
-            return_exceptions=True,
-        )
+        try:
+            results_data = await api_client.fetch_scheduled_task_results(tid, limit=20)
+            task_data = await api_client.fetch_scheduled_task(tid)
 
-        if isinstance(task_data, dict) and task_data:
-            self.insights_viewing_task = {
-                k: str(v) if v is not None else "" for k, v in task_data.items()
-            }
-        else:
-            self.insights_viewing_task = {}
+            if isinstance(task_data, dict) and task_data:
+                self.insights_viewing_task = {
+                    k: str(v) if v is not None else "" for k, v in task_data.items()
+                }
+            else:
+                self.insights_viewing_task = {}
 
-        raw_results = results_data.get("results", []) if isinstance(results_data, dict) else []
-        self.insights_results = [
-            {k: str(v) if v is not None else "" for k, v in r.items()}
-            for r in raw_results
-        ]
-        self.insights_results_loading = False
+            raw_results = results_data.get("results", []) if isinstance(results_data, dict) else []
+            self.insights_results = [
+                {k: str(v) if v is not None else "" for k, v in r.items()}
+                for r in raw_results
+            ]
+            self.insights_results_loading = False
+            self.insights_message = ""
+        except Exception as e:
+            self.insights_results_loading = False
+            self.insights_message = f"❌ Failed to load results: {e}"
 
     def toggle_insight_result_expand(self, result_id: str):
         """Expand/collapse a specific result in the result viewer."""
