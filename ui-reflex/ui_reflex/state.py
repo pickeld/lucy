@@ -144,6 +144,7 @@ SETTING_LABELS: dict[str, str] = {
     "call_recordings_sync_interval": "Sync Interval (seconds)",
     "call_recordings_enable_diarization": "Speaker Diarization",
     "call_recordings_assemblyai_model": "AssemblyAI Model",
+    "call_recordings_auto_transcribe": "Auto-Transcribe",
     "call_recordings_my_name": "My Name (Speaker Default)",
 }
 
@@ -267,6 +268,7 @@ class AppState(rx.State):
     recordings_sort_column: str = "modified_at"   # Sort column
     recordings_sort_asc: bool = False             # Sort direction (desc by default)
     recordings_my_name: str = ""                  # Cached "My Name" setting
+    recordings_auto_transcribe: bool = True       # Auto-transcribe toggle
     recordings_tab: str = "active"                # "active" or "approved"
 
     # --- Tab state ---
@@ -1335,14 +1337,29 @@ class AppState(rx.State):
             if p.get("canonical_name")
         ][:50]
 
-        # My Name setting
+        # My Name + Auto-Transcribe settings
         config = results[3] if not isinstance(results[3], BaseException) else {}
         cr_settings = config.get("call_recordings", {}) if isinstance(config, dict) else {}
         my_name_info = cr_settings.get("call_recordings_my_name", {})
         self.recordings_my_name = str(my_name_info.get("value", "")) if isinstance(my_name_info, dict) else ""
+        auto_info = cr_settings.get("call_recordings_auto_transcribe", {})
+        auto_val = str(auto_info.get("value", "true")) if isinstance(auto_info, dict) else "true"
+        self.recordings_auto_transcribe = auto_val.lower() in ("true", "1", "yes")
 
-        # Auto-transcribe pending recordings (max 3 concurrent)
-        await self._auto_transcribe_pending()
+        # Auto-transcribe pending recordings if enabled
+        if self.recordings_auto_transcribe:
+            await self._auto_transcribe_pending()
+
+    async def toggle_auto_transcribe(self):
+        """Toggle auto-transcribe on/off and save to backend."""
+        new_val = not self.recordings_auto_transcribe
+        self.recordings_auto_transcribe = new_val
+        await api_client.save_config({
+            "call_recordings_auto_transcribe": "true" if new_val else "false",
+        })
+        # If turned on, immediately queue pending
+        if new_val:
+            await self._auto_transcribe_pending()
 
     async def _auto_transcribe_pending(self):
         """Auto-queue pending recordings for transcription (max 3 concurrent).

@@ -129,6 +129,22 @@ def _header() -> rx.Component:
             _stat_badge("Transcribed", AppState.recordings_status_counts["transcribed"], "blue"),
             _stat_badge("Approved", AppState.recordings_status_counts["approved"], "green"),
             _stat_badge("Errors", AppState.recordings_status_counts["error"], "red"),
+            # Auto-transcribe toggle
+            rx.flex(
+                rx.switch(
+                    checked=AppState.recordings_auto_transcribe,
+                    on_change=lambda _: AppState.toggle_auto_transcribe(),
+                    size="1",
+                ),
+                rx.text(
+                    "Auto",
+                    class_name="text-xs text-gray-500",
+                ),
+                align="center",
+                gap="1",
+                class_name="px-2 py-1 bg-gray-50 rounded-lg border border-gray-200",
+                title="Auto-transcribe pending recordings (max 3 parallel)",
+            ),
             rx.button(
                 rx.icon("folder-search", size=14, class_name="mr-1"),
                 "Scan",

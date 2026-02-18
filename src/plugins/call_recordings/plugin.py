@@ -159,6 +159,14 @@ class CallRecordingsPlugin(ChannelPlugin):
                 "select",
                 "AssemblyAI speech model: 'universal-2' (fast, $0.015/min) or 'universal-3-pro' (best, $0.12/min)",
             ),
+            # --- Auto-transcription ---
+            (
+                "call_recordings_auto_transcribe",
+                "true",
+                "call_recordings",
+                "bool",
+                "Automatically transcribe new recordings (max 3 parallel). Disable to manually trigger transcription.",
+            ),
             # --- Speaker identification ---
             (
                 "call_recordings_my_name",
