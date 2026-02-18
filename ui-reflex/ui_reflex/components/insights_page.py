@@ -178,21 +178,13 @@ def _render_task_card(task: dict) -> rx.Component:
                         align="center",
                     ),
                     rx.text(
-                        rx.cond(
-                            task["schedule_type"] == "daily",
-                            "Every day at " + task["schedule_value"],
-                            rx.cond(
-                                task["schedule_type"] == "weekly",
-                                "Weekly: " + task["schedule_value"],
-                                task["schedule_type"] + ": " + task["schedule_value"],
-                            ),
-                        ),
+                        task["schedule_type"], ": ", task["schedule_value"],
                         class_name="text-xs text-gray-500 mt-0.5",
                     ),
                     rx.cond(
                         task["last_run_at"] != "",
                         rx.text(
-                            "Last run: " + task["last_run_at"],
+                            "Last run: ", task["last_run_at"],
                             class_name="text-xs text-gray-400 mt-0.5",
                         ),
                         rx.text(
@@ -302,7 +294,7 @@ def _result_viewer() -> rx.Component:
             rx.flex(
                 rx.icon("history", size=18, class_name="text-amber-500"),
                 rx.heading(
-                    "Results — " + AppState.insights_viewing_task.get("name", ""),
+                    "Results",
                     size="3",
                     class_name="ml-2",
                 ),
@@ -387,7 +379,7 @@ def _render_result_item(result: dict) -> rx.Component:
                 rx.cond(
                     result["cost_usd"] != "0" and result["cost_usd"] != "0.0",
                     rx.badge(
-                        "$" + result["cost_usd"],
+                        "$", result["cost_usd"],
                         variant="outline",
                         size="1",
                         class_name="ml-2",
@@ -423,7 +415,7 @@ def _render_result_item(result: dict) -> rx.Component:
                     result["error_message"] != "" and result["error_message"] != "None",
                     rx.box(
                         rx.text(
-                            "Error: " + result["error_message"],
+                            "Error: ", result["error_message"],
                             class_name="text-sm text-red-600",
                         ),
                         class_name="px-4 pb-3",
@@ -433,11 +425,11 @@ def _render_result_item(result: dict) -> rx.Component:
                 # Meta info
                 rx.flex(
                     rx.text(
-                        "Duration: " + result["duration_ms"] + "ms",
+                        "Duration: ", result["duration_ms"], "ms",
                         class_name="text-xs text-gray-400",
                     ),
                     rx.text(
-                        "Status: " + result["status"],
+                        "Status: ", result["status"],
                         class_name="text-xs text-gray-400 ml-4",
                     ),
                     class_name="px-4 pb-3",
@@ -630,21 +622,17 @@ def _create_edit_dialog() -> rx.Component:
             max_width="560px",
         ),
         open=AppState.insights_dialog_open,
-        on_open_change=lambda open: AppState.close_insights_dialog() if not open else None,
     )
 
 
 def _render_template_button(template: dict) -> rx.Component:
     """Render a template quick-select button."""
-    # Use the template's position in the list as its index
-    idx = AppState.insights_templates.index(template)
-
     return rx.button(
         rx.text(
-            template["icon"].to(str) + " " + template["name"].to(str),
+            template["icon"], " ", template["name"],
             class_name="text-xs",
         ),
-        on_click=AppState.apply_insight_template(idx.to(str)),
+        on_click=AppState.apply_insight_template(template["name"].to(str)),
         variant="outline",
         size="1",
         class_name="cursor-pointer",

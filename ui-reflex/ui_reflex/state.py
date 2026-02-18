@@ -2635,19 +2635,19 @@ class AppState(rx.State):
         """Close the create/edit dialog."""
         self.insights_dialog_open = False
 
-    def apply_insight_template(self, template_index: str):
-        """Fill the dialog form from a template."""
-        idx = int(template_index)
-        if 0 <= idx < len(self.insights_templates):
-            tmpl = self.insights_templates[idx]
-            self.insights_form_name = str(tmpl.get("name", ""))
-            self.insights_form_description = str(tmpl.get("description", ""))
-            self.insights_form_prompt = str(tmpl.get("prompt", ""))
-            self.insights_form_schedule_type = str(tmpl.get("schedule_type", "daily"))
-            self.insights_form_schedule_value = str(tmpl.get("schedule_value", "08:00"))
-            filters = tmpl.get("filters", {})
-            if isinstance(filters, dict):
-                self.insights_form_filter_days = str(filters.get("days", ""))
+    def apply_insight_template(self, template_name: str):
+        """Fill the dialog form from a template by name."""
+        for tmpl in self.insights_templates:
+            if str(tmpl.get("name", "")) == template_name:
+                self.insights_form_name = str(tmpl.get("name", ""))
+                self.insights_form_description = str(tmpl.get("description", ""))
+                self.insights_form_prompt = str(tmpl.get("prompt", ""))
+                self.insights_form_schedule_type = str(tmpl.get("schedule_type", "daily"))
+                self.insights_form_schedule_value = str(tmpl.get("schedule_value", "08:00"))
+                filters = tmpl.get("filters", {})
+                if isinstance(filters, dict):
+                    self.insights_form_filter_days = str(filters.get("days", ""))
+                break
 
     async def save_insight_task(self):
         """Save the insight task (create or update) from dialog form."""
