@@ -260,8 +260,7 @@ class AppState(rx.State):
 
     # --- Recordings page (dedicated /recordings) ---
     recordings_expanded_hash: str = ""            # Which row is expanded
-    recordings_speaker_a: str = ""                # Speaker A dropdown value
-    recordings_speaker_b: str = ""                # Speaker B dropdown value
+    recordings_speaker_map: list[dict[str, str]] = []  # [{old_label, new_name}, ...]
     recordings_entity_names: list[str] = []       # Entity names for dropdown
     recordings_filter_date_from: str = ""         # Date filter from
     recordings_filter_date_to: str = ""           # Date filter to
@@ -338,13 +337,14 @@ class AppState(rx.State):
         """Set the recordings date-to filter."""
         self.recordings_filter_date_to = value
 
-    def set_recordings_speaker_a(self, value: str):
-        """Set the Speaker A dropdown value."""
-        self.recordings_speaker_a = value
-
-    def set_recordings_speaker_b(self, value: str):
-        """Set the Speaker B dropdown value."""
-        self.recordings_speaker_b = value
+    def set_speaker_name(self, old_label: str, new_name: str):
+        """Set the new name for a specific speaker label in the speaker map."""
+        new_map = list(self.recordings_speaker_map)
+        for entry in new_map:
+            if entry.get("old_label") == old_label:
+                entry["new_name"] = new_name
+                break
+        self.recordings_speaker_map = new_map
 
     def set_recordings_sort_column(self, value: str):
         """Set sort column and toggle direction if same column clicked."""
@@ -775,25 +775,6 @@ class AppState(rx.State):
             counts[s] = counts.get(s, 0) + 1
         counts["total"] = len(self.call_recordings_files)
         return {k: str(v) for k, v in counts.items()}
-
-    @rx.var(cache=True)
-    def recordings_speaker_options(self) -> list[str]:
-        """Speaker name options: Me (my_name) + contact from metadata."""
-        options: list[str] = []
-        # "Me" option from the configured my_name setting
-        my = self.recordings_my_name
-        if my:
-            options.append(my)
-        else:
-            options.append("Me")
-        # Contact name from the currently expanded recording's metadata
-        for f in self.call_recordings_files:
-            if f.get("content_hash") == self.recordings_expanded_hash:
-                contact = f.get("contact_name", "") or ""
-                if contact and contact not in options:
-                    options.append(contact)
-                break
-        return options
 
     @rx.var(cache=True)
     def health_label(self) -> str:
@@ -2420,60 +2401,60 @@ class AppState(rx.State):
     # ----- Recordings page event handlers -----
 
     def toggle_recording_detail(self, content_hash: str):
-        """Expand/collapse a recording row in the dedicated recordings page."""
+        """Expand/collapse a recording row in the dedicated recordings page.
+
+        Extracts all unique speaker labels from the transcript and builds
+        a dynamic speaker map with suggested names (my_name for first,
+        contact_name for second, empty for the rest).
+        """
+        import re as _re
+
         if self.recordings_expanded_hash == content_hash:
             self.recordings_expanded_hash = ""
-            self.recordings_speaker_a = ""
-            self.recordings_speaker_b = ""
+            self.recordings_speaker_map = []
         else:
             self.recordings_expanded_hash = content_hash
-            # Pre-fill speaker dropdowns from stored labels or auto-assign
+            # Find the file record
+            contact = ""
+            transcript = ""
             for f in self.call_recordings_files:
                 if f.get("content_hash") == content_hash:
-                    stored_a = f.get("speaker_a_label", "") or ""
-                    stored_b = f.get("speaker_b_label", "") or ""
                     contact = f.get("contact_name", "") or ""
-
-                    if stored_a:
-                        self.recordings_speaker_a = stored_a
-                    else:
-                        # Default: Speaker A = Me
-                        self.recordings_speaker_a = self.recordings_my_name or "Me"
-
-                    if stored_b:
-                        self.recordings_speaker_b = stored_b
-                    else:
-                        # Default: Speaker B = contact name from metadata
-                        self.recordings_speaker_b = contact or "Unknown"
+                    transcript = f.get("transcript_text", "") or ""
                     break
 
+            # Extract all unique speaker labels from transcript
+            # Matches lines starting with "SomeLabel:" or "SomeLabel :"
+            labels = list(dict.fromkeys(
+                _re.findall(r"^(.+?)\s*:", transcript, _re.MULTILINE)
+            ))  # preserves order, removes duplicates
+
+            # Build speaker map with auto-suggested names
+            my_name = self.recordings_my_name or "Me"
+            speaker_map: list[dict[str, str]] = []
+            for i, label in enumerate(labels):
+                if i == 0:
+                    suggested = my_name
+                elif i == 1:
+                    suggested = contact or ""
+                else:
+                    suggested = ""
+                speaker_map.append({
+                    "old_label": label,
+                    "new_name": suggested,
+                })
+            self.recordings_speaker_map = speaker_map
+
     def swap_speakers(self):
-        """Swap Speaker A and Speaker B values."""
-        a = self.recordings_speaker_a
-        self.recordings_speaker_a = self.recordings_speaker_b
-        self.recordings_speaker_b = a
-
-    async def save_speaker_labels(self, content_hash: str):
-        """Save speaker name assignments and rename in transcript text."""
-        speaker_a = self.recordings_speaker_a.strip()
-        speaker_b = self.recordings_speaker_b.strip()
-        if not speaker_a and not speaker_b:
-            self.call_recordings_scan_message = "❌ Enter at least one speaker name"
-            return
-
-        self.call_recordings_scan_message = "⏳ Updating speaker names…"
-        yield
-
-        result = await api_client.update_speaker_labels(
-            content_hash, speaker_a=speaker_a, speaker_b=speaker_b,
-        )
-        if "error" in result:
-            self.call_recordings_scan_message = f"❌ {result['error']}"
-        else:
-            self.call_recordings_scan_message = (
-                f"✅ Speakers updated: {result.get('speaker_a', '')} / {result.get('speaker_b', '')}"
-            )
-        await self._load_recording_files()
+        """Swap the first two speaker names in the map."""
+        if len(self.recordings_speaker_map) >= 2:
+            new_map = list(self.recordings_speaker_map)
+            # Swap the new_name values of the first two entries
+            name_0 = new_map[0].get("new_name", "")
+            name_1 = new_map[1].get("new_name", "")
+            new_map[0] = {**new_map[0], "new_name": name_1}
+            new_map[1] = {**new_map[1], "new_name": name_0}
+            self.recordings_speaker_map = new_map
 
     def clear_recordings_filters(self):
         """Reset all recordings page filters."""
