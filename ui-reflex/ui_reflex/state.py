@@ -1360,6 +1360,49 @@ class AppState(rx.State):
         my_name_info = cr_settings.get("call_recordings_my_name", {})
         self.recordings_my_name = str(my_name_info.get("value", "")) if isinstance(my_name_info, dict) else ""
 
+        # Auto-transcribe pending recordings (max 3 concurrent)
+        await self._auto_transcribe_pending()
+
+    async def _auto_transcribe_pending(self):
+        """Auto-queue pending recordings for transcription (max 3 concurrent).
+
+        Counts how many are currently 'transcribing', then queues
+        enough pending files to reach 3 total concurrent transcriptions.
+        Each transcribe request is fire-and-forget (returns 202).
+        """
+        MAX_CONCURRENT = 3
+
+        transcribing_count = sum(
+            1 for f in self.call_recordings_files
+            if f.get("status") == "transcribing"
+        )
+
+        if transcribing_count >= MAX_CONCURRENT:
+            return  # Already at capacity
+
+        slots = MAX_CONCURRENT - transcribing_count
+        pending = [
+            f.get("content_hash", "")
+            for f in self.call_recordings_files
+            if f.get("status") == "pending" and f.get("content_hash")
+        ]
+
+        if not pending:
+            return
+
+        queued = 0
+        for content_hash in pending[:slots]:
+            result = await api_client.transcribe_recording(content_hash)
+            if result.get("status") == "queued" or not result.get("error"):
+                queued += 1
+
+        if queued:
+            self.call_recordings_scan_message = (
+                f"⏳ Auto-queued {queued} recording(s) for transcription — "
+                f"click Refresh to check status"
+            )
+            await self._load_recording_files()
+
     # =====================================================================
     # CONVERSATION MANAGEMENT
     # =====================================================================
