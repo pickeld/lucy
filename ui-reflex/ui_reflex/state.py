@@ -1124,6 +1124,8 @@ class AppState(rx.State):
             ("rag", "rag_max_context_tokens"),
             ("rag", "rag_context_window_seconds"),
             ("rag", "rag_min_score"),
+            ("rag", "asset_neighborhood_expansion_enabled"),
+            ("rag", "pii_redaction_enabled"),
         ])
 
     @rx.var(cache=True)
@@ -3297,7 +3299,95 @@ class AppState(rx.State):
             "total_nodes": str(len(nodes)),
             "total_edges": str(len(edges)),
         }
+
+        # Generate interactive vis.js HTML
+        self.entity_graph_html = self._build_visjs_html(nodes, edges)
         self.full_graph_loading = False
+
+    @staticmethod
+    def _build_visjs_html(nodes: list, edges: list) -> str:
+        """Generate an interactive force-directed graph using vis-network.js."""
+        # Color map by node type / asset_type
+        color_map = {
+            "person": "#4F81BD",
+            "whatsapp_msg": "#25D366",
+            "document": "#FF8C00",
+            "call_recording": "#9B59B6",
+            "gmail": "#EA4335",
+            "asset": "#95A5A6",
+            "linked": "#BDC3C7",
+        }
+        # Edge color map by category
+        edge_color_map = {
+            "identity_identity": "#E74C3C",
+            "identity_asset": "#3498DB",
+            "asset_asset": "#2ECC71",
+        }
+
+        vis_nodes = []
+        for n in nodes:
+            ntype = n.get("type", "asset")
+            atype = n.get("asset_type", "")
+            color = color_map.get(atype, color_map.get(ntype, "#95A5A6"))
+            shape = "dot" if ntype == "person" else "square"
+            size = 20 if ntype == "person" else 10
+            label = n.get("label", "?")
+            if len(label) > 25:
+                label = label[:22] + "..."
+            vis_nodes.append({
+                "id": n.get("id", ""),
+                "label": label,
+                "color": color,
+                "shape": shape,
+                "size": size,
+                "title": f"{ntype}: {n.get('label', '')}" + (
+                    f"\\nFacts: {n.get('fact_count', 0)}, Assets: {n.get('total_assets', 0)}"
+                    if ntype == "person" else f"\\nType: {atype}"
+                ),
+            })
+
+        vis_edges = []
+        for e in edges:
+            cat = e.get("edge_category", "")
+            color = edge_color_map.get(cat, "#999")
+            vis_edges.append({
+                "from": e.get("source", ""),
+                "to": e.get("target", ""),
+                "label": e.get("type", ""),
+                "color": {"color": color, "opacity": 0.6},
+                "arrows": "to",
+                "font": {"size": 8, "color": "#666"},
+            })
+
+        import json
+        nodes_json = json.dumps(vis_nodes)
+        edges_json = json.dumps(vis_edges)
+
+        return f"""
+        <div id="graph-container" style="width:100%;height:600px;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa;"></div>
+        <script src="https://unpkg.com/vis-network@9.1.6/standalone/umd/vis-network.min.js"></script>
+        <script>
+          (function() {{
+            var container = document.getElementById('graph-container');
+            if (!container) return;
+            var data = {{
+              nodes: new vis.DataSet({nodes_json}),
+              edges: new vis.DataSet({edges_json})
+            }};
+            var options = {{
+              physics: {{
+                solver: 'forceAtlas2Based',
+                forceAtlas2Based: {{ gravitationalConstant: -50, springLength: 120 }},
+                stabilization: {{ iterations: 150 }}
+              }},
+              interaction: {{ hover: true, tooltipDelay: 200, zoomView: true, dragView: true }},
+              nodes: {{ font: {{ size: 11 }}, borderWidth: 2 }},
+              edges: {{ smooth: {{ type: 'continuous' }}, width: 1 }}
+            }};
+            new vis.Network(container, data, options);
+          }})();
+        </script>
+        """
 
     async def load_merge_candidates(self):
         """Fetch merge suggestions from the backend."""

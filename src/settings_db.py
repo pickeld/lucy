@@ -188,6 +188,8 @@ DEFAULT_SETTINGS: List[Tuple[str, str, str, str, str]] = [
     ("rag_rerank_model", "rerank-multilingual-v3.0", "rag", "text", "Cohere rerank model (rerank-multilingual-v3.0 supports Hebrew). Reranking auto-activates when cohere_api_key is set."),
     ("rag_query_fusion_num_queries", "3", "rag", "int", "Number of query variants to generate for QueryFusionRetriever (always active)"),
     ("rag_entity_extraction_in_pipeline", "false", "rag", "bool", "Run entity extraction as part of the LlamaIndex ingestion pipeline (instead of standalone)"),
+    ("asset_neighborhood_expansion_enabled", "false", "rag", "bool", "Enable asset neighborhood expansion: follow thread/attachment/parent edges at retrieval time for cross-channel coherence"),
+    ("pii_redaction_enabled", "false", "rag", "bool", "Enable PII detection and redaction (requires presidio-analyzer and presidio-anonymizer packages)"),
     # Insights — Scheduled Insights quality settings
     ("insight_default_k", "20", "insights", "int", "Documents per sub-query for insights (higher = more thorough, default 20)"),
     ("insight_max_context_tokens", "8000", "insights", "int", "Max context tokens for insight LLM calls (higher than chat default for thorough analysis)"),

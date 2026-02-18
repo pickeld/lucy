@@ -1293,91 +1293,153 @@ def _suggestion_card(candidate: dict) -> rx.Component:
 
 
 def _graph_tab() -> rx.Component:
-    """Graph view — connected persons with relationships and asset links."""
+    """Graph view — interactive force-directed visualization of persons, assets, and relationships."""
     return rx.flex(
         # Controls
         rx.flex(
             rx.button(
                 rx.icon("network", size=14, class_name="mr-1"),
-                "Load Graph",
-                on_click=AppState.load_entity_graph,
-                loading=AppState.entity_graph_loading,
+                "Load Interactive Graph",
+                on_click=AppState.load_full_entity_graph,
+                loading=AppState.full_graph_loading,
                 size="2",
                 class_name="bg-blue-500 text-white hover:bg-blue-600",
             ),
+            rx.button(
+                rx.icon("list", size=14, class_name="mr-1"),
+                "List View",
+                on_click=AppState.load_entity_graph,
+                loading=AppState.entity_graph_loading,
+                size="2",
+                variant="outline",
+            ),
             rx.text(
-                "Shows only persons with relationships, assets, or facts",
+                "Interactive graph: drag, zoom, hover for details",
                 class_name="text-xs text-gray-400 italic ml-2",
             ),
             gap="2",
             align="center",
             class_name="mb-4",
         ),
-        # Content
+        # Legend
         rx.cond(
-            AppState.entity_graph_nodes.length() > 0,  # type: ignore[union-attr]
+            AppState.entity_graph_html != "",
             rx.flex(
-                # Stats
                 rx.flex(
-                    _graph_stat("👤", AppState.entity_graph_nodes.length(), "Connected Persons"),  # type: ignore[union-attr]
-                    _graph_stat("🔗", AppState.entity_graph_edges.length(), "Relationships"),  # type: ignore[union-attr]
-                    gap="3",
-                    class_name="mb-4",
+                    rx.box(class_name="w-3 h-3 rounded-full bg-blue-500 inline-block"),
+                    rx.text("Person", class_name="text-xs text-gray-500 ml-1"),
+                    align="center", gap="1",
                 ),
-                # Relationships section
-                rx.cond(
-                    AppState.entity_graph_edges.length() > 0,  # type: ignore[union-attr]
+                rx.flex(
+                    rx.box(class_name="w-3 h-3 rounded bg-green-500 inline-block"),
+                    rx.text("WhatsApp", class_name="text-xs text-gray-500 ml-1"),
+                    align="center", gap="1",
+                ),
+                rx.flex(
+                    rx.box(class_name="w-3 h-3 rounded bg-orange-500 inline-block"),
+                    rx.text("Document", class_name="text-xs text-gray-500 ml-1"),
+                    align="center", gap="1",
+                ),
+                rx.flex(
+                    rx.box(class_name="w-3 h-3 rounded bg-purple-500 inline-block"),
+                    rx.text("Call", class_name="text-xs text-gray-500 ml-1"),
+                    align="center", gap="1",
+                ),
+                rx.flex(
+                    rx.box(class_name="w-3 h-3 rounded bg-red-500 inline-block"),
+                    rx.text("Email", class_name="text-xs text-gray-500 ml-1"),
+                    align="center", gap="1",
+                ),
+                gap="4",
+                class_name="mb-3 px-2",
+            ),
+            rx.fragment(),
+        ),
+        # Interactive graph (vis.js)
+        rx.cond(
+            AppState.entity_graph_html != "",
+            rx.flex(
+                # Stats bar
+                rx.flex(
+                    _graph_stat("👤", AppState.full_graph_stats["persons"], "Persons"),
+                    _graph_stat("📦", AppState.full_graph_stats["assets"], "Assets"),
+                    _graph_stat("🔗", AppState.full_graph_stats["identity_edges"], "Relationships"),
+                    _graph_stat("📎", AppState.full_graph_stats["asset_links"], "Person→Asset"),
+                    _graph_stat("🔀", AppState.full_graph_stats["asset_edges"], "Asset→Asset"),
+                    gap="3",
+                    class_name="mb-3",
+                ),
+                # Rendered graph
+                rx.html(AppState.entity_graph_html),
+                direction="column",
+            ),
+            # Fallback: list view or empty state
+            rx.cond(
+                AppState.entity_graph_nodes.length() > 0,  # type: ignore[union-attr]
+                rx.flex(
+                    # Stats
+                    rx.flex(
+                        _graph_stat("👤", AppState.entity_graph_nodes.length(), "Connected Persons"),  # type: ignore[union-attr]
+                        _graph_stat("🔗", AppState.entity_graph_edges.length(), "Relationships"),  # type: ignore[union-attr]
+                        gap="3",
+                        class_name="mb-4",
+                    ),
+                    # Relationships section
+                    rx.cond(
+                        AppState.entity_graph_edges.length() > 0,  # type: ignore[union-attr]
+                        _section_card(
+                            "Relationships", "link",
+                            rx.box(
+                                rx.foreach(
+                                    AppState.entity_graph_edges,
+                                    _graph_edge_row,
+                                ),
+                            ),
+                        ),
+                        rx.fragment(),
+                    ),
+                    # Connected persons grid
                     _section_card(
-                        "Relationships", "link",
+                        "Connected Persons", "users",
                         rx.box(
                             rx.foreach(
-                                AppState.entity_graph_edges,
-                                _graph_edge_row,
+                                AppState.entity_graph_nodes,
+                                _graph_person_node,
+                            ),
+                            class_name=(
+                                "grid gap-3"
+                                " grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
                             ),
                         ),
                     ),
-                    rx.fragment(),
+                    direction="column",
+                    gap="3",
                 ),
-                # Connected persons grid
-                _section_card(
-                    "Connected Persons", "users",
-                    rx.box(
-                        rx.foreach(
-                            AppState.entity_graph_nodes,
-                            _graph_person_node,
-                        ),
-                        class_name=(
-                            "grid gap-3"
-                            " grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
-                        ),
-                    ),
-                ),
-                direction="column",
-                gap="3",
-            ),
-            rx.cond(
-                AppState.entity_graph_loading,
-                rx.flex(
-                    rx.spinner(size="3"),
-                    rx.text("Loading…", class_name="text-sm text-gray-400 ml-2"),
-                    align="center",
-                    justify="center",
-                    class_name="py-12",
-                ),
-                rx.box(
+                rx.cond(
+                    AppState.full_graph_loading,
                     rx.flex(
-                        rx.icon("network", size=40, class_name="text-gray-300"),
-                        rx.text(
-                            "No graph data loaded",
-                            class_name="text-gray-400 mt-2",
-                        ),
-                        rx.text(
-                            "Click 'Load Graph' to see persons with relationships or linked assets",
-                            class_name="text-sm text-gray-300 mt-1",
-                        ),
-                        direction="column",
+                        rx.spinner(size="3"),
+                        rx.text("Loading graph…", class_name="text-sm text-gray-400 ml-2"),
                         align="center",
-                        class_name="py-16",
+                        justify="center",
+                        class_name="py-12",
+                    ),
+                    rx.box(
+                        rx.flex(
+                            rx.icon("network", size=40, class_name="text-gray-300"),
+                            rx.text(
+                                "No graph data loaded",
+                                class_name="text-gray-400 mt-2",
+                            ),
+                            rx.text(
+                                "Click 'Load Interactive Graph' for a Neo4j-style force-directed visualization, "
+                                "or 'List View' for a flat card layout",
+                                class_name="text-sm text-gray-300 mt-1 text-center max-w-md",
+                            ),
+                            direction="column",
+                            align="center",
+                            class_name="py-16",
+                        ),
                     ),
                 ),
             ),
