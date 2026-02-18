@@ -401,8 +401,8 @@ class AppState(rx.State):
     def set_insights_form_schedule_value(self, value: str):
         self.insights_form_schedule_value = value
 
-    def set_insights_form_filter_days(self, value: str):
-        self.insights_form_filter_days = value
+    def set_insights_form_filter_days(self, value: float):
+        self.insights_form_filter_days = str(int(value)) if value else ""
 
     def set_insights_form_filter_chat_name(self, value: str):
         self.insights_form_filter_chat_name = value
@@ -2740,10 +2740,13 @@ class AppState(rx.State):
             self.insights_viewing_task_id = 0
             self.insights_viewing_task = {}
             self.insights_results = []
+            self.insights_message = ""
+            yield
             return
 
         self.insights_viewing_task_id = tid
         self.insights_results_loading = True
+        self.insights_message = "⏳ Loading results…"
         yield
 
         import asyncio
@@ -2761,30 +2764,11 @@ class AppState(rx.State):
             self.insights_viewing_task = {}
 
         raw_results = results_data.get("results", []) if isinstance(results_data, dict) else []
-        self.insights_results = [self._flatten_insight_result(r) for r in raw_results]
+        self.insights_results = [
+            {k: str(v) if v is not None else "" for k, v in r.items()}
+            for r in raw_results
+        ]
         self.insights_results_loading = False
-
-    @staticmethod
-    def _flatten_insight_result(r: dict) -> dict[str, str]:
-        """Flatten an insight result dict for Reflex state.
-
-        Extracts quality_metrics fields into top-level keys prefixed with
-        ``qm_`` so the UI can display them as badges without parsing JSON.
-        """
-        flat: dict[str, str] = {}
-        for k, v in r.items():
-            if k == "quality_metrics" and isinstance(v, dict):
-                # Extract key quality metrics as flat fields
-                flat["qm_source_count"] = str(v.get("source_count", ""))
-                flat["qm_unique_chats"] = str(v.get("unique_chats", ""))
-                flat["qm_unique_senders"] = str(v.get("unique_senders", ""))
-                flat["qm_avg_score"] = str(round(v.get("avg_similarity_score", 0), 3))
-                flat["qm_sub_queries"] = str(v.get("sub_queries_used", ""))
-                flat["qm_model"] = str(v.get("model_used", ""))
-                flat[k] = str(v)
-            else:
-                flat[k] = str(v) if v is not None else ""
-        return flat
 
     def toggle_insight_result_expand(self, result_id: str):
         """Expand/collapse a specific result in the result viewer."""
@@ -2806,7 +2790,10 @@ class AppState(rx.State):
                 self.insights_viewing_task_id, limit=20,
             )
             raw_results = results_data.get("results", []) if isinstance(results_data, dict) else []
-            self.insights_results = [self._flatten_insight_result(r) for r in raw_results]
+            self.insights_results = [
+                {k: str(v) if v is not None else "" for k, v in r.items()}
+                for r in raw_results
+            ]
 
         self.insights_loading = False
         self.insights_message = "✅ Refreshed"
