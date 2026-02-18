@@ -1157,3 +1157,26 @@ async def fetch_insight_templates() -> dict[str, Any]:
     except Exception as e:
         logger.error(f"Error fetching insight templates: {e}")
     return {"templates": []}
+
+
+async def rate_insight_result(result_id: int, rating: int) -> dict[str, Any]:
+    """Rate an insight result (thumbs up/down).
+
+    Args:
+        result_id: The task result ID
+        rating: 1 for thumbs up, -1 for thumbs down, 0 to clear
+
+    Returns:
+        API response dict
+    """
+    try:
+        resp = await _get_client().post(
+            f"/scheduled-tasks/results/{result_id}/rate",
+            json={"rating": rating},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        logger.error(f"Error rating insight result: {e}")
+    return {"error": "Failed to rate result"}

@@ -188,6 +188,12 @@ DEFAULT_SETTINGS: List[Tuple[str, str, str, str, str]] = [
     ("rag_rerank_model", "rerank-multilingual-v3.0", "rag", "text", "Cohere rerank model (rerank-multilingual-v3.0 supports Hebrew). Reranking auto-activates when cohere_api_key is set."),
     ("rag_query_fusion_num_queries", "3", "rag", "int", "Number of query variants to generate for QueryFusionRetriever (always active)"),
     ("rag_entity_extraction_in_pipeline", "false", "rag", "bool", "Run entity extraction as part of the LlamaIndex ingestion pipeline (instead of standalone)"),
+    # Insights — Scheduled Insights quality settings
+    ("insight_default_k", "20", "insights", "int", "Documents per sub-query for insights (higher = more thorough, default 20)"),
+    ("insight_max_context_tokens", "8000", "insights", "int", "Max context tokens for insight LLM calls (higher than chat default for thorough analysis)"),
+    ("insight_llm_model", "", "insights", "text", "LLM model override for insights (empty = use main model). Recommended: o3-mini for analytical depth"),
+    ("insight_llm_temperature", "0.1", "insights", "float", "Temperature for insight LLM calls (lower = more factual, 0.0-2.0)"),
+    ("insight_decompose_with_llm", "true", "insights", "bool", "Use LLM to decompose custom prompts into sub-queries (templates use predefined sub-queries)"),
     # WhatsApp
     ("chat_prefix", "??", "whatsapp", "text", "Prefix to trigger AI chat response"),
     ("dalle_prefix", "!!", "whatsapp", "text", "Prefix to trigger DALL-E image generation"),
@@ -216,6 +222,7 @@ CATEGORY_META: Dict[str, Dict[str, str]] = {
     "secrets": {"label": "🔑 API Keys & Secrets", "order": "0"},
     "llm": {"label": "🤖 LLM Configuration", "order": "1"},
     "rag": {"label": "🔍 RAG Configuration", "order": "2"},
+    "insights": {"label": "✨ Scheduled Insights", "order": "2.5"},
     "whatsapp": {"label": "💬 WhatsApp Configuration", "order": "3"},
     "infrastructure": {"label": "🏗️ Infrastructure", "order": "4"},
     "app": {"label": "🔧 App Configuration", "order": "5"},

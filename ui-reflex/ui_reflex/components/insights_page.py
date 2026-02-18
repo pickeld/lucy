@@ -259,22 +259,6 @@ def _render_task_card(task: dict) -> rx.Component:
             justify="between",
             align="start",
         ),
-        # Preview of latest result
-        rx.cond(
-            (task["latest_result"].to(str) != "") & (task["latest_result"].to(str) != "None"),
-            rx.box(
-                rx.text(
-                    "Latest: ",
-                    rx.text.span(
-                        task["latest_result"].to(str)[:150],
-                        class_name="text-gray-600",
-                    ),
-                    class_name="text-xs text-gray-400 truncate",
-                ),
-                class_name="mt-2 pl-5 border-t border-gray-100 pt-2",
-            ),
-            rx.fragment(),
-        ),
         class_name=rx.cond(
             is_viewing,
             "p-4 rounded-lg border-2 border-amber-300 bg-amber-50 transition-colors",
@@ -343,7 +327,9 @@ def _result_viewer() -> rx.Component:
 
 
 def _render_result_item(result: dict) -> rx.Component:
-    """Render a single result entry — always shows the full answer."""
+    """Render a single result entry with quality metrics and rating."""
+    result_id = result["id"]
+
     return rx.box(
         # Header with status, time, cost
         rx.flex(
@@ -373,16 +359,107 @@ def _render_result_item(result: dict) -> rx.Component:
                 ),
                 align="center",
             ),
+            # Right: rating buttons + duration
             rx.flex(
-                rx.text(
-                    "Duration: ", result["duration_ms"], "ms",
-                    class_name="text-xs text-gray-400",
+                # Thumbs up
+                rx.tooltip(
+                    rx.icon_button(
+                        rx.icon("thumbs-up", size=12),
+                        on_click=AppState.rate_insight_result(result_id, "1"),
+                        variant=rx.cond(
+                            result.get("rating", "0") == "1",
+                            "solid",
+                            "ghost",
+                        ),
+                        size="1",
+                        color_scheme="green",
+                        class_name="cursor-pointer",
+                    ),
+                    content="Helpful",
                 ),
+                # Thumbs down
+                rx.tooltip(
+                    rx.icon_button(
+                        rx.icon("thumbs-down", size=12),
+                        on_click=AppState.rate_insight_result(result_id, "-1"),
+                        variant=rx.cond(
+                            result.get("rating", "0") == "-1",
+                            "solid",
+                            "ghost",
+                        ),
+                        size="1",
+                        color_scheme="red",
+                        class_name="cursor-pointer",
+                    ),
+                    content="Not helpful",
+                ),
+                rx.text(
+                    result["duration_ms"], "ms",
+                    class_name="text-xs text-gray-400 ml-2",
+                ),
+                gap="1",
                 align="center",
             ),
             justify="between",
             align="center",
             class_name="px-4 py-3",
+        ),
+        # Quality metrics bar (shown when available)
+        rx.cond(
+            result.get("qm_source_count", "") != "",
+            rx.flex(
+                rx.tooltip(
+                    rx.badge(
+                        rx.icon("file-text", size=10),
+                        " ", result.get("qm_source_count", ""),
+                        " sources",
+                        variant="surface",
+                        size="1",
+                    ),
+                    content="Documents retrieved and analyzed",
+                ),
+                rx.tooltip(
+                    rx.badge(
+                        rx.icon("messages-square", size=10),
+                        " ", result.get("qm_unique_chats", ""),
+                        " chats",
+                        variant="surface",
+                        size="1",
+                    ),
+                    content="Unique chats/conversations covered",
+                ),
+                rx.cond(
+                    result.get("qm_sub_queries", "") != "",
+                    rx.tooltip(
+                        rx.badge(
+                            rx.icon("search", size=10),
+                            " ", result.get("qm_sub_queries", ""),
+                            " queries",
+                            variant="surface",
+                            size="1",
+                        ),
+                        content="Number of targeted search sub-queries used",
+                    ),
+                    rx.fragment(),
+                ),
+                rx.cond(
+                    (result.get("qm_model", "") != "") & (result.get("qm_model", "") != "unknown"),
+                    rx.tooltip(
+                        rx.badge(
+                            rx.icon("cpu", size=10),
+                            " ", result.get("qm_model", ""),
+                            variant="surface",
+                            size="1",
+                        ),
+                        content="LLM model used for this insight",
+                    ),
+                    rx.fragment(),
+                ),
+                gap="2",
+                wrap="wrap",
+                class_name="px-4 pb-2",
+            ),
+            rx.fragment(),
         ),
         # Answer content — always visible
         rx.box(

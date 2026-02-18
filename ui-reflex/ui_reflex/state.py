@@ -2761,11 +2761,30 @@ class AppState(rx.State):
             self.insights_viewing_task = {}
 
         raw_results = results_data.get("results", []) if isinstance(results_data, dict) else []
-        self.insights_results = [
-            {k: str(v) if v is not None else "" for k, v in r.items()}
-            for r in raw_results
-        ]
+        self.insights_results = [self._flatten_insight_result(r) for r in raw_results]
         self.insights_results_loading = False
+
+    @staticmethod
+    def _flatten_insight_result(r: dict) -> dict[str, str]:
+        """Flatten an insight result dict for Reflex state.
+
+        Extracts quality_metrics fields into top-level keys prefixed with
+        ``qm_`` so the UI can display them as badges without parsing JSON.
+        """
+        flat: dict[str, str] = {}
+        for k, v in r.items():
+            if k == "quality_metrics" and isinstance(v, dict):
+                # Extract key quality metrics as flat fields
+                flat["qm_source_count"] = str(v.get("source_count", ""))
+                flat["qm_unique_chats"] = str(v.get("unique_chats", ""))
+                flat["qm_unique_senders"] = str(v.get("unique_senders", ""))
+                flat["qm_avg_score"] = str(round(v.get("avg_similarity_score", 0), 3))
+                flat["qm_sub_queries"] = str(v.get("sub_queries_used", ""))
+                flat["qm_model"] = str(v.get("model_used", ""))
+                flat[k] = str(v)
+            else:
+                flat[k] = str(v) if v is not None else ""
+        return flat
 
     def toggle_insight_result_expand(self, result_id: str):
         """Expand/collapse a specific result in the result viewer."""
@@ -2787,13 +2806,30 @@ class AppState(rx.State):
                 self.insights_viewing_task_id, limit=20,
             )
             raw_results = results_data.get("results", []) if isinstance(results_data, dict) else []
-            self.insights_results = [
-                {k: str(v) if v is not None else "" for k, v in r.items()}
-                for r in raw_results
-            ]
+            self.insights_results = [self._flatten_insight_result(r) for r in raw_results]
 
         self.insights_loading = False
         self.insights_message = "✅ Refreshed"
+
+    async def rate_insight_result(self, result_id: str, rating: str):
+        """Rate an insight result (thumbs up/down).
+
+        Args:
+            result_id: The result ID to rate
+            rating: "1" for thumbs up, "-1" for thumbs down, "0" to clear
+        """
+        rid = int(result_id)
+        rate_val = int(rating)
+        result = await api_client.rate_insight_result(rid, rate_val)
+        if "error" not in result:
+            # Update the rating in the local results list
+            for r in self.insights_results:
+                if r.get("id") == result_id or r.get("id") == str(rid):
+                    r["rating"] = str(rate_val)
+                    break
+            self.insights_message = "👍 Rated" if rate_val == 1 else (
+                "👎 Rated" if rate_val == -1 else "Rating cleared"
+            )
 
     async def reset_category(self, category: str):
         """Reset a settings category to defaults."""

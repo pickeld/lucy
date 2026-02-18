@@ -1615,6 +1615,26 @@ def get_scheduled_task_results(task_id: int):
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
+@app.route("/scheduled-tasks/results/<int:result_id>/rate", methods=["POST"])
+def rate_scheduled_task_result(result_id: int):
+    """Rate an insight result (thumbs up/down)."""
+    try:
+        data = request.get_json(force=True) or {}
+        rating = data.get("rating", 0)
+        if rating not in (-1, 0, 1):
+            return jsonify({"error": "rating must be -1, 0, or 1"}), 400
+
+        updated = scheduled_tasks_db.rate_result(result_id, rating)
+        if not updated:
+            return jsonify({"error": "Result not found"}), 404
+
+        return jsonify({"status": "ok", "result_id": result_id, "rating": rating}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Rate result error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
 # =============================================================================
 # ROOT ENDPOINT
 # =============================================================================

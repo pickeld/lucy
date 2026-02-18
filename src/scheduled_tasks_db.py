@@ -122,7 +122,9 @@ def init_db() -> None:
             duration_ms     INTEGER DEFAULT 0,
             status          TEXT DEFAULT 'success',
             error_message   TEXT,
-            executed_at     TEXT DEFAULT CURRENT_TIMESTAMP
+            executed_at     TEXT DEFAULT CURRENT_TIMESTAMP,
+            quality_metrics TEXT DEFAULT '{}',
+            rating          INTEGER DEFAULT 0
         );
 
         CREATE INDEX IF NOT EXISTS idx_task_results_task_id
@@ -134,8 +136,23 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run
             ON scheduled_tasks(next_run_at);
     """)
+    # Migrate: add quality_metrics and rating columns if missing
+    _migrate_add_column(conn, "task_results", "quality_metrics", "TEXT DEFAULT '{}'")
+    _migrate_add_column(conn, "task_results", "rating", "INTEGER DEFAULT 0")
     conn.commit()
     logger.info(f"Scheduled tasks DB initialized at {DB_PATH}")
+
+
+def _migrate_add_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    """Add a column to an existing table if it doesn't exist (safe migration)."""
+    try:
+        cursor = conn.execute(f"PRAGMA table_info({table})")
+        columns = {row[1] for row in cursor.fetchall()}
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            logger.info(f"Migrated: added {column} to {table}")
+    except Exception as e:
+        logger.debug(f"Migration check for {table}.{column} failed: {e}")
 
 
 # Auto-init on first import
@@ -665,6 +682,7 @@ def add_result(
     duration_ms: int = 0,
     status: str = "success",
     error_message: Optional[str] = None,
+    quality_metrics: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Record a task execution result.
 
@@ -677,24 +695,29 @@ def add_result(
         duration_ms: Execution duration in milliseconds
         status: 'success', 'error', or 'no_results'
         error_message: Error details if status='error'
+        quality_metrics: Optional quality metrics dict (source_count,
+            unique_chats, avg_score, sub_queries_used, model_used, etc.)
 
     Returns:
         The created result as a dict
     """
     conn = _get_connection()
     sources_json = json.dumps(sources or [])
+    metrics_json = json.dumps(quality_metrics or {})
     now = _now_iso()
 
     cursor = conn.execute(
         """
         INSERT INTO task_results
             (task_id, answer, prompt_used, sources, cost_usd,
-             duration_ms, status, error_message, executed_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             duration_ms, status, error_message, executed_at,
+             quality_metrics)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             task_id, answer, prompt_used, sources_json,
             cost_usd, duration_ms, status, error_message, now,
+            metrics_json,
         ),
     )
 
@@ -726,6 +749,10 @@ def get_result(result_id: int) -> Optional[Dict[str, Any]]:
         result["sources"] = json.loads(result.get("sources") or "[]")
     except (json.JSONDecodeError, TypeError):
         result["sources"] = []
+    try:
+        result["quality_metrics"] = json.loads(result.get("quality_metrics") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        result["quality_metrics"] = {}
 
     return result
 
@@ -758,9 +785,35 @@ def get_results(
             result["sources"] = json.loads(result.get("sources") or "[]")
         except (json.JSONDecodeError, TypeError):
             result["sources"] = []
+        try:
+            result["quality_metrics"] = json.loads(result.get("quality_metrics") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            result["quality_metrics"] = {}
         results.append(result)
 
     return results
+
+
+def rate_result(result_id: int, rating: int) -> bool:
+    """Rate a result (thumbs up/down).
+
+    Args:
+        result_id: The task result ID
+        rating: 1 for thumbs up, -1 for thumbs down, 0 to clear
+
+    Returns:
+        True if the result was found and updated
+    """
+    conn = _get_connection()
+    cursor = conn.execute(
+        "UPDATE task_results SET rating = ? WHERE id = ?",
+        (rating, result_id),
+    )
+    conn.commit()
+    updated = cursor.rowcount > 0
+    if updated:
+        logger.info(f"Rated result #{result_id}: {rating}")
+    return updated
 
 
 def get_result_count(task_id: int) -> int:
@@ -853,14 +906,32 @@ INSIGHT_TEMPLATES: List[Dict[str, Any]] = [
         "icon": "☀️",
         "description": "Morning overview of your day — meetings, commitments, deadlines",
         "prompt": (
-            "Based on my messages and documents, what should I know about today? "
-            "Check for:\n"
-            "1) Any meetings, appointments, or events I scheduled or mentioned\n"
-            "2) Promises or commitments I made to anyone\n"
-            "3) Deadlines or tasks I need to handle\n"
-            "4) Birthdays or special occasions for people I know\n"
-            "Organize the results by priority. Be specific with dates, times, and names."
+            "Produce a comprehensive daily briefing based on my messages and documents.\n\n"
+            "ANALYZE each section thoroughly — list EVERY relevant item found:\n\n"
+            "## 📅 Today's Schedule\n"
+            "Meetings, appointments, events, calls — anything with a specific time.\n"
+            "Include: what, when, with whom, any preparation needed.\n\n"
+            "## ✅ Open Commitments\n"
+            "Things I promised, agreed to, or said I would do.\n"
+            "Include: what I committed to, who I told, when I said it, is it overdue?\n\n"
+            "## ⏰ Upcoming Deadlines\n"
+            "Tasks with deadlines, payment due dates, expiring documents.\n"
+            "Include: what, when it's due, how urgent.\n\n"
+            "## 🎂 People & Occasions\n"
+            "Birthdays, anniversaries, special events for people I know.\n\n"
+            "## 💬 Pending Conversations\n"
+            "Messages I haven't responded to, conversations that need follow-up.\n\n"
+            "For each item, cite: who mentioned it, when, in which chat.\n"
+            "If a section has no relevant items, write 'Nothing found' — "
+            "do NOT skip the section."
         ),
+        "sub_queries": [
+            "meetings appointments events calls scheduled for today or tomorrow",
+            "promises commitments I said I would do agreed to follow up on",
+            "deadlines due dates tasks that need to be completed soon",
+            "birthdays anniversaries celebrations special occasions upcoming",
+            "unanswered messages conversations needing response or follow-up",
+        ],
         "schedule_type": "daily",
         "schedule_value": "08:00",
         "filters": {"days": 30},
@@ -870,13 +941,32 @@ INSIGHT_TEMPLATES: List[Dict[str, Any]] = [
         "icon": "📊",
         "description": "End-of-week interaction summary and highlights",
         "prompt": (
-            "Summarize my week:\n"
-            "1) Who did I communicate with the most?\n"
-            "2) What were the main topics discussed?\n"
-            "3) Any unresolved conversations or pending follow-ups?\n"
-            "4) Key decisions that were made\n"
-            "Be concise but thorough."
+            "Produce a comprehensive weekly summary based on my messages and documents.\n\n"
+            "ANALYZE each section thoroughly:\n\n"
+            "## 👥 Communication Overview\n"
+            "Who did I communicate with the most this week?\n"
+            "List the top contacts with approximate message counts and topics.\n\n"
+            "## 📝 Key Topics & Discussions\n"
+            "What were the main subjects discussed across all chats?\n"
+            "Group by topic, cite specific conversations.\n\n"
+            "## ❓ Unresolved Conversations\n"
+            "Conversations that ended without resolution or clear next steps.\n"
+            "Include: who, what topic, when the conversation happened.\n\n"
+            "## 🎯 Decisions Made\n"
+            "Important decisions, agreements, or plans that were finalized.\n"
+            "Include: what was decided, who was involved, any action items.\n\n"
+            "## 📋 Open Action Items\n"
+            "Things I or others agreed to do that may still be pending.\n\n"
+            "For each item, cite: who, when, which chat.\n"
+            "If a section has no relevant items, write 'Nothing found'."
         ),
+        "sub_queries": [
+            "most frequent conversations and contacts this week",
+            "important topics discussions decisions made this week",
+            "unresolved conversations unanswered questions pending topics",
+            "agreements promises action items from this week",
+            "plans meetings events scheduled for next week",
+        ],
         "schedule_type": "weekly",
         "schedule_value": "fri 17:00",
         "filters": {"days": 7},
@@ -886,11 +976,30 @@ INSIGHT_TEMPLATES: List[Dict[str, Any]] = [
         "icon": "📋",
         "description": "Find things you promised to do",
         "prompt": (
-            "Search my recent messages for anything I promised, agreed to, or said I would do. "
-            "Look for phrases like 'I will', 'I'll', 'let me', 'I need to', 'I should', "
-            "'אני אעשה', 'אני צריך', 'בוא נעשה', 'אני אשלח', 'אני אבדוק'. "
-            "List each commitment with who I made it to and when."
+            "Search my recent messages exhaustively for anything I promised, "
+            "agreed to, or said I would do.\n\n"
+            "Look for ALL of these patterns (in both English and Hebrew):\n"
+            "- Direct promises: 'I will', 'I'll send', 'I'll check', 'let me'\n"
+            "- Obligations: 'I need to', 'I should', 'I have to', 'I must'\n"
+            "- Agreements: 'OK I'll do it', 'sure', 'no problem', 'I'm on it'\n"
+            "- Hebrew: 'אני אעשה', 'אני צריך', 'בוא נעשה', 'אני אשלח', "
+            "'אני אבדוק', 'אין בעיה', 'אני אטפל', 'מבטיח'\n\n"
+            "For EACH commitment found, provide:\n"
+            "1. **What** I committed to do\n"
+            "2. **Who** I made the promise to\n"
+            "3. **When** I said it (exact date/time from the message)\n"
+            "4. **Status**: Is it likely still open or was it resolved?\n"
+            "5. **Urgency**: Was a deadline mentioned?\n\n"
+            "Sort by urgency (overdue first, then soonest deadline).\n"
+            "Be exhaustive — better to include a marginal commitment than miss one."
         ),
+        "sub_queries": [
+            "I will I'll let me I need to I should I promised",
+            "אני אעשה אני צריך אני אשלח אני אבדוק מבטיח אטפל",
+            "sure no problem OK I'll do agreed to follow up",
+            "אין בעיה בוא נעשה בסדר אני אטפל מסכים",
+            "deadline due by end of week tomorrow must send",
+        ],
         "schedule_type": "daily",
         "schedule_value": "09:00",
         "filters": {"days": 14},
@@ -900,10 +1009,27 @@ INSIGHT_TEMPLATES: List[Dict[str, Any]] = [
         "icon": "👥",
         "description": "Who have you not talked to recently?",
         "prompt": (
-            "Based on my message history, which of my regular contacts have I NOT "
-            "communicated with in the past 2 weeks? Compare recent activity against "
-            "the past 3 months to find people I usually talk to but have gone quiet with."
+            "Analyze my communication patterns to find people I may be losing touch with.\n\n"
+            "## 🔍 Analysis Method\n"
+            "1. Identify my regular contacts from the past 3 months\n"
+            "2. Check which of these I have NOT communicated with in the past 2 weeks\n"
+            "3. Flag any contacts where I usually communicate weekly but went silent\n\n"
+            "## 📊 Report Format\n"
+            "For each person found:\n"
+            "- **Name**: Contact name\n"
+            "- **Last contact**: When we last messaged (date and chat)\n"
+            "- **Usual frequency**: How often we typically communicate\n"
+            "- **Gap**: How long since last contact vs usual frequency\n\n"
+            "Sort by gap severity (longest gap relative to usual frequency first).\n"
+            "Only include people I genuinely communicate with regularly — "
+            "not group chats or automated messages."
         ),
+        "sub_queries": [
+            "recent conversations messages from the past two weeks",
+            "regular contacts I frequently message or chat with",
+            "conversations and contacts from 1-3 months ago",
+            "close friends family important contacts communication",
+        ],
         "schedule_type": "weekly",
         "schedule_value": "sun 10:00",
         "filters": {"days": 90},

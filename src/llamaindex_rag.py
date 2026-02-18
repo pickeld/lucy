@@ -3458,6 +3458,281 @@ class LlamaIndexRAG:
         logger.debug(f"Created chat engine for conversation {conversation_id}")
         return engine
     
+    # =========================================================================
+    # Insight Execution (bypasses chat engine for analytical queries)
+    # =========================================================================
+    
+    def execute_insight_query(
+        self,
+        prompt: str,
+        system_prompt: str = "",
+        sub_queries: Optional[List[str]] = None,
+        filter_chat_name: Optional[str] = None,
+        filter_sender: Optional[str] = None,
+        filter_days: Optional[int] = None,
+        filter_sources: Optional[List[str]] = None,
+        filter_date_from: Optional[str] = None,
+        filter_date_to: Optional[str] = None,
+        filter_content_types: Optional[List[str]] = None,
+        k: int = 20,
+        max_context_tokens: int = 8000,
+        llm_override: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """Execute an insight query with multi-query retrieval and direct LLM completion.
+        
+        Unlike create_chat_engine(), this method:
+        - Performs multiple targeted retrieval passes (one per sub-query)
+        - Deduplicates and reranks the merged results
+        - Uses a dedicated insight system prompt (no chat noise)
+        - Calls the LLM directly without chat memory or condense step
+        - Returns structured result with quality metrics
+        
+        Args:
+            prompt: The user's insight prompt (sent to the LLM)
+            system_prompt: Insight-specific system prompt
+            sub_queries: List of targeted search queries. If None, uses prompt as single query
+            filter_chat_name: Optional filter by chat/group name
+            filter_sender: Optional filter by sender name
+            filter_days: Optional filter by recency in days
+            filter_sources: Optional list of source values
+            filter_date_from: Optional ISO date string for start of range
+            filter_date_to: Optional ISO date string for end of range
+            filter_content_types: Optional list of content type values
+            k: Number of documents per sub-query
+            max_context_tokens: Max context tokens for the LLM call
+            llm_override: Optional LLM instance to use instead of the default
+            
+        Returns:
+            Dict with keys: answer, sources, quality_metrics
+        """
+        from llama_index.core.llms import ChatMessage
+        
+        self._ensure_llm_configured()
+        
+        _fkw = dict(
+            filter_chat_name=filter_chat_name,
+            filter_sender=filter_sender,
+            filter_days=filter_days,
+            filter_sources=filter_sources,
+            filter_date_from=filter_date_from,
+            filter_date_to=filter_date_to,
+            filter_content_types=filter_content_types,
+        )
+        
+        # =====================================================================
+        # Step 1: Multi-query retrieval
+        # =====================================================================
+        queries = sub_queries if sub_queries else [prompt]
+        all_nodes: List[NodeWithScore] = []
+        
+        for query in queries:
+            try:
+                results = self.search(query=query, k=k, **_fkw)
+                all_nodes.extend(results)
+                logger.info(
+                    f"[insight] Sub-query '{query[:50]}...' returned {len(results)} results"
+                )
+            except Exception as e:
+                logger.warning(f"[insight] Sub-query failed: {e}")
+        
+        # =====================================================================
+        # Step 2: Deduplicate by node ID, keep highest score
+        # =====================================================================
+        best_scores: Dict[str, float] = {}
+        best_nodes: Dict[str, NodeWithScore] = {}
+        for nws in all_nodes:
+            node_id = nws.node.id_ if nws.node else None
+            if not node_id:
+                continue
+            score = nws.score or 0.0
+            if node_id not in best_scores or score > best_scores[node_id]:
+                best_scores[node_id] = score
+                best_nodes[node_id] = nws
+        
+        merged = sorted(
+            best_nodes.values(),
+            key=lambda n: n.score or 0.0,
+            reverse=True,
+        )
+        
+        logger.info(
+            f"[insight] {len(all_nodes)} total results → {len(merged)} after dedup "
+            f"(from {len(queries)} sub-queries)"
+        )
+        
+        # =====================================================================
+        # Step 3: Cohere rerank on merged results
+        # =====================================================================
+        try:
+            cohere_key = settings.get("cohere_api_key", "")
+            if cohere_key and merged:
+                from llama_index.postprocessor.cohere_rerank import CohereRerank
+                from llama_index.core.schema import QueryBundle
+                
+                rerank_top_n = min(
+                    int(settings.get("rag_rerank_top_n", "10")) * 2,
+                    len(merged),
+                )
+                rerank_model = settings.get("rag_rerank_model", "rerank-v3.5")
+                reranker = CohereRerank(
+                    api_key=cohere_key,
+                    top_n=rerank_top_n,
+                    model=rerank_model,
+                )
+                pre_rerank = len(merged)
+                merged = reranker.postprocess_nodes(
+                    merged, QueryBundle(query_str=prompt)
+                )
+                logger.info(
+                    f"[insight] Cohere rerank: {pre_rerank} → {len(merged)} results"
+                )
+        except ImportError:
+            logger.debug("Cohere rerank not available for insights")
+        except Exception as e:
+            logger.debug(f"[insight] Reranking failed (non-critical): {e}")
+        
+        # =====================================================================
+        # Step 4: Context budget trim
+        # =====================================================================
+        max_context_chars = max_context_tokens * 4  # ~4 chars per token
+        per_result_cap = int(max_context_chars * 0.3)
+        total_chars = 0
+        trimmed: List[NodeWithScore] = []
+        
+        for nws in merged:
+            node_text = getattr(nws.node, "text", "") if nws.node else ""
+            text_len = len(node_text)
+            effective_len = min(text_len, per_result_cap)
+            if text_len > per_result_cap and nws.node:
+                truncated_text = node_text[:per_result_cap] + "\n[...truncated...]"
+                truncated_node = TextNode(
+                    text=truncated_text,
+                    metadata=getattr(nws.node, "metadata", {}),
+                    id_=nws.node.id_,
+                )
+                nws = NodeWithScore(node=truncated_node, score=nws.score)
+                effective_len = len(truncated_text)
+            if total_chars + effective_len > max_context_chars and trimmed:
+                break
+            trimmed.append(nws)
+            total_chars += effective_len
+        
+        if len(trimmed) < len(merged):
+            logger.info(
+                f"[insight] Context budget trimmed {len(merged)} → {len(trimmed)} "
+                f"results ({total_chars} chars, budget={max_context_chars})"
+            )
+        
+        # =====================================================================
+        # Step 5: Build context string and call LLM
+        # =====================================================================
+        context_parts = []
+        for nws in trimmed:
+            text = getattr(nws.node, "text", "") if nws.node else ""
+            if text:
+                context_parts.append(text)
+        
+        context_str = "\n\n---\n\n".join(context_parts)
+        
+        if not context_str.strip():
+            context_str = "[No relevant messages or documents found in the archive for this query]"
+        
+        user_message = (
+            f"Here are the relevant messages and documents retrieved from the knowledge base:\n"
+            f"-----\n"
+            f"{context_str}\n"
+            f"-----\n\n"
+            f"UNDERSTANDING THE RETRIEVED ITEMS:\n"
+            f"Each item is formatted with a source label. Common formats:\n"
+            f"- 'WhatsApp | date | sender in chat: message'\n"
+            f"- 'WhatsApp Conversation | chat | date_range (N messages):' multi-line\n"
+            f"- 'Paperless | date | Document title:' document text\n"
+            f"- 'Gmail | date | sender in subject: body'\n"
+            f"- 'Call Recording | date | caller in context:' transcript\n\n"
+            f"CITATION RULES:\n"
+            f"- Mention the source type, person, and date when citing information\n"
+            f"- For conversation chunks, cite the relevant speaker(s)\n\n"
+            f"Now produce the insight:\n\n"
+            f"{prompt}"
+        )
+        
+        llm = llm_override if llm_override is not None else Settings.llm
+        
+        messages = [
+            ChatMessage(role="system", content=system_prompt),
+            ChatMessage(role="user", content=user_message),
+        ]
+        
+        response = llm.chat(messages)
+        answer = str(response)
+        # LlamaIndex ChatResponse wraps the content; extract the message text
+        if hasattr(response, "message") and hasattr(response.message, "content"):
+            answer = response.message.content or str(response)
+        
+        # =====================================================================
+        # Step 6: Compute quality metrics
+        # =====================================================================
+        unique_chats: set = set()
+        unique_senders: set = set()
+        unique_sources: set = set()
+        scores = []
+        for nws in trimmed:
+            if nws.node:
+                meta = getattr(nws.node, "metadata", {})
+                cn = meta.get("chat_name")
+                if cn:
+                    unique_chats.add(cn)
+                sn = meta.get("sender")
+                if sn:
+                    unique_senders.add(sn)
+                src = meta.get("source")
+                if src:
+                    unique_sources.add(src)
+            if nws.score is not None:
+                scores.append(nws.score)
+        
+        avg_score = sum(scores) / len(scores) if scores else 0.0
+        
+        # Extract source info for storage
+        source_list = []
+        for nws in trimmed:
+            if nws.node:
+                meta = getattr(nws.node, "metadata", {})
+                if meta.get("source") == "system":
+                    continue
+                source_list.append({
+                    "content": getattr(nws.node, "text", "")[:300],
+                    "score": nws.score,
+                    "sender": meta.get("sender", ""),
+                    "chat_name": meta.get("chat_name", ""),
+                    "timestamp": meta.get("timestamp"),
+                    "source": meta.get("source", ""),
+                })
+        
+        quality_metrics = {
+            "source_count": len(trimmed),
+            "unique_chats": len(unique_chats),
+            "unique_senders": len(unique_senders),
+            "unique_sources": list(unique_sources),
+            "avg_similarity_score": round(avg_score, 4),
+            "sub_queries_used": len(queries),
+            "context_chars": total_chars,
+            "context_budget": max_context_chars,
+            "model_used": getattr(llm, "model", "unknown"),
+        }
+        
+        logger.info(
+            f"[insight] Query complete: {len(trimmed)} sources, "
+            f"{len(unique_chats)} chats, avg_score={avg_score:.3f}, "
+            f"context={total_chars} chars"
+        )
+        
+        return {
+            "answer": answer,
+            "sources": source_list,
+            "quality_metrics": quality_metrics,
+        }
+    
     def get_stats(self) -> Dict[str, Any]:
         """Get statistics about the vector store.
         
