@@ -18,6 +18,7 @@ Usage (from application code):
 import os
 
 from celery import Celery
+from celery.signals import worker_process_init
 
 # ---------------------------------------------------------------------------
 # Redis broker URL
@@ -93,3 +94,26 @@ app.conf.update(
         "tasks.transcription",
     ],
 )
+
+
+# ---------------------------------------------------------------------------
+# Worker process initialization — discover and load plugins so that tasks
+# like ``transcribe_recording`` can access plugin syncers via the registry.
+# ---------------------------------------------------------------------------
+
+@worker_process_init.connect
+def _init_plugins_in_worker(**kwargs):
+    """Initialize the plugin registry when a Celery worker process starts.
+
+    Creates a minimal Flask app (required by the plugin lifecycle contract)
+    and runs the same discovery + loading sequence that ``app.py`` does.
+    Blueprint registration happens harmlessly — the worker never serves HTTP.
+    """
+    from flask import Flask
+    from plugins.registry import plugin_registry
+
+    # Create a minimal Flask app to satisfy plugin initialize() signatures
+    _flask_app = Flask("lucy-worker")
+
+    plugin_registry.discover_plugins()
+    plugin_registry.load_enabled_plugins(_flask_app)
