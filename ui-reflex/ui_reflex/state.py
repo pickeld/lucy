@@ -2657,9 +2657,10 @@ class AppState(rx.State):
 
         # Build filters dict
         filters: dict[str, Any] = {}
-        if self.insights_form_filter_days.strip():
+        filter_days_str = str(self.insights_form_filter_days).strip()
+        if filter_days_str:
             try:
-                filters["days"] = int(self.insights_form_filter_days)
+                filters["days"] = int(filter_days_str)
             except ValueError:
                 pass
         if self.insights_form_filter_chat_name.strip():
