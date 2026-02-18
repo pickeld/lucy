@@ -15,6 +15,7 @@ from .components.chat_area import chat_area
 from .components.settings_page import settings_page
 from .components.entities_page import entities_page
 from .components.recordings_page import recordings_page
+from .components.insights_page import insights_page
 
 
 # =========================================================================
@@ -39,6 +40,11 @@ def entities() -> rx.Component:
 def recordings() -> rx.Component:
     """Recordings page — dedicated call recordings management."""
     return layout(recordings_page())
+
+
+def insights() -> rx.Component:
+    """Insights page — scheduled intelligence queries."""
+    return layout(insights_page())
 
 
 # =========================================================================
@@ -80,4 +86,11 @@ app.add_page(
     route="/recordings",
     title="Recordings — RAG Assistant",
     on_load=AppState.on_recordings_load,
+)
+
+app.add_page(
+    insights,
+    route="/insights",
+    title="Insights — RAG Assistant",
+    on_load=AppState.on_insights_load,
 )

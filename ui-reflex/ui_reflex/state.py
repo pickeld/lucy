@@ -304,6 +304,30 @@ class AppState(rx.State):
     entity_merge_candidates: list[dict[str, Any]] = []
     entity_candidates_loading: bool = False
 
+    # --- Scheduled Insights ---
+    insights_tasks: list[dict[str, Any]] = []
+    insights_loading: bool = False
+    insights_templates: list[dict[str, Any]] = []
+    insights_message: str = ""
+    # Create/Edit dialog state
+    insights_dialog_open: bool = False
+    insights_editing_id: int = 0       # 0 = creating new, >0 = editing
+    insights_form_name: str = ""
+    insights_form_description: str = ""
+    insights_form_prompt: str = ""
+    insights_form_schedule_type: str = "daily"
+    insights_form_schedule_value: str = "08:00"
+    insights_form_enabled: bool = True
+    insights_form_filter_days: str = ""
+    insights_form_filter_chat_name: str = ""
+    insights_form_filter_sender: str = ""
+    # Result viewer state
+    insights_viewing_task_id: int = 0
+    insights_viewing_task: dict[str, Any] = {}
+    insights_results: list[dict[str, Any]] = []
+    insights_results_loading: bool = False
+    insights_expanded_result_id: int = 0  # Which result is expanded
+
     # =====================================================================
     # EXPLICIT SETTERS (avoid deprecated state_auto_setters)
     # =====================================================================
@@ -359,6 +383,35 @@ class AppState(rx.State):
         else:
             self.recordings_sort_column = value
             self.recordings_sort_asc = False
+
+    # --- Insights setters ---
+
+    def set_insights_form_name(self, value: str):
+        self.insights_form_name = value
+
+    def set_insights_form_description(self, value: str):
+        self.insights_form_description = value
+
+    def set_insights_form_prompt(self, value: str):
+        self.insights_form_prompt = value
+
+    def set_insights_form_schedule_type(self, value: str):
+        self.insights_form_schedule_type = value
+
+    def set_insights_form_schedule_value(self, value: str):
+        self.insights_form_schedule_value = value
+
+    def set_insights_form_filter_days(self, value: str):
+        self.insights_form_filter_days = value
+
+    def set_insights_form_filter_chat_name(self, value: str):
+        self.insights_form_filter_chat_name = value
+
+    def set_insights_form_filter_sender(self, value: str):
+        self.insights_form_filter_sender = value
+
+    def toggle_insights_form_enabled(self, value: bool):
+        self.insights_form_enabled = value
 
     def set_rename_text(self, value: str):
         """Set the conversation rename text."""
@@ -1354,6 +1407,35 @@ class AppState(rx.State):
         # Auto-transcribe pending recordings if enabled
         if self.recordings_auto_transcribe:
             await self._auto_transcribe_pending()
+
+    async def on_insights_load(self):
+        """Called when the /insights page loads.
+
+        Loads all scheduled tasks and templates in parallel.
+        """
+        import asyncio
+
+        self.insights_loading = True
+        yield
+
+        results = await asyncio.gather(
+            self.on_load(),
+            api_client.fetch_scheduled_tasks(),
+            api_client.fetch_insight_templates(),
+            return_exceptions=True,
+        )
+
+        tasks_data = results[1] if not isinstance(results[1], BaseException) else {}
+        templates_data = results[2] if not isinstance(results[2], BaseException) else {}
+
+        raw_tasks = tasks_data.get("tasks", []) if isinstance(tasks_data, dict) else []
+        # Normalize all values to strings for Reflex rendering
+        self.insights_tasks = [
+            {k: str(v) if v is not None else "" for k, v in t.items()}
+            for t in raw_tasks
+        ]
+        self.insights_templates = templates_data.get("templates", []) if isinstance(templates_data, dict) else []
+        self.insights_loading = False
 
     async def toggle_auto_transcribe(self):
         """Toggle auto-transcribe on/off and save to backend."""
@@ -2495,6 +2577,222 @@ class AppState(rx.State):
         self.recordings_active_statuses = []
         self.recordings_filter_date_from = ""
         self.recordings_filter_date_to = ""
+
+    # =================================================================
+    # SCHEDULED INSIGHTS HANDLERS
+    # =================================================================
+
+    async def _load_insights_tasks(self):
+        """Reload the insights task list from the API."""
+        data = await api_client.fetch_scheduled_tasks()
+        raw_tasks = data.get("tasks", []) if isinstance(data, dict) else []
+        self.insights_tasks = [
+            {k: str(v) if v is not None else "" for k, v in t.items()}
+            for t in raw_tasks
+        ]
+
+    def open_insights_create_dialog(self):
+        """Open the dialog for creating a new insight task."""
+        self.insights_editing_id = 0
+        self.insights_form_name = ""
+        self.insights_form_description = ""
+        self.insights_form_prompt = ""
+        self.insights_form_schedule_type = "daily"
+        self.insights_form_schedule_value = "08:00"
+        self.insights_form_enabled = True
+        self.insights_form_filter_days = ""
+        self.insights_form_filter_chat_name = ""
+        self.insights_form_filter_sender = ""
+        self.insights_dialog_open = True
+
+    def open_insights_edit_dialog(self, task_id: str):
+        """Open the dialog for editing an existing insight task."""
+        tid = int(task_id)
+        self.insights_editing_id = tid
+        # Find the task in the current list
+        for t in self.insights_tasks:
+            if str(t.get("id", "")) == str(tid):
+                self.insights_form_name = str(t.get("name", ""))
+                self.insights_form_description = str(t.get("description", ""))
+                self.insights_form_prompt = str(t.get("prompt", ""))
+                self.insights_form_schedule_type = str(t.get("schedule_type", "daily"))
+                self.insights_form_schedule_value = str(t.get("schedule_value", "08:00"))
+                self.insights_form_enabled = str(t.get("enabled", "True")).lower() in ("true", "1", "yes")
+                # Parse filters
+                filters_str = str(t.get("filters", "{}"))
+                try:
+                    import json as _json
+                    filters = _json.loads(filters_str) if filters_str and filters_str != "{}" else {}
+                except Exception:
+                    filters = {}
+                self.insights_form_filter_days = str(filters.get("days", ""))
+                self.insights_form_filter_chat_name = str(filters.get("chat_name", ""))
+                self.insights_form_filter_sender = str(filters.get("sender", ""))
+                break
+        self.insights_dialog_open = True
+
+    def close_insights_dialog(self):
+        """Close the create/edit dialog."""
+        self.insights_dialog_open = False
+
+    def apply_insight_template(self, template_index: str):
+        """Fill the dialog form from a template."""
+        idx = int(template_index)
+        if 0 <= idx < len(self.insights_templates):
+            tmpl = self.insights_templates[idx]
+            self.insights_form_name = str(tmpl.get("name", ""))
+            self.insights_form_description = str(tmpl.get("description", ""))
+            self.insights_form_prompt = str(tmpl.get("prompt", ""))
+            self.insights_form_schedule_type = str(tmpl.get("schedule_type", "daily"))
+            self.insights_form_schedule_value = str(tmpl.get("schedule_value", "08:00"))
+            filters = tmpl.get("filters", {})
+            if isinstance(filters, dict):
+                self.insights_form_filter_days = str(filters.get("days", ""))
+
+    async def save_insight_task(self):
+        """Save the insight task (create or update) from dialog form."""
+        if not self.insights_form_name.strip() or not self.insights_form_prompt.strip():
+            self.insights_message = "❌ Name and prompt are required"
+            return
+
+        # Build filters dict
+        filters: dict[str, Any] = {}
+        if self.insights_form_filter_days.strip():
+            try:
+                filters["days"] = int(self.insights_form_filter_days)
+            except ValueError:
+                pass
+        if self.insights_form_filter_chat_name.strip():
+            filters["chat_name"] = self.insights_form_filter_chat_name.strip()
+        if self.insights_form_filter_sender.strip():
+            filters["sender"] = self.insights_form_filter_sender.strip()
+
+        data = {
+            "name": self.insights_form_name.strip(),
+            "description": self.insights_form_description.strip(),
+            "prompt": self.insights_form_prompt.strip(),
+            "schedule_type": self.insights_form_schedule_type,
+            "schedule_value": self.insights_form_schedule_value.strip(),
+            "enabled": self.insights_form_enabled,
+            "filters": filters,
+        }
+
+        self.insights_message = "⏳ Saving…"
+        yield
+
+        if self.insights_editing_id > 0:
+            result = await api_client.update_scheduled_task(self.insights_editing_id, data)
+        else:
+            result = await api_client.create_scheduled_task(data)
+
+        if "error" in result:
+            self.insights_message = f"❌ {result['error']}"
+        else:
+            name = result.get("name", data["name"])
+            action = "updated" if self.insights_editing_id > 0 else "created"
+            self.insights_message = f"✅ '{name}' {action}"
+            self.insights_dialog_open = False
+            await self._load_insights_tasks()
+
+    async def delete_insight_task(self, task_id: str):
+        """Delete a scheduled insight task."""
+        tid = int(task_id)
+        result = await api_client.delete_scheduled_task(tid)
+        if "error" in result:
+            self.insights_message = f"❌ {result['error']}"
+        else:
+            self.insights_message = "✅ Task deleted"
+            if self.insights_viewing_task_id == tid:
+                self.insights_viewing_task_id = 0
+                self.insights_viewing_task = {}
+                self.insights_results = []
+            await self._load_insights_tasks()
+
+    async def toggle_insight_task(self, task_id: str):
+        """Toggle a task's enabled/disabled state."""
+        tid = int(task_id)
+        result = await api_client.toggle_scheduled_task(tid)
+        if "error" in result:
+            self.insights_message = f"❌ {result['error']}"
+        else:
+            enabled = result.get("enabled", False)
+            self.insights_message = f"✅ Task {'enabled' if enabled else 'disabled'}"
+            await self._load_insights_tasks()
+
+    async def run_insight_task_now(self, task_id: str):
+        """Manually trigger a scheduled insight task."""
+        tid = int(task_id)
+        self.insights_message = "⏳ Running insight…"
+        yield
+
+        result = await api_client.run_scheduled_task(tid)
+        if "error" in result:
+            self.insights_message = f"❌ {result['error']}"
+        else:
+            self.insights_message = f"✅ {result.get('message', 'Task dispatched')}"
+
+    async def view_insight_results(self, task_id: str):
+        """Open the result history for a task."""
+        tid = int(task_id)
+        if self.insights_viewing_task_id == tid:
+            # Toggle off
+            self.insights_viewing_task_id = 0
+            self.insights_viewing_task = {}
+            self.insights_results = []
+            return
+
+        self.insights_viewing_task_id = tid
+        self.insights_results_loading = True
+        yield
+
+        import asyncio
+        task_data, results_data = await asyncio.gather(
+            api_client.fetch_scheduled_task(tid),
+            api_client.fetch_scheduled_task_results(tid, limit=20),
+            return_exceptions=True,
+        )
+
+        if isinstance(task_data, dict) and task_data:
+            self.insights_viewing_task = {
+                k: str(v) if v is not None else "" for k, v in task_data.items()
+            }
+        else:
+            self.insights_viewing_task = {}
+
+        raw_results = results_data.get("results", []) if isinstance(results_data, dict) else []
+        self.insights_results = [
+            {k: str(v) if v is not None else "" for k, v in r.items()}
+            for r in raw_results
+        ]
+        self.insights_results_loading = False
+
+    def toggle_insight_result_expand(self, result_id: str):
+        """Expand/collapse a specific result in the result viewer."""
+        rid = int(result_id)
+        if self.insights_expanded_result_id == rid:
+            self.insights_expanded_result_id = 0
+        else:
+            self.insights_expanded_result_id = rid
+
+    async def refresh_insights(self):
+        """Refresh the insights task list and currently viewed results."""
+        self.insights_loading = True
+        yield
+
+        await self._load_insights_tasks()
+
+        if self.insights_viewing_task_id > 0:
+            results_data = await api_client.fetch_scheduled_task_results(
+                self.insights_viewing_task_id, limit=20,
+            )
+            raw_results = results_data.get("results", []) if isinstance(results_data, dict) else []
+            self.insights_results = [
+                {k: str(v) if v is not None else "" for k, v in r.items()}
+                for r in raw_results
+            ]
+
+        self.insights_loading = False
+        self.insights_message = "✅ Refreshed"
 
     async def reset_category(self, category: str):
         """Reset a settings category to defaults."""

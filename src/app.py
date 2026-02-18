@@ -31,6 +31,9 @@ print("✅ Utils imported", flush=True)
 import conversations_db
 print("✅ Conversations DB imported", flush=True)
 
+import scheduled_tasks_db
+print("✅ Scheduled tasks DB imported", flush=True)
+
 import entity_db
 print("✅ Entity DB imported", flush=True)
 
@@ -1439,6 +1442,177 @@ def serve_media_event(filename: str):
         as_attachment=True,
         download_name=filename,
     )
+
+
+# =============================================================================
+# SCHEDULED INSIGHTS ENDPOINTS
+# =============================================================================
+
+@app.route("/scheduled-tasks", methods=["GET"])
+def list_scheduled_tasks():
+    """List all scheduled insight tasks with their latest result."""
+    try:
+        include_disabled = request.args.get("include_disabled", "true").lower() == "true"
+        tasks = scheduled_tasks_db.list_tasks(include_disabled=include_disabled)
+        return jsonify({"tasks": tasks, "count": len(tasks)}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"List scheduled tasks error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/scheduled-tasks", methods=["POST"])
+def create_scheduled_task():
+    """Create a new scheduled insight task."""
+    try:
+        data = request.json or {}
+        name = data.get("name")
+        prompt = data.get("prompt")
+
+        if not name or not prompt:
+            return jsonify({"error": "Missing required fields: 'name' and 'prompt'"}), 400
+
+        task = scheduled_tasks_db.create_task(
+            name=name,
+            prompt=prompt,
+            schedule_type=data.get("schedule_type", "daily"),
+            schedule_value=data.get("schedule_value", "08:00"),
+            timezone=data.get("timezone", settings.get("timezone", "Asia/Jerusalem")),
+            description=data.get("description", ""),
+            filters=data.get("filters"),
+            delivery_channel=data.get("delivery_channel", "ui"),
+            enabled=data.get("enabled", True),
+        )
+        return jsonify(task), 201
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Create scheduled task error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/scheduled-tasks/templates", methods=["GET"])
+def get_insight_templates():
+    """Get built-in insight prompt templates."""
+    try:
+        templates = scheduled_tasks_db.get_templates()
+        return jsonify({"templates": templates}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/scheduled-tasks/<int:task_id>", methods=["GET"])
+def get_scheduled_task(task_id: int):
+    """Get a single scheduled task with its latest result."""
+    try:
+        task = scheduled_tasks_db.get_task(task_id)
+        if not task:
+            return jsonify({"error": "Task not found"}), 404
+        return jsonify(task), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Get scheduled task error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/scheduled-tasks/<int:task_id>", methods=["PUT"])
+def update_scheduled_task(task_id: int):
+    """Update a scheduled task's fields."""
+    try:
+        data = request.json or {}
+        if not data:
+            return jsonify({"error": "No fields provided"}), 400
+
+        task = scheduled_tasks_db.update_task(task_id, **data)
+        if not task:
+            return jsonify({"error": "Task not found"}), 404
+
+        return jsonify(task), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Update scheduled task error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/scheduled-tasks/<int:task_id>", methods=["DELETE"])
+def delete_scheduled_task(task_id: int):
+    """Delete a scheduled task and all its results."""
+    try:
+        deleted = scheduled_tasks_db.delete_task(task_id)
+        if not deleted:
+            return jsonify({"error": "Task not found"}), 404
+        return jsonify({"status": "ok", "task_id": task_id}), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Delete scheduled task error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/scheduled-tasks/<int:task_id>/toggle", methods=["POST"])
+def toggle_scheduled_task(task_id: int):
+    """Toggle a scheduled task's enabled/disabled state."""
+    try:
+        new_state = scheduled_tasks_db.toggle_task(task_id)
+        if new_state is None:
+            return jsonify({"error": "Task not found"}), 404
+        return jsonify({
+            "status": "ok",
+            "task_id": task_id,
+            "enabled": new_state,
+        }), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Toggle scheduled task error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/scheduled-tasks/<int:task_id>/run", methods=["POST"])
+def run_scheduled_task(task_id: int):
+    """Manually trigger a scheduled task execution."""
+    try:
+        task = scheduled_tasks_db.get_task(task_id)
+        if not task:
+            return jsonify({"error": "Task not found"}), 404
+
+        from tasks.scheduled import execute_scheduled_insight
+        result = execute_scheduled_insight.delay(task_id)
+
+        return jsonify({
+            "status": "ok",
+            "task_id": task_id,
+            "celery_task_id": result.id,
+            "message": f"Task '{task['name']}' dispatched for execution",
+        }), 202
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Run scheduled task error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/scheduled-tasks/<int:task_id>/results", methods=["GET"])
+def get_scheduled_task_results(task_id: int):
+    """Get paginated result history for a scheduled task."""
+    try:
+        task = scheduled_tasks_db.get_task(task_id)
+        if not task:
+            return jsonify({"error": "Task not found"}), 404
+
+        limit = min(request.args.get("limit", 20, type=int), 100)
+        offset = request.args.get("offset", 0, type=int)
+        results = scheduled_tasks_db.get_results(task_id, limit=limit, offset=offset)
+        total = scheduled_tasks_db.get_result_count(task_id)
+
+        return jsonify({
+            "task_id": task_id,
+            "task_name": task["name"],
+            "results": results,
+            "count": len(results),
+            "total": total,
+            "has_more": (offset + limit) < total,
+        }), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Get scheduled task results error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
 
 
 # =============================================================================

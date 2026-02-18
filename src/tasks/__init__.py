@@ -76,6 +76,7 @@ app.conf.update(
     task_routes={
         "tasks.transcription.*": {"queue": "heavy"},
         "tasks.whatsapp.*": {"queue": "default"},
+        "tasks.scheduled.*": {"queue": "default"},
     },
 
     # Default queue for unrouted tasks
@@ -97,7 +98,17 @@ app.conf.update(
     include=[
         "tasks.whatsapp",
         "tasks.transcription",
+        "tasks.scheduled",
     ],
+
+    # Celery Beat periodic schedule — drives the Scheduled Insights feature.
+    # The checker polls SQLite every 60s for due tasks and dispatches them.
+    beat_schedule={
+        "check-scheduled-insights": {
+            "task": "tasks.scheduled.check_scheduled_insights",
+            "schedule": 60.0,  # every 60 seconds
+        },
+    },
 )
 
 

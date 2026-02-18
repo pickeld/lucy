@@ -1029,3 +1029,131 @@ async def fetch_all_entity_facts(
     except Exception as e:
         logger.error(f"Error fetching all entity facts: {e}")
     return {"facts": [], "available_keys": []}
+
+
+# =========================================================================
+# SCHEDULED INSIGHTS
+# =========================================================================
+
+async def fetch_scheduled_tasks(
+    include_disabled: bool = True,
+) -> dict[str, Any]:
+    """Fetch all scheduled insight tasks with their latest result."""
+    try:
+        resp = await _get_client().get(
+            "/scheduled-tasks",
+            params={"include_disabled": str(include_disabled).lower()},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        logger.error(f"Error fetching scheduled tasks: {e}")
+    return {"tasks": [], "count": 0}
+
+
+async def fetch_scheduled_task(task_id: int) -> dict[str, Any] | None:
+    """Fetch a single scheduled task with its latest result."""
+    try:
+        resp = await _get_client().get(
+            f"/scheduled-tasks/{task_id}", timeout=15,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        logger.error(f"Error fetching scheduled task {task_id}: {e}")
+    return None
+
+
+async def create_scheduled_task(data: dict[str, Any]) -> dict[str, Any]:
+    """Create a new scheduled insight task."""
+    try:
+        resp = await _get_client().post(
+            "/scheduled-tasks", json=data, timeout=15,
+        )
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error creating scheduled task: {e}")
+        return {"error": str(e)}
+
+
+async def update_scheduled_task(
+    task_id: int, data: dict[str, Any],
+) -> dict[str, Any]:
+    """Update a scheduled task's fields."""
+    try:
+        resp = await _get_client().put(
+            f"/scheduled-tasks/{task_id}", json=data, timeout=15,
+        )
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error updating scheduled task {task_id}: {e}")
+        return {"error": str(e)}
+
+
+async def delete_scheduled_task(task_id: int) -> dict[str, Any]:
+    """Delete a scheduled task and all its results."""
+    try:
+        resp = await _get_client().delete(
+            f"/scheduled-tasks/{task_id}", timeout=15,
+        )
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error deleting scheduled task {task_id}: {e}")
+        return {"error": str(e)}
+
+
+async def toggle_scheduled_task(task_id: int) -> dict[str, Any]:
+    """Toggle a scheduled task's enabled/disabled state."""
+    try:
+        resp = await _get_client().post(
+            f"/scheduled-tasks/{task_id}/toggle", timeout=15,
+        )
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error toggling scheduled task {task_id}: {e}")
+        return {"error": str(e)}
+
+
+async def run_scheduled_task(task_id: int) -> dict[str, Any]:
+    """Manually trigger a scheduled task execution."""
+    try:
+        resp = await _get_client().post(
+            f"/scheduled-tasks/{task_id}/run", timeout=15,
+        )
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error running scheduled task {task_id}: {e}")
+        return {"error": str(e)}
+
+
+async def fetch_scheduled_task_results(
+    task_id: int,
+    limit: int = 20,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Fetch paginated result history for a scheduled task."""
+    try:
+        resp = await _get_client().get(
+            f"/scheduled-tasks/{task_id}/results",
+            params={"limit": limit, "offset": offset},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        logger.error(f"Error fetching task results for {task_id}: {e}")
+    return {"results": [], "count": 0, "total": 0, "has_more": False}
+
+
+async def fetch_insight_templates() -> dict[str, Any]:
+    """Fetch built-in insight prompt templates."""
+    try:
+        resp = await _get_client().get(
+            "/scheduled-tasks/templates", timeout=10,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        logger.error(f"Error fetching insight templates: {e}")
+    return {"templates": []}

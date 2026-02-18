@@ -157,6 +157,32 @@ services:
       qdrant:
         condition: service_started
 
+  # Celery Beat — periodic task scheduler for Scheduled Insights
+  worker-beat:
+    build: .
+    container_name: lucy-worker-beat
+    restart: unless-stopped
+    logging: *default-logging
+    env_file:
+      - .env
+    environment:
+      REDIS_HOST: redis
+      QDRANT_HOST: qdrant
+      WAHA_BASE_URL: "http://waha:3000"
+      CELERY_BROKER_URL: "redis://redis:6379/1"
+      CELERY_RESULT_BACKEND: "redis://redis:6379/1"
+    command: >
+      celery -A tasks beat
+      --loglevel=info
+      --schedule=/tmp/celerybeat-schedule
+    volumes:
+      - ./src:/app/src
+      - ./.env:/app/.env:ro
+      - ./data:/app/data
+    depends_on:
+      redis:
+        condition: service_started
+
   ui:
     build: ./ui-reflex
     container_name: lucy-ui

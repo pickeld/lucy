@@ -431,6 +431,19 @@ def _bottom_section() -> rx.Component:
                 href="/recordings",
                 underline="none",
             ),
+            rx.link(
+                rx.flex(
+                    rx.icon("sparkles", size=16, class_name="text-sidebar-muted"),
+                    rx.text("Insights", class_name="text-sm text-sidebar-text ml-2"),
+                    align="center",
+                    class_name=(
+                        "px-3 py-2 rounded-lg hover:bg-sidebar-hover "
+                        "transition-colors duration-150 cursor-pointer"
+                    ),
+                ),
+                href="/insights",
+                underline="none",
+            ),
             direction="row",
             gap="0",
             wrap="wrap",
@@ -521,6 +534,27 @@ def _collapsed_bottom() -> rx.Component:
                     underline="none",
                 ),
                 content="Recordings",
+                side="right",
+            ),
+            justify="center",
+            class_name="py-0.5",
+        ),
+        # Insights icon
+        rx.flex(
+            rx.tooltip(
+                rx.link(
+                    rx.icon_button(
+                        rx.icon("sparkles", size=18),
+                        variant="ghost",
+                        class_name=(
+                            "text-sidebar-muted hover:text-sidebar-text "
+                            "hover:bg-sidebar-hover cursor-pointer !bg-transparent"
+                        ),
+                    ),
+                    href="/insights",
+                    underline="none",
+                ),
+                content="Insights",
                 side="right",
             ),
             justify="center",
