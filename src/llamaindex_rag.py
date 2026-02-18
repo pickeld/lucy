@@ -395,6 +395,17 @@ class ArchiveRetriever(BaseRetriever):
             results = self._rag.expand_document_chunks(results, max_total=self._k * 3)
         
         # =====================================================================
+        # Step 3b: Asset neighborhood expansion (parents, attachments, threads)
+        # =====================================================================
+        # When asset_neighborhood_expansion_enabled=true, follows structural
+        # edges (parent_asset_id, thread_id, attachment_of) to fetch related
+        # assets. This enables cross-channel coherence: a call transcript
+        # chunk can pull in the related email, an attachment pulls in its
+        # parent email body.
+        if results and _current_chars(results) < max_context_chars * 0.8:
+            results = self._rag.expand_asset_neighborhood(results, max_total=self._k * 3)
+        
+        # =====================================================================
         # Step 4: Per-chat recency supplement
         # =====================================================================
         # Fetch recent messages only from chats that appear in the
@@ -441,26 +452,49 @@ class ArchiveRetriever(BaseRetriever):
                 results = entity_nodes + results
                 logger.info(f"Injected {len(entity_nodes)} entity fact node(s)")
             
+            # Classify query intent to control graph expansion depth.
+            # Only expand identity relationships for family/team queries;
+            # only expand asset neighborhood for thread/attachment queries.
+            try:
+                from query_intent import (
+                    classify_query_intent,
+                    should_expand_relationships,
+                )
+                _intents = classify_query_intent(
+                    query_bundle.query_str,
+                    has_resolved_persons=bool(resolved_person_ids),
+                )
+                _expand_rels = should_expand_relationships(_intents)
+                logger.debug(f"Query intents: {[i.value for i in _intents]}")
+            except Exception:
+                _intents = []
+                _expand_rels = True  # Fallback: always expand (backward compat)
+            
             # Person-scoped supplementary search: when we identify specific
             # persons in the query, fetch additional results filtered by
             # person_ids for higher precision. This catches assets that
             # semantic search missed (e.g., different script spellings).
             #
-            # Also expands to related persons (family, colleagues) via the
-            # relationship graph, so "tell me about Shiran's family" finds
-            # David's and Mia's assets too.
+            # Relationship expansion is now intent-gated: only expands to
+            # related persons (family, colleagues) when the query intent
+            # indicates family/team context. This prevents over-expansion
+            # for simple person queries like "what did Shiran say?"
             if resolved_person_ids and _current_chars(results) < max_context_chars * 0.8:
                 # Expand person IDs via relationship graph (1 hop)
-                try:
-                    import entity_db as _edb
-                    expanded_ids = _edb.expand_person_ids_with_relationships(
-                        resolved_person_ids, max_depth=1,
-                    )
-                    if len(expanded_ids) > len(resolved_person_ids):
-                        logger.info(
-                            f"Relationship expansion: {resolved_person_ids} → {expanded_ids}"
+                # only when intent calls for it
+                if _expand_rels:
+                    try:
+                        import entity_db as _edb
+                        expanded_ids = _edb.expand_person_ids_with_relationships(
+                            resolved_person_ids, max_depth=1,
                         )
-                except Exception:
+                        if len(expanded_ids) > len(resolved_person_ids):
+                            logger.info(
+                                f"Relationship expansion: {resolved_person_ids} → {expanded_ids}"
+                            )
+                    except Exception:
+                        expanded_ids = resolved_person_ids
+                else:
                     expanded_ids = resolved_person_ids
                 
                 existing_ids = {nws.node.id_ for nws in results if nws.node}
@@ -3099,6 +3133,198 @@ class LlamaIndexRAG:
             
         except Exception as e:
             logger.debug(f"Document chunk expansion failed (non-critical): {e}")
+            return results
+    
+    def expand_asset_neighborhood(
+        self,
+        results: List[NodeWithScore],
+        max_total: int = 30,
+    ) -> List[NodeWithScore]:
+        """Expand results by fetching structurally related assets via the asset graph.
+        
+        Uses the asset_asset_edges table and Qdrant payload filters to fetch:
+        - Parent assets (follow parent_asset_id → get the parent email/document)
+        - Attachment children (follow attachment_of edges → get attachments)
+        - Thread siblings (filter by thread_id → get thread members)
+        
+        This enables cross-channel coherence: a call transcript chunk can pull
+        in the related email thread, and an email attachment can pull in its
+        parent email body.
+        
+        Only runs when ``asset_neighborhood_expansion_enabled`` is True in settings.
+        
+        Args:
+            results: Original search results to expand
+            max_total: Maximum total nodes to return (original + expanded)
+            
+        Returns:
+            Merged list of original + neighborhood results, deduplicated
+        """
+        if not results:
+            return results
+        
+        try:
+            from config import settings as _settings
+            if _settings.get("asset_neighborhood_expansion_enabled", "false").lower() != "true":
+                return results
+            
+            import entity_db
+            
+            existing_ids: set = set()
+            for nws in results:
+                if nws.node:
+                    existing_ids.add(nws.node.id_)
+            
+            budget = max_total - len(results)
+            if budget <= 0:
+                return results
+            
+            expanded_nodes: List[NodeWithScore] = []
+            
+            # Collect source_ids and structural pointers from results
+            parent_asset_ids: set = set()
+            thread_ids: set = set()
+            source_ids_to_expand: set = set()
+            
+            for nws in results:
+                if not nws.node:
+                    continue
+                meta = getattr(nws.node, "metadata", {})
+                
+                # Collect parent_asset_id for fetching parent assets
+                parent = meta.get("parent_asset_id", "")
+                if parent:
+                    parent_asset_ids.add(parent)
+                
+                # Collect thread_id for fetching thread siblings
+                tid = meta.get("thread_id", "")
+                if tid:
+                    thread_ids.add(tid)
+                
+                # Collect source_id for graph edge lookups
+                sid = meta.get("source_id", "")
+                if sid:
+                    source_ids_to_expand.add(sid)
+            
+            # 1. Fetch parent assets (e.g., parent email for an attachment)
+            for parent_aid in parent_asset_ids:
+                if budget <= 0:
+                    break
+                try:
+                    records, _ = self.qdrant_client.scroll(
+                        collection_name=self.COLLECTION_NAME,
+                        scroll_filter=Filter(must=[
+                            FieldCondition(key="asset_id", match=MatchValue(value=parent_aid))
+                        ]),
+                        limit=3,
+                        with_payload=True,
+                        with_vectors=False,
+                    )
+                    for record in records:
+                        record_id = str(record.id)
+                        if record_id in existing_ids:
+                            continue
+                        existing_ids.add(record_id)
+                        payload = record.payload or {}
+                        text = self._extract_text_from_payload(payload)
+                        if text:
+                            node = TextNode(
+                                text=text,
+                                metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
+                                id_=record_id,
+                            )
+                            expanded_nodes.append(NodeWithScore(node=node, score=0.40))
+                            budget -= 1
+                except Exception:
+                    continue
+            
+            # 2. Fetch attachment children via graph edges
+            for sid in source_ids_to_expand:
+                if budget <= 0:
+                    break
+                try:
+                    neighbors = entity_db.get_asset_neighbors(
+                        sid, relation_types=["attachment_of"], direction="incoming", limit=5
+                    )
+                    for neighbor in neighbors:
+                        nref = neighbor["neighbor_ref"]
+                        # Fetch from Qdrant by source_id
+                        records, _ = self.qdrant_client.scroll(
+                            collection_name=self.COLLECTION_NAME,
+                            scroll_filter=Filter(must=[
+                                FieldCondition(key="source_id", match=MatchValue(value=nref))
+                            ]),
+                            limit=2,
+                            with_payload=True,
+                            with_vectors=False,
+                        )
+                        for record in records:
+                            record_id = str(record.id)
+                            if record_id in existing_ids:
+                                continue
+                            existing_ids.add(record_id)
+                            payload = record.payload or {}
+                            text = self._extract_text_from_payload(payload)
+                            if text:
+                                node = TextNode(
+                                    text=text,
+                                    metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
+                                    id_=record_id,
+                                )
+                                expanded_nodes.append(NodeWithScore(node=node, score=0.38))
+                                budget -= 1
+                except Exception:
+                    continue
+            
+            # 3. Fetch thread siblings (recent messages from same thread)
+            for tid in thread_ids:
+                if budget <= 0:
+                    break
+                try:
+                    per_thread = min(3, budget)
+                    records, _ = self.qdrant_client.scroll(
+                        collection_name=self.COLLECTION_NAME,
+                        scroll_filter=Filter(must=[
+                            FieldCondition(key="thread_id", match=MatchValue(value=tid))
+                        ]),
+                        limit=per_thread + len(existing_ids),  # Over-fetch to account for dedup
+                        with_payload=True,
+                        with_vectors=False,
+                        order_by=OrderBy(key="timestamp", direction=Direction.DESC),
+                    )
+                    added_for_thread = 0
+                    for record in records:
+                        if added_for_thread >= per_thread or budget <= 0:
+                            break
+                        record_id = str(record.id)
+                        if record_id in existing_ids:
+                            continue
+                        existing_ids.add(record_id)
+                        payload = record.payload or {}
+                        text = self._extract_text_from_payload(payload)
+                        if text:
+                            node = TextNode(
+                                text=text,
+                                metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
+                                id_=record_id,
+                            )
+                            expanded_nodes.append(NodeWithScore(node=node, score=0.35))
+                            added_for_thread += 1
+                            budget -= 1
+                except Exception:
+                    continue
+            
+            if expanded_nodes:
+                logger.info(
+                    f"Asset neighborhood expansion added {len(expanded_nodes)} nodes "
+                    f"({len(parent_asset_ids)} parents, {len(thread_ids)} threads)"
+                )
+                results = results + expanded_nodes
+            
+            return results[:max_total]
+        
+        except Exception as e:
+            logger.debug(f"Asset neighborhood expansion failed (non-critical): {e}")
             return results
     
     def search(
