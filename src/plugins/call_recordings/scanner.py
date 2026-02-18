@@ -172,11 +172,13 @@ def _parse_filename_metadata(filename: str) -> Dict[str, Optional[str]]:
             contact_name = identifier.replace("_", " ").strip()
             result["participants"] = contact_name
 
-        # Parse DDMMYY → YYYY-MM-DD
+        # Parse YYMMDD → YYYY-MM-DD
+        # Samsung/Android call recording filenames use YYMMDD format
+        # e.g., "260209" = 2026-02-09 (Feb 9, 2026)
         try:
-            dd = int(date_raw[0:2])
+            yy = int(date_raw[0:2])
             mm = int(date_raw[2:4])
-            yy = int(date_raw[4:6])
+            dd = int(date_raw[4:6])
             # Two-digit year: 00-49 → 2000-2049, 50-99 → 1950-1999
             yyyy = 2000 + yy if yy < 50 else 1900 + yy
             result["date_str"] = f"{yyyy:04d}-{mm:02d}-{dd:02d}"

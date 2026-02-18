@@ -691,10 +691,48 @@ class AppState(rx.State):
         for f in files:
             enriched = dict(f)
 
-            # Parse date and time from modified_at
-            mod_at = f.get("modified_at", "") or ""
-            enriched["date"] = mod_at[:10] if len(mod_at) >= 10 else ""
-            enriched["time"] = mod_at[11:16] if len(mod_at) >= 16 else ""
+            # Parse date and time — prefer re-parsing from filename for accuracy
+            # (existing DB records may have wrong dates from the old DDMMYY parser)
+            filename = f.get("filename", "") or ""
+            date_str = ""
+            time_str = ""
+
+            # Try to extract date/time from Call_recording filename (YYMMDD_HHMMSS)
+            fn_match = _re.search(
+                r"(?:call[_\s-]*recording[_\s-]*.+?)[_\s-](\d{6})[_\s-](\d{6})\.",
+                filename,
+                _re.IGNORECASE,
+            )
+            if fn_match:
+                raw_date = fn_match.group(1)  # YYMMDD
+                raw_time = fn_match.group(2)  # HHMMSS
+                try:
+                    yy = int(raw_date[0:2])
+                    mm = int(raw_date[2:4])
+                    dd = int(raw_date[4:6])
+                    yyyy = 2000 + yy if yy < 50 else 1900 + yy
+                    date_str = f"{yyyy:04d}-{mm:02d}-{dd:02d}"
+                    time_str = f"{raw_time[0:2]}:{raw_time[2:4]}"
+                except (ValueError, IndexError):
+                    pass
+
+            # Fallback to modified_at or created_at from DB
+            if not date_str:
+                mod_at = (f.get("modified_at", "") or "").strip()
+                if not mod_at or len(mod_at) < 10:
+                    mod_at = (f.get("created_at", "") or "").strip()
+                date_str = mod_at[:10] if len(mod_at) >= 10 else ""
+                if len(mod_at) >= 16:
+                    tp = mod_at[11:16]
+                    time_str = tp if ":" in tp else ""
+
+            # Convert YYYY-MM-DD → DD/MM/YYYY for display
+            if date_str and len(date_str) == 10 and date_str[4] == "-":
+                parts = date_str.split("-")
+                enriched["date"] = f"{parts[2]}/{parts[1]}/{parts[0]}"
+            else:
+                enriched["date"] = date_str
+            enriched["time"] = time_str
 
             # Format duration as M:SS
             try:
@@ -2238,12 +2276,10 @@ class AppState(rx.State):
         await self._load_recording_files()
 
     async def retry_transcription(self, content_hash: str):
-        """Trigger transcription for a recording (push-based wait).
+        """Trigger transcription for a recording (fire-and-forget).
 
-        Sends the transcription request to the backend, then blocks on
-        a push notification from the Celery worker via Redis.  The Flask
-        ``/wait`` endpoint uses BLPOP so there's no polling — the response
-        arrives instantly when the worker finishes.
+        Sends the transcription request to the backend and returns
+        immediately. The user can click Refresh to check progress.
         """
         self.call_recordings_scan_message = "⏳ Transcription queued…"
         yield
@@ -2251,21 +2287,17 @@ class AppState(rx.State):
         result = await api_client.transcribe_recording(content_hash)
         if "error" in result and result.get("status") != "queued":
             self.call_recordings_scan_message = f"❌ {result['error']}"
-            await self._load_recording_files()
-            return
-
-        self.call_recordings_scan_message = "⏳ Transcription in progress…"
+        else:
+            self.call_recordings_scan_message = (
+                "⏳ Transcription in progress — click Refresh to check status"
+            )
         await self._load_recording_files()
-        yield
-
-        # Wait for push notification from Celery worker (via Redis BLPOP)
-        await self._wait_for_transcription(content_hash)
 
     async def restart_stuck_transcription(self, content_hash: str):
-        """Restart a stuck transcription (push-based wait).
+        """Restart a stuck transcription (fire-and-forget).
 
-        Resets the file status and re-queues transcription, then waits
-        for the push notification from the Celery worker.
+        Resets the file status and re-queues transcription, then
+        returns immediately.
         """
         self.call_recordings_scan_message = "⏳ Restarting transcription…"
         yield
@@ -2273,15 +2305,11 @@ class AppState(rx.State):
         result = await api_client.restart_recording(content_hash)
         if "error" in result and result.get("status") != "restarted":
             self.call_recordings_scan_message = f"❌ {result['error']}"
-            await self._load_recording_files()
-            return
-
-        self.call_recordings_scan_message = "⏳ Transcription in progress…"
+        else:
+            self.call_recordings_scan_message = (
+                "⏳ Transcription restarted — click Refresh to check status"
+            )
         await self._load_recording_files()
-        yield
-
-        # Wait for push notification from Celery worker (via Redis BLPOP)
-        await self._wait_for_transcription(content_hash)
 
     async def _wait_for_transcription(self, content_hash: str):
         """Block until the Celery worker signals transcription completion.
