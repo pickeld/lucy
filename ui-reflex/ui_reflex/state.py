@@ -2297,15 +2297,41 @@ class AppState(rx.State):
         await self._load_recording_files()
 
     async def approve_recording(self, content_hash: str):
-        """Approve a transcribed recording and index it into Qdrant."""
-        self.call_recordings_scan_message = "⏳ Approving & indexing…"
+        """Approve a transcribed recording: apply speaker names then index.
+
+        Automatically applies speaker label assignments before approving,
+        so the indexed transcript has the correct names (not Speaker A/B).
+        """
+        self.call_recordings_scan_message = "⏳ Applying speaker names & approving…"
         yield  # Show immediate feedback before the (potentially slow) API call
+
+        # Auto-apply speaker names if set (from expanded row or auto-assigned)
+        speaker_a = ""
+        speaker_b = ""
+        if self.recordings_expanded_hash == content_hash:
+            speaker_a = self.recordings_speaker_a.strip()
+            speaker_b = self.recordings_speaker_b.strip()
+        else:
+            # Use stored labels or auto-assign from my_name + contact
+            for f in self.call_recordings_files:
+                if f.get("content_hash") == content_hash:
+                    speaker_a = f.get("speaker_a_label", "") or self.recordings_my_name or "Me"
+                    speaker_b = f.get("speaker_b_label", "") or f.get("contact_name", "") or "Unknown"
+                    break
+
+        if speaker_a or speaker_b:
+            label_result = await api_client.update_speaker_labels(
+                content_hash, speaker_a=speaker_a, speaker_b=speaker_b,
+            )
+            if "error" in label_result:
+                self.call_recordings_scan_message = f"⚠️ Speaker names failed: {label_result['error']} — approving anyway"
+                yield
 
         result = await api_client.approve_recording(content_hash)
         if "error" in result:
             self.call_recordings_scan_message = f"❌ {result['error']}"
         else:
-            self.call_recordings_scan_message = "✅ Recording approved and indexed"
+            self.call_recordings_scan_message = "✅ Recording approved and indexed (with speaker names)"
             self.rag_stats = await api_client.get_rag_stats()
         await self._load_recording_files()
 

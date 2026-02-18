@@ -15,9 +15,13 @@ from ..state import AppState
 
 
 def recordings_page() -> rx.Component:
-    """Full recordings management page with Active / Approved tabs."""
-    return rx.box(
-        rx.flex(
+    """Full recordings management page with Active / Approved tabs.
+
+    Layout: header + tabs are fixed at top; only the table scrolls.
+    """
+    return rx.flex(
+        # Fixed header area (no scroll)
+        rx.box(
             _header(),
             # Status / scan message
             rx.cond(
@@ -31,67 +35,68 @@ def recordings_page() -> rx.Component:
                 ),
                 rx.fragment(),
             ),
-            # Tabs: Active (pending/transcribing/transcribed/error) | Approved
-            rx.tabs.root(
-                rx.tabs.list(
-                    rx.tabs.trigger(
-                        rx.flex(
-                            rx.icon("file-audio", size=14),
-                            rx.text("Active"),
-                            rx.box(
-                                rx.text(
-                                    AppState.recordings_status_counts["pending"],
-                                    class_name="text-xs font-bold",
-                                ),
-                                class_name="px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded-full min-w-[20px] text-center",
+            # Tab buttons (fixed)
+            rx.flex(
+                rx.button(
+                    rx.flex(
+                        rx.icon("file-audio", size=14),
+                        rx.text("Active"),
+                        rx.box(
+                            rx.text(
+                                AppState.recordings_status_counts["pending"],
+                                class_name="text-xs font-bold",
                             ),
-                            align="center",
-                            gap="2",
+                            class_name="px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded-full min-w-[20px] text-center",
                         ),
-                        value="active",
+                        align="center",
+                        gap="2",
                     ),
-                    rx.tabs.trigger(
-                        rx.flex(
-                            rx.icon("circle-check", size=14),
-                            rx.text("Approved"),
-                            rx.box(
-                                rx.text(
-                                    AppState.recordings_status_counts["approved"],
-                                    class_name="text-xs font-bold",
-                                ),
-                                class_name="px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full min-w-[20px] text-center",
-                            ),
-                            align="center",
-                            gap="2",
-                        ),
-                        value="approved",
+                    on_click=AppState.set_recordings_tab("active"),
+                    variant=rx.cond(
+                        AppState.recordings_tab == "active",
+                        "solid",
+                        "outline",
                     ),
                     size="2",
                 ),
-                rx.tabs.content(
-                    rx.box(
-                        _filter_toolbar(),
-                        _recordings_table(),
-                        class_name="pt-4",
+                rx.button(
+                    rx.flex(
+                        rx.icon("circle-check", size=14),
+                        rx.text("Approved"),
+                        rx.box(
+                            rx.text(
+                                AppState.recordings_status_counts["approved"],
+                                class_name="text-xs font-bold",
+                            ),
+                            class_name="px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full min-w-[20px] text-center",
+                        ),
+                        align="center",
+                        gap="2",
                     ),
-                    value="active",
-                ),
-                rx.tabs.content(
-                    rx.box(
-                        _filter_toolbar(),
-                        _recordings_table(),
-                        class_name="pt-4",
+                    on_click=AppState.set_recordings_tab("approved"),
+                    variant=rx.cond(
+                        AppState.recordings_tab == "approved",
+                        "solid",
+                        "outline",
                     ),
-                    value="approved",
+                    size="2",
                 ),
-                value=AppState.recordings_tab,
-                on_change=AppState.set_recordings_tab,
-                default_value="active",
+                gap="2",
+                class_name="mt-2",
             ),
-            direction="column",
-            class_name="max-w-[1100px] mx-auto w-full px-4 py-6",
+            class_name="shrink-0 max-w-[1100px] mx-auto w-full px-4 pt-6",
         ),
-        class_name="h-full overflow-y-auto chat-scroll",
+        # Scrollable table area (takes remaining height)
+        rx.box(
+            rx.box(
+                _filter_toolbar(),
+                _recordings_table(),
+                class_name="max-w-[1100px] mx-auto w-full px-4 pb-6",
+            ),
+            class_name="flex-1 overflow-y-auto chat-scroll",
+        ),
+        direction="column",
+        class_name="h-full overflow-hidden",
     )
 
 
@@ -674,13 +679,10 @@ def _detail_panel(item: dict) -> rx.Component:
                         gap="2",
                         class_name="mb-2",
                     ),
-                    # Apply button
-                    rx.button(
-                        rx.icon("check", size=14, class_name="mr-1"),
-                        "Apply Names",
-                        on_click=AppState.save_speaker_labels(item["content_hash"]),
-                        size="2",
-                        class_name="bg-green-500 text-white hover:bg-green-600 w-full",
+                    # Hint: names are applied automatically on approve
+                    rx.text(
+                        "💡 Speaker names are applied automatically when you approve",
+                        class_name="text-xs text-gray-400 italic text-center",
                     ),
                     class_name=(
                         "bg-gray-50 rounded-lg border border-gray-200 p-3 mb-3"
