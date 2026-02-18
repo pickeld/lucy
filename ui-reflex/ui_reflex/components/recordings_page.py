@@ -645,7 +645,20 @@ def _detail_panel(item: dict) -> rx.Component:
                         ),
                         align="center",
                         gap="2",
-                        class_name="mb-2",
+                        class_name="mb-1",
+                    ),
+                    # Swap button
+                    rx.flex(
+                        rx.icon_button(
+                            rx.icon("arrow-up-down", size=14),
+                            on_click=AppState.swap_speakers,
+                            variant="ghost",
+                            size="1",
+                            class_name="text-gray-400 hover:text-accent",
+                            title="Swap Speaker A ↔ B",
+                        ),
+                        justify="center",
+                        class_name="mb-1",
                     ),
                     # Speaker B
                     rx.flex(

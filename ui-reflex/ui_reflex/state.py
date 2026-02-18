@@ -2378,6 +2378,12 @@ class AppState(rx.State):
                         self.recordings_speaker_b = contact or "Unknown"
                     break
 
+    def swap_speakers(self):
+        """Swap Speaker A and Speaker B values."""
+        a = self.recordings_speaker_a
+        self.recordings_speaker_a = self.recordings_speaker_b
+        self.recordings_speaker_b = a
+
     async def save_speaker_labels(self, content_hash: str):
         """Save speaker name assignments and rename in transcript text."""
         speaker_a = self.recordings_speaker_a.strip()
