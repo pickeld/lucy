@@ -1951,12 +1951,11 @@ class AppState(rx.State):
                 if errors:
                     msg += f" — Errors: {'; '.join(errors)}"
                 self.call_recordings_upload_message = msg
-                # Refresh the files table and auto-poll transcription progress
-                self.call_recordings_scan_message = "⏳ Transcription in progress…"
+                # Refresh the files table — transcription runs in background
+                self.call_recordings_scan_message = (
+                    "⏳ Transcription in progress — status updates automatically"
+                )
                 await self._load_recording_files()
-                yield
-                async for _ in self._poll_transcription_status():
-                    yield
         except Exception as e:
             self.call_recordings_upload_message = f"❌ Upload error: {str(e)}"
 
@@ -2042,13 +2041,12 @@ class AppState(rx.State):
         await self._load_recording_files()
 
     async def retry_transcription(self, content_hash: str):
-        """Trigger transcription for a recording with auto-polling.
+        """Trigger transcription for a recording (push-based wait).
 
-        Sends the transcription request to the backend, then polls
-        every few seconds until the file leaves 'transcribing' state
-        (or a timeout is reached).  Uses ``yield`` + ``asyncio.sleep()``
-        to release the Reflex state lock between polls so the UI stays
-        responsive.
+        Sends the transcription request to the backend, then blocks on
+        a push notification from the Celery worker via Redis.  The Flask
+        ``/wait`` endpoint uses BLPOP so there's no polling — the response
+        arrives instantly when the worker finishes.
         """
         self.call_recordings_scan_message = "⏳ Transcription queued…"
         yield
@@ -2063,15 +2061,14 @@ class AppState(rx.State):
         await self._load_recording_files()
         yield
 
-        # Poll until transcription completes (3s intervals, ~3 min max)
-        async for _ in self._poll_transcription_status():
-            yield
+        # Wait for push notification from Celery worker (via Redis BLPOP)
+        await self._wait_for_transcription(content_hash)
 
     async def restart_stuck_transcription(self, content_hash: str):
-        """Restart a stuck transcription with auto-polling.
+        """Restart a stuck transcription (push-based wait).
 
-        Resets the file status and re-queues transcription, then polls
-        until the transcription completes or times out.
+        Resets the file status and re-queues transcription, then waits
+        for the push notification from the Celery worker.
         """
         self.call_recordings_scan_message = "⏳ Restarting transcription…"
         yield
@@ -2086,42 +2083,33 @@ class AppState(rx.State):
         await self._load_recording_files()
         yield
 
-        # Poll until transcription completes (3s intervals, ~3 min max)
-        async for _ in self._poll_transcription_status():
-            yield
+        # Wait for push notification from Celery worker (via Redis BLPOP)
+        await self._wait_for_transcription(content_hash)
 
-    async def _poll_transcription_status(self):
-        """Poll the recording files list until no files are transcribing.
+    async def _wait_for_transcription(self, content_hash: str):
+        """Block until the Celery worker signals transcription completion.
 
-        Yields after each poll so the caller can ``yield`` to release the
-        Reflex state lock and push UI updates to the browser.
-
-        Polls every 3 seconds for up to ~3 minutes (60 iterations).
+        Uses the Flask ``/wait`` endpoint which does a Redis BLPOP —
+        truly push-based, no polling.  Falls back gracefully on timeout.
         """
-        import asyncio
-
-        _POLL_INTERVAL = 3    # seconds between polls
-        _MAX_POLLS = 60       # 60 × 3s = 3 minutes
-
-        for i in range(_MAX_POLLS):
-            await asyncio.sleep(_POLL_INTERVAL)
-            has_transcribing = await self._load_recording_files()
-            if has_transcribing:
-                elapsed = (i + 1) * _POLL_INTERVAL
-                self.call_recordings_scan_message = (
-                    f"⏳ Transcription in progress… ({elapsed}s)"
-                )
-            else:
-                self.call_recordings_scan_message = "✅ Transcription complete"
-                yield  # final UI update
-                return
-            yield  # release state lock, push UI update
-
-        # Timeout — stop polling but leave message
-        self.call_recordings_scan_message = (
-            "⏳ Transcription still running — use Refresh to check"
+        wait_result = await api_client.wait_for_transcription(
+            content_hash, timeout=300,
         )
-        yield
+        # Refresh the file list with the final state
+        await self._load_recording_files()
+
+        status = wait_result.get("status", "unknown")
+        if status == "transcribed":
+            self.call_recordings_scan_message = "✅ Transcription complete"
+        elif status == "error":
+            error = wait_result.get("error", "")
+            self.call_recordings_scan_message = f"❌ Transcription failed{': ' + error if error else ''}"
+        elif status == "timeout":
+            self.call_recordings_scan_message = (
+                "⏳ Transcription still running — use Refresh to check"
+            )
+        else:
+            self.call_recordings_scan_message = f"✅ Transcription finished ({status})"
 
     async def save_recording_metadata(self, content_hash: str, field: str, value: str):
         """Save an edited metadata field for a recording."""
