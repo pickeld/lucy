@@ -1893,6 +1893,107 @@ def _get_mini_persons(conn: sqlite3.Connection, ids: List[int]) -> List[Dict[str
 # Cleanup — remove garbage persons
 # ---------------------------------------------------------------------------
 
+def get_graph_data(limit: int = 100) -> Dict[str, Any]:
+    """Build a graph representation of persons, relationships, and asset counts.
+
+    Returns nodes (persons) and edges (relationships) suitable for
+    rendering with a graph visualization library (e.g. cytoscape.js).
+
+    Each node includes:
+    - id, label (canonical_name), facts count, aliases count
+    - asset_counts: dict of asset_type → count from person_assets
+
+    Each edge includes:
+    - source, target, relationship_type, confidence
+
+    Args:
+        limit: Max persons to include
+
+    Returns:
+        Dict with 'nodes' list and 'edges' list
+    """
+    conn = _get_connection()
+    try:
+        # Fetch persons
+        persons = conn.execute(
+            "SELECT id, canonical_name, phone, is_group FROM persons "
+            "WHERE is_group = FALSE ORDER BY canonical_name LIMIT ?",
+            (limit,),
+        ).fetchall()
+
+        nodes = []
+        person_ids_in_graph: set = set()
+
+        for p in persons:
+            pid = p["id"]
+            person_ids_in_graph.add(pid)
+
+            # Count aliases
+            alias_count = conn.execute(
+                "SELECT COUNT(*) as cnt FROM person_aliases WHERE person_id = ?",
+                (pid,),
+            ).fetchone()["cnt"]
+
+            # Count facts
+            fact_count = conn.execute(
+                "SELECT COUNT(*) as cnt FROM person_facts WHERE person_id = ?",
+                (pid,),
+            ).fetchone()["cnt"]
+
+            # Asset counts by type
+            asset_rows = conn.execute(
+                """SELECT asset_type, COUNT(*) as cnt
+                   FROM person_assets WHERE person_id = ?
+                   GROUP BY asset_type""",
+                (pid,),
+            ).fetchall()
+            asset_counts = {r["asset_type"]: r["cnt"] for r in asset_rows}
+            total_assets = sum(asset_counts.values())
+
+            nodes.append({
+                "id": pid,
+                "label": p["canonical_name"],
+                "phone": p["phone"] or "",
+                "alias_count": alias_count,
+                "fact_count": fact_count,
+                "asset_counts": asset_counts,
+                "total_assets": total_assets,
+            })
+
+        # Fetch relationships between persons in the graph
+        edges = []
+        if person_ids_in_graph:
+            placeholders = ",".join("?" for _ in person_ids_in_graph)
+            ids_list = list(person_ids_in_graph)
+            rel_rows = conn.execute(
+                f"""SELECT r.person_id, r.related_person_id,
+                           r.relationship_type, r.confidence,
+                           p1.canonical_name AS source_name,
+                           p2.canonical_name AS target_name
+                    FROM person_relationships r
+                    JOIN persons p1 ON p1.id = r.person_id
+                    JOIN persons p2 ON p2.id = r.related_person_id
+                    WHERE r.person_id IN ({placeholders})
+                      AND r.related_person_id IN ({placeholders})""",
+                ids_list + ids_list,
+            ).fetchall()
+
+            for r in rel_rows:
+                conf = r["confidence"]
+                edges.append({
+                    "source": r["source_name"],
+                    "target": r["target_name"],
+                    "source_id": r["person_id"],
+                    "target_id": r["related_person_id"],
+                    "relationship_type": r["relationship_type"],
+                    "confidence": f"{int(conf * 100)}%" if conf else "",
+                })
+
+        return {"nodes": nodes, "edges": edges}
+    finally:
+        conn.close()
+
+
 def cleanup_garbage_persons() -> Dict[str, Any]:
     """Remove persons with invalid/garbage names from the entity store.
 

@@ -1031,6 +1031,19 @@ async def fetch_all_entity_facts(
     return {"facts": [], "available_keys": []}
 
 
+async def fetch_entity_graph(limit: int = 100) -> dict[str, Any]:
+    """Fetch person-relationship-asset graph data for visualization."""
+    try:
+        resp = await _get_client().get(
+            "/entities/graph", params={"limit": limit}, timeout=15,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        logger.error(f"Error fetching entity graph: {e}")
+    return {"nodes": [], "edges": []}
+
+
 # =========================================================================
 # SCHEDULED INSIGHTS
 # =========================================================================

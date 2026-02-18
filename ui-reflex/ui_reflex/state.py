@@ -304,6 +304,11 @@ class AppState(rx.State):
     entity_merge_candidates: list[dict[str, Any]] = []
     entity_candidates_loading: bool = False
 
+    # --- Entity graph ---
+    entity_graph_nodes: list[dict[str, Any]] = []
+    entity_graph_edges: list[dict[str, Any]] = []
+    entity_graph_loading: bool = False
+
     # --- Scheduled Insights ---
     insights_tasks: list[dict[str, Any]] = []
     insights_loading: bool = False
@@ -3178,6 +3183,15 @@ class AppState(rx.State):
             await self._load_entity_list()
         else:
             self.entity_save_message = result.get("message", "No change needed")
+
+    async def load_entity_graph(self):
+        """Fetch person-relationship-asset graph data."""
+        self.entity_graph_loading = True
+        yield
+        data = await api_client.fetch_entity_graph(limit=100)
+        self.entity_graph_nodes = data.get("nodes", [])  # type: ignore[assignment]
+        self.entity_graph_edges = data.get("edges", [])  # type: ignore[assignment]
+        self.entity_graph_loading = False
 
     async def load_merge_candidates(self):
         """Fetch merge suggestions from the backend."""

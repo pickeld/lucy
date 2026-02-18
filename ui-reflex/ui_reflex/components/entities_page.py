@@ -50,11 +50,13 @@ def entities_page() -> rx.Component:
                     rx.tabs.trigger("👤 People", value="people"),
                     rx.tabs.trigger("📋 All Facts", value="facts"),
                     rx.tabs.trigger("🔀 Suggestions", value="suggestions"),
+                    rx.tabs.trigger("🕸️ Graph", value="graph"),
                     size="2",
                 ),
                 rx.tabs.content(_people_tab(), value="people", class_name="pt-4"),
                 rx.tabs.content(_facts_tab(), value="facts", class_name="pt-4"),
                 rx.tabs.content(_suggestions_tab(), value="suggestions", class_name="pt-4"),
+                rx.tabs.content(_graph_tab(), value="graph", class_name="pt-4"),
                 value=AppState.entity_tab,
                 on_change=AppState.set_entity_tab,
                 default_value="people",
@@ -1282,4 +1284,221 @@ def _suggestion_card(candidate: dict) -> rx.Component:
             "px-4 py-3 border border-purple-200 bg-purple-50 "
             "rounded-lg hover:border-purple-300 transition-colors"
         ),
+    )
+
+
+# =========================================================================
+# TAB: GRAPH VIEW
+# =========================================================================
+
+
+def _graph_tab() -> rx.Component:
+    """Graph visualization tab — persons, relationships, and asset counts."""
+    return rx.flex(
+        # Controls
+        rx.flex(
+            rx.button(
+                rx.icon("network", size=14, class_name="mr-1"),
+                "Load Graph",
+                on_click=AppState.load_entity_graph,
+                loading=AppState.entity_graph_loading,
+                size="2",
+                class_name="bg-blue-500 text-white hover:bg-blue-600",
+            ),
+            rx.text(
+                "Shows person relationships and linked asset counts",
+                class_name="text-xs text-gray-400 italic ml-2",
+            ),
+            gap="2",
+            align="center",
+            class_name="mb-4",
+        ),
+        # Graph content
+        rx.cond(
+            AppState.entity_graph_nodes.length() > 0,  # type: ignore[union-attr]
+            rx.flex(
+                # Stats summary
+                rx.flex(
+                    _graph_stat("👤", AppState.entity_graph_nodes.length(), "Persons"),  # type: ignore[union-attr]
+                    _graph_stat("🔗", AppState.entity_graph_edges.length(), "Relationships"),  # type: ignore[union-attr]
+                    gap="3",
+                    class_name="mb-4",
+                ),
+                # Relationship edges
+                rx.cond(
+                    AppState.entity_graph_edges.length() > 0,  # type: ignore[union-attr]
+                    _section_card(
+                        "Relationships", "link",
+                        rx.box(
+                            rx.foreach(
+                                AppState.entity_graph_edges,
+                                _graph_edge_row,
+                            ),
+                        ),
+                    ),
+                    rx.fragment(),
+                ),
+                # Person nodes grid with asset counts
+                rx.box(
+                    rx.foreach(
+                        AppState.entity_graph_nodes,
+                        _graph_person_node,
+                    ),
+                    class_name=(
+                        "grid gap-3"
+                        " grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
+                    ),
+                ),
+                direction="column",
+                gap="3",
+            ),
+            rx.cond(
+                AppState.entity_graph_loading,
+                rx.flex(
+                    rx.spinner(size="3"),
+                    rx.text("Loading graph…", class_name="text-sm text-gray-400 ml-2"),
+                    align="center",
+                    justify="center",
+                    class_name="py-12",
+                ),
+                rx.box(
+                    rx.flex(
+                        rx.icon("network", size=40, class_name="text-gray-300"),
+                        rx.text(
+                            "No graph data loaded",
+                            class_name="text-gray-400 mt-2",
+                        ),
+                        rx.text(
+                            "Click 'Load Graph' to visualize person relationships and assets",
+                            class_name="text-sm text-gray-300 mt-1",
+                        ),
+                        direction="column",
+                        align="center",
+                        class_name="py-16",
+                    ),
+                ),
+            ),
+        ),
+        direction="column",
+    )
+
+
+def _graph_stat(icon: str, value: rx.Var, label: str) -> rx.Component:
+    """Stat badge for graph summary."""
+    return rx.flex(
+        rx.text(icon, class_name="text-sm"),
+        rx.text(value, class_name="text-sm font-semibold text-gray-700"),
+        rx.text(label, class_name="text-xs text-gray-400"),
+        align="center",
+        gap="1",
+        class_name="bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5",
+    )
+
+
+def _graph_person_node(node: dict) -> rx.Component:
+    """Person node card with asset count badges."""
+    return rx.box(
+        # Person name
+        rx.text(
+            node["label"],
+            class_name="text-sm font-semibold text-gray-800 truncate",
+        ),
+        # Phone if available
+        rx.cond(
+            node["phone"] != "",
+            rx.text(
+                node["phone"],
+                class_name="text-xs text-gray-400 truncate mt-0.5",
+            ),
+            rx.fragment(),
+        ),
+        # Metadata stats row
+        rx.flex(
+            rx.flex(
+                rx.icon("file-text", size=12, class_name="text-gray-400"),
+                rx.text(
+                    node["fact_count"],
+                    class_name="text-xs text-gray-500",
+                ),
+                rx.text("facts", class_name="text-xs text-gray-400"),
+                align="center",
+                gap="1",
+            ),
+            rx.flex(
+                rx.icon("tag", size=12, class_name="text-gray-400"),
+                rx.text(
+                    node["alias_count"],
+                    class_name="text-xs text-gray-500",
+                ),
+                rx.text("aliases", class_name="text-xs text-gray-400"),
+                align="center",
+                gap="1",
+            ),
+            gap="3",
+            class_name="mt-2",
+        ),
+        # Asset count badges
+        rx.cond(
+            node["total_assets"].to(int) > 0,
+            rx.flex(
+                rx.flex(
+                    rx.icon("database", size=12, class_name="text-blue-400"),
+                    rx.text(
+                        node["total_assets"],
+                        class_name="text-xs font-semibold text-blue-600",
+                    ),
+                    rx.text("assets", class_name="text-xs text-blue-400"),
+                    align="center",
+                    gap="1",
+                ),
+                gap="2",
+                class_name=(
+                    "mt-2 pt-2 border-t border-gray-100"
+                ),
+            ),
+            rx.fragment(),
+        ),
+        on_click=AppState.select_entity(node["id"]),
+        class_name=(
+            "settings-card cursor-pointer hover:border-blue-400 "
+            "transition-all duration-150 hover:-translate-y-0.5"
+        ),
+    )
+
+
+def _graph_edge_row(edge: dict) -> rx.Component:
+    """Relationship edge as a visual row with source → type → target."""
+    return rx.flex(
+        rx.text(
+            edge["source"],
+            class_name="text-sm font-medium text-gray-700 min-w-[80px]",
+        ),
+        rx.flex(
+            rx.box(class_name="w-6 h-px bg-gray-300"),
+            rx.text(
+                edge["relationship_type"],
+                class_name=(
+                    "text-xs text-purple-600 bg-purple-50 "
+                    "px-2 py-0.5 rounded-full border border-purple-200"
+                ),
+            ),
+            rx.icon("arrow-right", size=14, class_name="text-gray-400"),
+            align="center",
+            gap="1",
+        ),
+        rx.text(
+            edge["target"],
+            class_name="text-sm font-medium text-gray-700 min-w-[80px]",
+        ),
+        rx.cond(
+            edge["confidence"] != "",
+            rx.text(
+                edge["confidence"],
+                class_name="text-xs text-gray-400 ml-auto",
+            ),
+            rx.fragment(),
+        ),
+        align="center",
+        gap="2",
+        class_name="px-4 py-2 border-b border-gray-100 last:border-b-0 hover:bg-gray-50",
     )

@@ -1331,6 +1331,28 @@ def merge_entities():
         if "error" in result:
             return jsonify({"error": result["error"]}), 400
         
+        # Post-merge: update person_ids in Qdrant payloads so that
+        # points referencing the now-deleted source persons get re-pointed
+        # to the surviving target person.
+        try:
+            from llamaindex_rag import get_rag
+            rag = get_rag()
+            if rag:
+                qdrant_result = rag.update_person_ids_after_merge(
+                    target_id=int(target_id),
+                    source_ids=[int(s) for s in source_ids],
+                )
+                result["qdrant_update"] = qdrant_result
+        except Exception as e:
+            logger.debug(f"Post-merge Qdrant update failed (non-critical): {e}")
+        
+        # Clear person_resolver caches (merged persons have new IDs)
+        try:
+            from person_resolver import clear_caches
+            clear_caches()
+        except Exception:
+            pass
+        
         result["stats"] = entity_db.get_stats()
         return jsonify({"status": "ok", **result}), 200
     except Exception as e:
@@ -1352,6 +1374,26 @@ def merge_candidates():
     except Exception as e:
         trace = traceback.format_exc()
         logger.error(f"Merge candidates error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
+@app.route("/entities/graph", methods=["GET"])
+def entity_graph():
+    """Get graph data for person-relationship-asset visualization.
+    
+    Returns nodes (persons with asset counts) and edges (relationships)
+    suitable for rendering with cytoscape.js or similar.
+    
+    Query params:
+        limit: Max persons to include (default: 100)
+    """
+    try:
+        limit = request.args.get("limit", 100, type=int)
+        graph = entity_db.get_graph_data(limit=limit)
+        return jsonify(graph), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Entity graph error: {e}\n{trace}")
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 

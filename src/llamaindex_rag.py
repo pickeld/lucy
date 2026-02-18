@@ -2507,6 +2507,81 @@ class LlamaIndexRAG:
             logger.debug(f"Person-scoped search failed (non-critical): {e}")
             return []
     
+    def update_person_ids_after_merge(
+        self,
+        target_id: int,
+        source_ids: List[int],
+    ) -> Dict[str, int]:
+        """Update person_ids in Qdrant payloads after an entity merge.
+        
+        Finds all points where ``person_ids`` or ``mentioned_person_ids``
+        contain any of the source IDs and replaces them with the target ID.
+        
+        Called from the ``/entities/merge`` API endpoint after
+        ``entity_db.merge_persons()`` completes.
+        
+        Args:
+            target_id: The surviving person ID (merge target)
+            source_ids: The deleted person IDs (merge sources)
+            
+        Returns:
+            Dict with 'points_updated' count
+        """
+        if not source_ids:
+            return {"points_updated": 0}
+        
+        updated = 0
+        
+        try:
+            for field in ("person_ids", "mentioned_person_ids"):
+                for old_id in source_ids:
+                    # Find all points that contain this old person ID
+                    points, _ = self.qdrant_client.scroll(
+                        collection_name=self.COLLECTION_NAME,
+                        scroll_filter=Filter(must=[
+                            FieldCondition(key=field, match=MatchValue(value=old_id))
+                        ]),
+                        limit=500,
+                        with_payload=True,
+                        with_vectors=False,
+                    )
+                    
+                    for point in points:
+                        payload = point.payload or {}
+                        current_ids = payload.get(field, [])
+                        if not isinstance(current_ids, list):
+                            continue
+                        
+                        # Replace old_id with target_id, dedup
+                        new_ids = []
+                        seen = set()
+                        for pid in current_ids:
+                            resolved = target_id if pid == old_id else pid
+                            if resolved not in seen:
+                                seen.add(resolved)
+                                new_ids.append(resolved)
+                        
+                        # Only update if something changed
+                        if new_ids != current_ids:
+                            self.qdrant_client.set_payload(
+                                collection_name=self.COLLECTION_NAME,
+                                payload={field: new_ids},
+                                points=[point.id],
+                            )
+                            updated += 1
+            
+            if updated:
+                logger.info(
+                    f"Post-merge: updated person_ids on {updated} Qdrant points "
+                    f"(source_ids={source_ids} → target_id={target_id})"
+                )
+            
+            return {"points_updated": updated}
+            
+        except Exception as e:
+            logger.error(f"Post-merge Qdrant update failed: {e}")
+            return {"points_updated": updated, "error": str(e)}
+    
     def _metadata_search(
         self,
         k: int = 20,
