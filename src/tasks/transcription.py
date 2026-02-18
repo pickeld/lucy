@@ -14,8 +14,9 @@ Tasks:
 import json
 import traceback
 
-from celery import shared_task
 from celery.utils.log import get_task_logger
+
+from tasks import app
 
 logger = get_task_logger(__name__)
 
@@ -87,7 +88,7 @@ def _notify_completion(content_hash: str, result: dict) -> None:
         logger.warning(f"[task] Failed to publish notification for {content_hash}: {e}")
 
 
-@shared_task(
+@app.task(
     bind=True,
     name="tasks.transcription.transcribe_recording",
     max_retries=2,

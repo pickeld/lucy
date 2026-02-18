@@ -2268,6 +2268,9 @@ class AppState(rx.State):
     async def load_recording_files(self):
         """Public handler to load/refresh the recordings table."""
         await self._load_recording_files()
+        # Auto-queue pending recordings if auto-transcribe is enabled
+        if self.recordings_auto_transcribe:
+            await self._auto_transcribe_pending()
 
     async def scan_recordings(self):
         """Scan for new files (without auto-transcribe — too slow for many files)."""

@@ -10,13 +10,14 @@ Tasks:
 
 import traceback
 
-from celery import shared_task
 from celery.utils.log import get_task_logger
+
+from tasks import app
 
 logger = get_task_logger(__name__)
 
 
-@shared_task(
+@app.task(
     bind=True,
     name="tasks.whatsapp.process_whatsapp_message",
     max_retries=3,
