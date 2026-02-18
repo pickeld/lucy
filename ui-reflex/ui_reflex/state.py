@@ -2448,11 +2448,11 @@ class AppState(rx.State):
                     transcript = f.get("transcript_text", "") or ""
                     break
 
-            # Extract all unique speaker labels from transcript
+            # Extract all unique speaker labels from transcript, sorted alphabetically
             # Matches lines starting with "SomeLabel:" or "SomeLabel :"
-            labels = list(dict.fromkeys(
+            labels = sorted(set(
                 _re.findall(r"^(.+?)\s*:", transcript, _re.MULTILINE)
-            ))  # preserves order, removes duplicates
+            ))
 
             # Build speaker map with auto-suggested names
             my_name = self.recordings_my_name or "Me"

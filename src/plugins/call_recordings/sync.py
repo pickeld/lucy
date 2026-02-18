@@ -209,13 +209,13 @@ class CallRecordingSyncer:
                 if phone_number:
                     contact_name = self._lookup_contact_by_phone(phone_number)
                 elif fn_participants and not fn_participants.replace(" ", "").isdigit():
-                    # Filename had a name (not a phone number) — try to
-                    # find the entity and fill in the phone number
+                    # Filename had a name (not a phone number) — use it as-is
+                    # and only look up entity store for the phone number.
+                    # Don't override the filename name with entity display name
+                    # because fuzzy entity matching can return wrong contacts.
                     contact_name = fn_participants
                     entity_info = self._lookup_entity_by_name(fn_participants)
                     if entity_info:
-                        # Prefer entity display name over raw filename parse
-                        contact_name = entity_info.get("display_name") or contact_name
                         if not phone_number and entity_info.get("phone"):
                             phone_number = entity_info["phone"]
 
