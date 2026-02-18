@@ -740,13 +740,21 @@ class AppState(rx.State):
 
     @rx.var(cache=True)
     def recordings_speaker_options(self) -> list[str]:
-        """Speaker name options for the dropdown: My Name + entity names + contact."""
+        """Speaker name options: Me (my_name) + contact from metadata."""
         options: list[str] = []
-        if self.recordings_my_name:
-            options.append(self.recordings_my_name)
-        for name in self.recordings_entity_names:
-            if name and name not in options:
-                options.append(name)
+        # "Me" option from the configured my_name setting
+        my = self.recordings_my_name
+        if my:
+            options.append(my)
+        else:
+            options.append("Me")
+        # Contact name from the currently expanded recording's metadata
+        for f in self.call_recordings_files:
+            if f.get("content_hash") == self.recordings_expanded_hash:
+                contact = f.get("contact_name", "") or ""
+                if contact and contact not in options:
+                    options.append(contact)
+                break
         return options
 
     @rx.var(cache=True)
@@ -2322,11 +2330,24 @@ class AppState(rx.State):
             self.recordings_speaker_b = ""
         else:
             self.recordings_expanded_hash = content_hash
-            # Pre-fill speaker dropdowns from stored labels
+            # Pre-fill speaker dropdowns from stored labels or auto-assign
             for f in self.call_recordings_files:
                 if f.get("content_hash") == content_hash:
-                    self.recordings_speaker_a = f.get("speaker_a_label", "") or ""
-                    self.recordings_speaker_b = f.get("speaker_b_label", "") or ""
+                    stored_a = f.get("speaker_a_label", "") or ""
+                    stored_b = f.get("speaker_b_label", "") or ""
+                    contact = f.get("contact_name", "") or ""
+
+                    if stored_a:
+                        self.recordings_speaker_a = stored_a
+                    else:
+                        # Default: Speaker A = Me
+                        self.recordings_speaker_a = self.recordings_my_name or "Me"
+
+                    if stored_b:
+                        self.recordings_speaker_b = stored_b
+                    else:
+                        # Default: Speaker B = contact name from metadata
+                        self.recordings_speaker_b = contact or "Unknown"
                     break
 
     async def save_speaker_labels(self, content_hash: str):

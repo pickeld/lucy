@@ -636,16 +636,12 @@ def _detail_panel(item: dict) -> rx.Component:
                     # Speaker A
                     rx.flex(
                         rx.text("Speaker A:", class_name="text-sm text-gray-600 w-24 shrink-0"),
-                        rx.el.input(
-                            type="text",
-                            placeholder="Enter name or select…",
+                        rx.select(
+                            AppState.recordings_speaker_options,
                             value=AppState.recordings_speaker_a,
-                            on_change=AppState.set_recordings_speaker_a,  # type: ignore[arg-type]
-                            list="speaker-suggestions",
-                            class_name=(
-                                "text-sm bg-white border border-gray-200 rounded-lg "
-                                "px-2 py-1.5 outline-none focus:border-accent flex-1"
-                            ),
+                            on_change=AppState.set_recordings_speaker_a,
+                            size="2",
+                            class_name="flex-1",
                         ),
                         align="center",
                         gap="2",
@@ -654,28 +650,16 @@ def _detail_panel(item: dict) -> rx.Component:
                     # Speaker B
                     rx.flex(
                         rx.text("Speaker B:", class_name="text-sm text-gray-600 w-24 shrink-0"),
-                        rx.el.input(
-                            type="text",
-                            placeholder="Enter name or select…",
+                        rx.select(
+                            AppState.recordings_speaker_options,
                             value=AppState.recordings_speaker_b,
-                            on_change=AppState.set_recordings_speaker_b,  # type: ignore[arg-type]
-                            list="speaker-suggestions",
-                            class_name=(
-                                "text-sm bg-white border border-gray-200 rounded-lg "
-                                "px-2 py-1.5 outline-none focus:border-accent flex-1"
-                            ),
+                            on_change=AppState.set_recordings_speaker_b,
+                            size="2",
+                            class_name="flex-1",
                         ),
                         align="center",
                         gap="2",
                         class_name="mb-2",
-                    ),
-                    # Datalist for browser-native autocomplete
-                    rx.el.datalist(
-                        rx.foreach(
-                            AppState.recordings_speaker_options,
-                            lambda name: rx.el.option(value=name),
-                        ),
-                        id="speaker-suggestions",
                     ),
                     # Apply button
                     rx.button(
