@@ -622,7 +622,26 @@ class EmailSyncer:
                             # Sync metadata for garbage collection & change detection
                             "sync_run_id": self._sync_run_id,
                             "indexed_at": int(time.time()),
+                            # Person-asset graph: default empty, populated below
+                            "person_ids": [],
+                            "mentioned_person_ids": [],
                         }
+
+                        # Person-asset graph: resolve sender → person_id
+                        try:
+                            from person_resolver import resolve_and_link
+                            person_ids, mentioned_ids = resolve_and_link(
+                                asset_type="gmail",
+                                asset_ref=source_id,
+                                sender_name=sender_display,
+                                sender_email=sender_email or None,
+                            )
+                            if person_ids:
+                                base_metadata["person_ids"] = person_ids
+                            if mentioned_ids:
+                                base_metadata["mentioned_person_ids"] = mentioned_ids
+                        except Exception as pr_err:
+                            logger.debug(f"Person resolution failed for email '{parsed.subject}' (non-critical): {pr_err}")
 
                         # Chunk and index email body
                         chunks = split_text(body)

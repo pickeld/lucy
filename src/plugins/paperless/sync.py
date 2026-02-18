@@ -468,7 +468,25 @@ class DocumentSyncer:
                             "sync_run_id": self._sync_run_id,
                             "last_modified_ts": doc.get("modified", ""),
                             "indexed_at": int(time.time()),
+                            # Person-asset graph: default empty, populated below
+                            "person_ids": [],
+                            "mentioned_person_ids": [],
                         }
+                        
+                        # Person-asset graph: resolve correspondent → person_id
+                        try:
+                            from person_resolver import resolve_and_link
+                            person_ids, mentioned_ids = resolve_and_link(
+                                asset_type="document",
+                                asset_ref=source_id,
+                                sender_name=sender if sender else None,
+                            )
+                            if person_ids:
+                                base_metadata["person_ids"] = person_ids
+                            if mentioned_ids:
+                                base_metadata["mentioned_person_ids"] = mentioned_ids
+                        except Exception as pr_err:
+                            logger.debug(f"Person resolution failed for '{title}' (non-critical): {pr_err}")
                         
                         # Extract all numeric sequences (≥5 digits) from the
                         # full document content for reverse ID/number lookups.

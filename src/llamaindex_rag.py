@@ -165,7 +165,7 @@ class ArchiveRetriever(BaseRetriever):
     # Ensures the LLM has temporal awareness of the latest messages.
     RECENCY_SUPPLEMENT_COUNT = 5
     
-    def _inject_entity_facts(self, query: str) -> List[NodeWithScore]:
+    def _inject_entity_facts(self, query: str) -> tuple:
         """Inject known entity facts as high-priority context nodes.
         
         When the query mentions a known person (by name or alias), looks up
@@ -176,11 +176,16 @@ class ArchiveRetriever(BaseRetriever):
         Facts are permanent/time-invariant (birth_date, city, ID number, etc.).
         Age is computed from birth_date at query time, not stored.
         
+        Also returns the resolved person IDs so that the retriever can
+        do person-scoped supplementary searches using the person_ids
+        Qdrant payload filter.
+        
         Args:
             query: The search query string
             
         Returns:
-            List of NodeWithScore with entity facts (empty if no matches)
+            Tuple of (List[NodeWithScore], List[int]) — entity fact nodes
+            and resolved person IDs
         """
         try:
             import entity_db
@@ -271,11 +276,11 @@ class ArchiveRetriever(BaseRetriever):
                     # High score so entity facts appear first in context
                     injected.append(NodeWithScore(node=node, score=1.0))
             
-            return injected
+            return injected, list(seen_person_ids)
         except ImportError:
-            return []  # entity_db not available
+            return [], []  # entity_db not available
         except Exception:
-            return []
+            return [], []
     
     def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         """Retrieve relevant messages/documents using hybrid search.
@@ -423,16 +428,58 @@ class ArchiveRetriever(BaseRetriever):
                         results.append(nws)
         
         # =====================================================================
-        # Step 5: Entity fact injection
+        # Step 5: Entity fact injection + person-scoped search
         # =====================================================================
         # When the query mentions a known person, inject their stored facts
         # as a high-priority context node so the LLM can answer factual
         # questions (age, birth date, etc.) directly.
+        # Also do a supplementary person-scoped search using the person_ids
+        # Qdrant filter for higher-precision results.
         try:
-            entity_nodes = self._inject_entity_facts(query_bundle.query_str)
+            entity_nodes, resolved_person_ids = self._inject_entity_facts(query_bundle.query_str)
             if entity_nodes:
                 results = entity_nodes + results
                 logger.info(f"Injected {len(entity_nodes)} entity fact node(s)")
+            
+            # Person-scoped supplementary search: when we identify specific
+            # persons in the query, fetch additional results filtered by
+            # person_ids for higher precision. This catches assets that
+            # semantic search missed (e.g., different script spellings).
+            #
+            # Also expands to related persons (family, colleagues) via the
+            # relationship graph, so "tell me about Shiran's family" finds
+            # David's and Mia's assets too.
+            if resolved_person_ids and _current_chars(results) < max_context_chars * 0.8:
+                # Expand person IDs via relationship graph (1 hop)
+                try:
+                    import entity_db as _edb
+                    expanded_ids = _edb.expand_person_ids_with_relationships(
+                        resolved_person_ids, max_depth=1,
+                    )
+                    if len(expanded_ids) > len(resolved_person_ids):
+                        logger.info(
+                            f"Relationship expansion: {resolved_person_ids} → {expanded_ids}"
+                        )
+                except Exception:
+                    expanded_ids = resolved_person_ids
+                
+                existing_ids = {nws.node.id_ for nws in results if nws.node}
+                person_supplement = self._rag._person_scoped_search(
+                    person_ids=expanded_ids,
+                    k=5,
+                    **_fkw,
+                )
+                added_person_results = 0
+                for nws in person_supplement:
+                    if nws.node and nws.node.id_ not in existing_ids:
+                        existing_ids.add(nws.node.id_)
+                        results.append(nws)
+                        added_person_results += 1
+                if added_person_results:
+                    logger.info(
+                        f"Person-scoped search added {added_person_results} "
+                        f"results for person_ids={expanded_ids}"
+                    )
         except Exception as e:
             logger.debug(f"Entity fact injection failed (non-critical): {e}")
         
@@ -1053,6 +1100,9 @@ class LlamaIndexRAG:
             ("is_group", PayloadSchemaType.BOOL, "is_group bool index"),
             ("source_id", PayloadSchemaType.KEYWORD, "source_id keyword index"),
             ("chat_id", PayloadSchemaType.KEYWORD, "chat_id keyword index"),
+            # Person-asset graph indexes for entity-scoped retrieval
+            ("person_ids", PayloadSchemaType.INTEGER, "person_ids integer index"),
+            ("mentioned_person_ids", PayloadSchemaType.INTEGER, "mentioned_person_ids integer index"),
         ]
         
         for field_name, schema_type, description in index_configs:
@@ -1396,6 +1446,23 @@ class LlamaIndexRAG:
                 media_path=media_path,
                 message_content_type=ct_override,
             )
+            
+            # Person-asset graph: resolve sender → person_id and inject into metadata.
+            # Non-blocking — resolution failure never prevents message storage.
+            try:
+                from person_resolver import resolve_and_link
+                person_ids, mentioned_ids = resolve_and_link(
+                    asset_type="whatsapp_msg",
+                    asset_ref=source_id,
+                    sender_name=sender,
+                    sender_whatsapp_id=chat_id if not is_group else None,
+                )
+                if person_ids:
+                    doc.metadata.person_ids = person_ids
+                if mentioned_ids:
+                    doc.metadata.mentioned_person_ids = mentioned_ids
+            except Exception as e:
+                logger.debug(f"Person resolution failed (non-critical): {e}")
             
             # Convert to LlamaIndex TextNode with standardized schema
             node = doc.to_llama_index_node()
@@ -2331,6 +2398,113 @@ class LlamaIndexRAG:
             
         except Exception as e:
             logger.debug(f"Full-text search failed (indexes may not exist): {e}")
+            return []
+    
+    def _person_scoped_search(
+        self,
+        person_ids: List[int],
+        k: int = 5,
+        filter_chat_name: Optional[str] = None,
+        filter_sender: Optional[str] = None,
+        filter_days: Optional[int] = None,
+        filter_sources: Optional[List[str]] = None,
+        filter_date_from: Optional[str] = None,
+        filter_date_to: Optional[str] = None,
+        filter_content_types: Optional[List[str]] = None,
+    ) -> List[NodeWithScore]:
+        """Search for assets linked to specific persons via the person_ids payload field.
+        
+        Uses the Qdrant integer index on ``person_ids`` for exact matching.
+        This is the structural graph-enhanced retrieval: instead of fuzzy name
+        matching, we filter by the resolved entity IDs that were stored at
+        ingestion time.
+        
+        Searches both ``person_ids`` (sender/participant) and
+        ``mentioned_person_ids`` (mentioned in content) using OR logic.
+        
+        Args:
+            person_ids: List of person entity IDs to search for
+            k: Number of results per person ID
+            filter_chat_name: Optional chat name filter
+            filter_sender: Optional sender filter
+            filter_days: Optional recency filter
+            filter_sources: Optional source filter
+            filter_date_from: Optional date range start
+            filter_date_to: Optional date range end
+            filter_content_types: Optional content type filter
+            
+        Returns:
+            List of NodeWithScore from person-scoped search
+        """
+        if not person_ids:
+            return []
+        
+        try:
+            # Build standard filter conditions
+            must_conditions = self._build_filter_conditions(
+                filter_chat_name=filter_chat_name,
+                filter_sender=filter_sender,
+                filter_days=filter_days,
+                filter_sources=filter_sources,
+                filter_date_from=filter_date_from,
+                filter_date_to=filter_date_to,
+                filter_content_types=filter_content_types,
+            )
+            
+            # Add person_ids filter: match any of the person IDs in either field
+            # Using should (OR) to match person_ids OR mentioned_person_ids
+            person_should = []
+            for pid in person_ids:
+                person_should.append(
+                    FieldCondition(key="person_ids", match=MatchValue(value=pid))
+                )
+                person_should.append(
+                    FieldCondition(
+                        key="mentioned_person_ids", match=MatchValue(value=pid)
+                    )
+                )
+            
+            # Combine: must have standard filters AND should match any person
+            must_conditions.append(
+                Filter(should=person_should)
+            )
+            
+            qdrant_filter = Filter(must=must_conditions)
+            
+            # Scroll through matching points (recent first)
+            results, _next = self.qdrant_client.scroll(
+                collection_name=self.COLLECTION_NAME,
+                scroll_filter=qdrant_filter,
+                limit=k,
+                with_payload=True,
+                with_vectors=False,
+                order_by=OrderBy(key="timestamp", direction=Direction.DESC),
+            )
+            
+            valid_results = []
+            for point in results:
+                payload = point.payload or {}
+                text = self._extract_text_from_payload(payload)
+                if not text:
+                    continue
+                node = TextNode(
+                    text=text,
+                    metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
+                    id_=str(point.id),
+                )
+                # Use 0.85 score — high enough to be relevant but below entity facts (1.0)
+                valid_results.append(NodeWithScore(node=node, score=0.85))
+            
+            if valid_results:
+                logger.info(
+                    f"Person-scoped search for person_ids={person_ids}: "
+                    f"{len(valid_results)} results"
+                )
+            
+            return valid_results
+            
+        except Exception as e:
+            logger.debug(f"Person-scoped search failed (non-critical): {e}")
             return []
     
     def _metadata_search(

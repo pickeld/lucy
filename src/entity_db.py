@@ -187,6 +187,22 @@ def init_entity_db() -> None:
             )
         """)
 
+        # Person-asset graph: junction table linking persons to their assets
+        # (messages, documents, call recordings) in the vector store.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS person_assets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                person_id INTEGER NOT NULL,
+                asset_type TEXT NOT NULL,
+                asset_ref TEXT NOT NULL,
+                role TEXT DEFAULT 'sender',
+                confidence REAL DEFAULT 1.0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (person_id) REFERENCES persons(id) ON DELETE CASCADE,
+                UNIQUE(person_id, asset_ref, role)
+            )
+        """)
+
         # Indexes for fast lookups
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_persons_whatsapp ON persons(whatsapp_id)"
@@ -211,6 +227,15 @@ def init_entity_db() -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_facts_key ON person_facts(fact_key)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_person_assets_person ON person_assets(person_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_person_assets_ref ON person_assets(asset_ref)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_person_assets_type ON person_assets(asset_type)"
         )
 
         conn.commit()
@@ -634,6 +659,15 @@ def get_person(person_id: int) -> Optional[Dict[str, Any]]:
             (person_id,),
         ).fetchall()
         person["relationships"] = [dict(r) for r in rel_rows]
+
+        # Fetch asset counts by type
+        asset_rows = conn.execute(
+            """SELECT asset_type, COUNT(*) as cnt
+               FROM person_assets WHERE person_id = ?
+               GROUP BY asset_type""",
+            (person_id,),
+        ).fetchall()
+        person["asset_counts"] = {r["asset_type"]: r["cnt"] for r in asset_rows}
 
         return person
     finally:
@@ -1110,6 +1144,64 @@ def get_relationships(person_id: int) -> List[Dict[str, Any]]:
         conn.close()
 
 
+def expand_person_ids_with_relationships(
+    person_ids: List[int],
+    max_depth: int = 1,
+) -> List[int]:
+    """Expand a list of person IDs by traversing relationships.
+
+    Given [42] (Shiran), if Shiran has relationships spouse→17 (David)
+    and parent→23 (Mia), returns [42, 17, 23].
+
+    Useful for queries like "tell me about Shiran's family" where we
+    want to also retrieve assets belonging to related persons.
+
+    Args:
+        person_ids: Starting person IDs
+        max_depth: How many relationship hops to follow (default: 1)
+
+    Returns:
+        Expanded list of person IDs (includes originals + related)
+    """
+    if not person_ids or max_depth < 1:
+        return list(person_ids)
+
+    conn = _get_connection()
+    try:
+        expanded: set = set(person_ids)
+        frontier = set(person_ids)
+
+        for _ in range(max_depth):
+            if not frontier:
+                break
+            next_frontier: set = set()
+            for pid in frontier:
+                rows = conn.execute(
+                    "SELECT related_person_id FROM person_relationships WHERE person_id = ?",
+                    (pid,),
+                ).fetchall()
+                for r in rows:
+                    rid = r["related_person_id"]
+                    if rid not in expanded:
+                        expanded.add(rid)
+                        next_frontier.add(rid)
+                # Also check reverse relationships
+                rows_rev = conn.execute(
+                    "SELECT person_id FROM person_relationships WHERE related_person_id = ?",
+                    (pid,),
+                ).fetchall()
+                for r in rows_rev:
+                    rid = r["person_id"]
+                    if rid not in expanded:
+                        expanded.add(rid)
+                        next_frontier.add(rid)
+            frontier = next_frontier
+
+        return list(expanded)
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Bulk / summary queries
 # ---------------------------------------------------------------------------
@@ -1289,11 +1381,13 @@ def get_stats() -> Dict[str, int]:
         aliases = conn.execute("SELECT COUNT(*) as cnt FROM person_aliases").fetchone()["cnt"]
         facts = conn.execute("SELECT COUNT(*) as cnt FROM person_facts").fetchone()["cnt"]
         rels = conn.execute("SELECT COUNT(*) as cnt FROM person_relationships").fetchone()["cnt"]
+        assets = conn.execute("SELECT COUNT(*) as cnt FROM person_assets").fetchone()["cnt"]
         return {
             "persons": persons,
             "aliases": aliases,
             "facts": facts,
             "relationships": rels,
+            "person_assets": assets,
         }
     finally:
         conn.close()
@@ -1834,6 +1928,203 @@ def cleanup_garbage_persons() -> Dict[str, Any]:
             f"Entity cleanup: removed {len(garbage_ids)} garbage persons"
         )
         return {"deleted": len(garbage_ids), "names": garbage_names}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Person-asset graph CRUD
+# ---------------------------------------------------------------------------
+
+def link_person_asset(
+    person_id: int,
+    asset_type: str,
+    asset_ref: str,
+    role: str = "sender",
+    confidence: float = 1.0,
+) -> bool:
+    """Link a person to an asset (message, document, call recording).
+
+    Creates an entry in the person_assets junction table and is
+    idempotent — duplicate (person_id, asset_ref, role) tuples
+    are silently ignored.
+
+    Args:
+        person_id: The person's database ID
+        asset_type: Asset kind ('whatsapp_msg', 'document', 'call_recording', 'gmail')
+        asset_ref: Qdrant point source_id (e.g. '972501234567@c.us:1708012345')
+        role: How this person relates to the asset
+              ('sender', 'recipient', 'mentioned', 'participant', 'owner')
+        confidence: How confident we are in this link (0.0-1.0)
+
+    Returns:
+        True if the link was created (False if it already existed)
+    """
+    conn = _get_connection()
+    try:
+        conn.execute(
+            """INSERT OR IGNORE INTO person_assets
+               (person_id, asset_type, asset_ref, role, confidence)
+               VALUES (?, ?, ?, ?, ?)""",
+            (person_id, asset_type, asset_ref, role, confidence),
+        )
+        conn.commit()
+        return conn.total_changes > 0
+    finally:
+        conn.close()
+
+
+def link_persons_to_asset(
+    person_ids: List[int],
+    asset_type: str,
+    asset_ref: str,
+    role: str = "sender",
+    confidence: float = 1.0,
+) -> int:
+    """Link multiple persons to the same asset in a single transaction.
+
+    Args:
+        person_ids: List of person database IDs
+        asset_type: Asset kind
+        asset_ref: Qdrant point source_id
+        role: Relationship role
+        confidence: Confidence score
+
+    Returns:
+        Number of links created
+    """
+    if not person_ids:
+        return 0
+
+    conn = _get_connection()
+    try:
+        created = 0
+        for pid in person_ids:
+            try:
+                conn.execute(
+                    """INSERT OR IGNORE INTO person_assets
+                       (person_id, asset_type, asset_ref, role, confidence)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (pid, asset_type, asset_ref, role, confidence),
+                )
+                created += conn.total_changes
+            except sqlite3.IntegrityError:
+                pass
+        conn.commit()
+        return created
+    finally:
+        conn.close()
+
+
+def get_person_asset_refs(
+    person_id: int,
+    asset_type: Optional[str] = None,
+    role: Optional[str] = None,
+    limit: int = 200,
+) -> List[Dict[str, Any]]:
+    """Get all asset references linked to a person.
+
+    Args:
+        person_id: The person's database ID
+        asset_type: Optional filter by asset type
+        role: Optional filter by role
+        limit: Max results
+
+    Returns:
+        List of dicts with asset_type, asset_ref, role, confidence
+    """
+    conn = _get_connection()
+    try:
+        query = "SELECT asset_type, asset_ref, role, confidence, created_at FROM person_assets WHERE person_id = ?"
+        params: list = [person_id]
+
+        if asset_type:
+            query += " AND asset_type = ?"
+            params.append(asset_type)
+        if role:
+            query += " AND role = ?"
+            params.append(role)
+
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_asset_person_ids(asset_ref: str) -> List[Dict[str, Any]]:
+    """Get all persons linked to a specific asset.
+
+    Args:
+        asset_ref: The Qdrant point source_id
+
+    Returns:
+        List of dicts with person_id, role, confidence, and person canonical_name
+    """
+    conn = _get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT pa.person_id, pa.role, pa.confidence,
+                      p.canonical_name AS person_name
+               FROM person_assets pa
+               JOIN persons p ON p.id = pa.person_id
+               WHERE pa.asset_ref = ?""",
+            (asset_ref,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_person_asset_count(person_id: int) -> Dict[str, int]:
+    """Get asset counts grouped by type for a person.
+
+    Args:
+        person_id: The person's database ID
+
+    Returns:
+        Dict mapping asset_type → count (e.g. {'whatsapp_msg': 42, 'document': 3})
+    """
+    conn = _get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT asset_type, COUNT(*) as cnt
+               FROM person_assets WHERE person_id = ?
+               GROUP BY asset_type""",
+            (person_id,),
+        ).fetchall()
+        return {r["asset_type"]: r["cnt"] for r in rows}
+    finally:
+        conn.close()
+
+
+def delete_person_asset(person_id: int, asset_ref: str, role: Optional[str] = None) -> bool:
+    """Remove a person-asset link.
+
+    Args:
+        person_id: The person's database ID
+        asset_ref: The asset reference to unlink
+        role: Optional specific role to remove (removes all roles if None)
+
+    Returns:
+        True if any links were removed
+    """
+    conn = _get_connection()
+    try:
+        if role:
+            cursor = conn.execute(
+                "DELETE FROM person_assets WHERE person_id = ? AND asset_ref = ? AND role = ?",
+                (person_id, asset_ref, role),
+            )
+        else:
+            cursor = conn.execute(
+                "DELETE FROM person_assets WHERE person_id = ? AND asset_ref = ?",
+                (person_id, asset_ref),
+            )
+        conn.commit()
+        return cursor.rowcount > 0
     finally:
         conn.close()
 

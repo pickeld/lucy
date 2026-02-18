@@ -226,6 +226,9 @@ def _store_extracted_entities(
 ) -> int:
     """Store extracted entities in the Entity Store.
 
+    Also creates person-asset links for mentioned persons so that the
+    person-asset graph tracks which messages/documents mention which people.
+
     Args:
         extraction_result: Parsed JSON from LLM with 'entities' list
         source_type: Where this was extracted from ("whatsapp", "paperless")
@@ -242,6 +245,22 @@ def _store_extracted_entities(
         return 0
 
     facts_stored = 0
+
+    # Derive the Qdrant asset_ref from source_ref.
+    # source_ref format: "chat:{chat_id}:{timestamp}" → asset_ref: "{chat_id}:{timestamp}"
+    # For paperless: "paperless:{doc_id}" → kept as-is
+    asset_ref = None
+    asset_type = "whatsapp_msg"
+    if source_ref:
+        if source_ref.startswith("chat:"):
+            # "chat:972501234567@c.us:1708012345" → "972501234567@c.us:1708012345"
+            asset_ref = source_ref[len("chat:"):]
+            asset_type = "whatsapp_msg"
+        elif source_ref.startswith("paperless:"):
+            asset_ref = source_ref
+            asset_type = "document"
+        else:
+            asset_ref = source_ref
 
     for entity in entities:
         name = entity.get("name")
@@ -296,6 +315,19 @@ def _store_extracted_entities(
                         confidence=0.5,
                         source_ref=source_ref,
                     )
+
+        # Person-asset graph: link extracted person as "mentioned" on the source asset
+        if asset_ref and person_id:
+            try:
+                entity_db.link_person_asset(
+                    person_id=person_id,
+                    asset_type=asset_type,
+                    asset_ref=asset_ref,
+                    role="mentioned",
+                    confidence=0.6,
+                )
+            except Exception:
+                pass  # Non-critical
 
     return facts_stored
 

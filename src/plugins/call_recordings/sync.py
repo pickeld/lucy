@@ -579,11 +579,31 @@ class CallRecordingSyncer:
                 "filename": filename,
                 "sync_run_id": sync_run_id,
                 "indexed_at": int(time.time()),
+                # Person-asset graph: default empty, populated below
+                "person_ids": [],
+                "mentioned_person_ids": [],
             }
 
             # Add phone number if available
             if record.get("phone_number"):
                 base_metadata["phone_number"] = record["phone_number"]
+
+            # Person-asset graph: resolve participants → person_ids
+            try:
+                from person_resolver import resolve_and_link
+                person_ids, mentioned_ids = resolve_and_link(
+                    asset_type="call_recording",
+                    asset_ref=source_id,
+                    sender_name=participants[0] if participants else None,
+                    sender_phone=record.get("phone_number"),
+                    participant_names=participants[1:] if len(participants) > 1 else None,
+                )
+                if person_ids:
+                    base_metadata["person_ids"] = person_ids
+                if mentioned_ids:
+                    base_metadata["mentioned_person_ids"] = mentioned_ids
+            except Exception as pr_err:
+                logger.debug(f"Person resolution failed for {filename} (non-critical): {pr_err}")
 
             # Chunk the transcript
             transcript = transcript_text.strip()

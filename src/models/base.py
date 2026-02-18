@@ -188,6 +188,8 @@ class DocumentMetadata(BaseModel):
         indexed_at: When the document was added to the RAG vector store
         tags: Optional list of tags for filtering and categorization
         language: Detected or specified language of the content
+        person_ids: Entity IDs of persons structurally linked to this asset (sender, author, participants)
+        mentioned_person_ids: Entity IDs of persons mentioned in the content
         custom_fields: Additional source-specific metadata
     """
     
@@ -209,6 +211,15 @@ class DocumentMetadata(BaseModel):
     )
     tags: List[str] = Field(default_factory=list, description="Tags for filtering")
     language: Optional[str] = Field(default=None, description="Content language (e.g., 'en', 'he')")
+    # Person-asset graph fields: entity IDs linking this asset to persons
+    person_ids: List[int] = Field(
+        default_factory=list,
+        description="Entity IDs of persons structurally linked (sender, author, participants)"
+    )
+    mentioned_person_ids: List[int] = Field(
+        default_factory=list,
+        description="Entity IDs of persons mentioned in the content"
+    )
     custom_fields: Dict[str, Any] = Field(
         default_factory=dict,
         description="Additional source-specific metadata"
@@ -219,6 +230,7 @@ class DocumentMetadata(BaseModel):
         
         Writes both new fields (source, content_type) and legacy field
         (source_type) for backward compatibility during transition.
+        Includes person_ids and mentioned_person_ids for the person-asset graph.
         
         Returns:
             Dictionary suitable for Qdrant vector store metadata
@@ -233,6 +245,9 @@ class DocumentMetadata(BaseModel):
             "indexed_at": int(self.indexed_at.timestamp()),
             "tags": self.tags,
             "language": self.language,
+            # Person-asset graph: entity IDs for Qdrant keyword filtering
+            "person_ids": self.person_ids,
+            "mentioned_person_ids": self.mentioned_person_ids,
             **self.custom_fields
         }
         return payload
