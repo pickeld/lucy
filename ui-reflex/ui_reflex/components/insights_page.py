@@ -343,35 +343,20 @@ def _result_viewer() -> rx.Component:
 
 
 def _render_result_item(result: dict) -> rx.Component:
-    """Render a single result entry in the result viewer."""
-    result_id = result["id"]
-    is_expanded = AppState.insights_expanded_result_id == result_id.to(int)
-
-    status_color = rx.cond(
-        result["status"] == "success",
-        "text-green-600",
-        rx.cond(
-            result["status"] == "error",
-            "text-red-600",
-            "text-gray-500",
-        ),
-    )
-
-    status_icon = rx.cond(
-        result["status"] == "success",
-        "check-circle",
-        rx.cond(
-            result["status"] == "error",
-            "x-circle",
-            "minus-circle",
-        ),
-    )
-
+    """Render a single result entry — always shows the full answer."""
     return rx.box(
-        # Header row (clickable to expand)
+        # Header with status, time, cost
         rx.flex(
             rx.flex(
-                rx.icon(status_icon, size=14, class_name=status_color),
+                rx.cond(
+                    result["status"] == "success",
+                    rx.icon("circle-check", size=14, class_name="text-green-600"),
+                    rx.cond(
+                        result["status"] == "error",
+                        rx.icon("circle-x", size=14, class_name="text-red-600"),
+                        rx.icon("circle-minus", size=14, class_name="text-gray-500"),
+                    ),
+                ),
                 rx.text(
                     result["executed_at"],
                     class_name="text-sm font-medium text-gray-700 ml-2",
@@ -388,52 +373,34 @@ def _render_result_item(result: dict) -> rx.Component:
                 ),
                 align="center",
             ),
-            rx.icon(
-                rx.cond(is_expanded, "chevron-up", "chevron-down"),
-                size=16,
-                class_name="text-gray-400",
+            rx.flex(
+                rx.text(
+                    "Duration: ", result["duration_ms"], "ms",
+                    class_name="text-xs text-gray-400",
+                ),
+                align="center",
             ),
             justify="between",
             align="center",
-            on_click=AppState.toggle_insight_result_expand(result_id),
-            class_name="px-4 py-3 cursor-pointer hover:bg-gray-50",
+            class_name="px-4 py-3",
         ),
-        # Expanded content
+        # Answer content — always visible
+        rx.box(
+            rx.markdown(
+                result["answer"],
+                class_name="prose prose-sm max-w-none text-gray-700",
+            ),
+            class_name="px-4 pb-3",
+        ),
+        # Error message if present
         rx.cond(
-            is_expanded,
+            (result["error_message"] != "") & (result["error_message"] != "None"),
             rx.box(
-                # Answer
-                rx.box(
-                    rx.markdown(
-                        result["answer"],
-                        class_name="prose prose-sm max-w-none text-gray-700",
-                    ),
-                    class_name="px-4 pb-3",
+                rx.text(
+                    "Error: ", result["error_message"],
+                    class_name="text-sm text-red-600",
                 ),
-                # Error message if present
-                rx.cond(
-                    (result["error_message"] != "") & (result["error_message"] != "None"),
-                    rx.box(
-                        rx.text(
-                            "Error: ", result["error_message"],
-                            class_name="text-sm text-red-600",
-                        ),
-                        class_name="px-4 pb-3",
-                    ),
-                    rx.fragment(),
-                ),
-                # Meta info
-                rx.flex(
-                    rx.text(
-                        "Duration: ", result["duration_ms"], "ms",
-                        class_name="text-xs text-gray-400",
-                    ),
-                    rx.text(
-                        "Status: ", result["status"],
-                        class_name="text-xs text-gray-400 ml-4",
-                    ),
-                    class_name="px-4 pb-3",
-                ),
+                class_name="px-4 pb-3",
             ),
             rx.fragment(),
         ),
