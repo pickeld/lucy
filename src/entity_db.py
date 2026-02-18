@@ -203,6 +203,22 @@ def init_entity_db() -> None:
             )
         """)
 
+        # Asset-asset graph: edges between assets for cross-channel coherence.
+        # Relation types: thread_member, attachment_of, chunk_of, reply_to,
+        # references, transcript_of.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS asset_asset_edges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                src_asset_ref TEXT NOT NULL,
+                dst_asset_ref TEXT NOT NULL,
+                relation_type TEXT NOT NULL,
+                confidence REAL DEFAULT 1.0,
+                provenance TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(src_asset_ref, dst_asset_ref, relation_type)
+            )
+        """)
+
         # Indexes for fast lookups
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_persons_whatsapp ON persons(whatsapp_id)"
@@ -236,6 +252,16 @@ def init_entity_db() -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_person_assets_type ON person_assets(asset_type)"
+        )
+        # Asset-asset graph indexes
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_aae_src ON asset_asset_edges(src_asset_ref)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_aae_dst ON asset_asset_edges(dst_asset_ref)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_aae_type ON asset_asset_edges(relation_type)"
         )
 
         conn.commit()
@@ -2257,6 +2283,238 @@ def delete_person_asset(person_id: int, asset_ref: str, role: Optional[str] = No
             )
         conn.commit()
         return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Asset-asset graph CRUD
+# ---------------------------------------------------------------------------
+
+def link_assets(
+    src_asset_ref: str,
+    dst_asset_ref: str,
+    relation_type: str,
+    confidence: float = 1.0,
+    provenance: Optional[str] = None,
+) -> bool:
+    """Create an edge between two assets.
+
+    Idempotent — duplicate (src, dst, relation_type) tuples are silently
+    ignored.  Valid relation types: thread_member, attachment_of, chunk_of,
+    reply_to, references, transcript_of.
+
+    Args:
+        src_asset_ref: Source asset's Qdrant source_id
+        dst_asset_ref: Destination asset's Qdrant source_id
+        relation_type: Edge type (e.g. 'attachment_of', 'thread_member')
+        confidence: Confidence score (0.0-1.0)
+        provenance: Where this edge was derived from
+
+    Returns:
+        True if the edge was created (False if it already existed)
+    """
+    conn = _get_connection()
+    try:
+        conn.execute(
+            """INSERT OR IGNORE INTO asset_asset_edges
+               (src_asset_ref, dst_asset_ref, relation_type, confidence, provenance)
+               VALUES (?, ?, ?, ?, ?)""",
+            (src_asset_ref, dst_asset_ref, relation_type, confidence, provenance),
+        )
+        conn.commit()
+        return conn.total_changes > 0
+    finally:
+        conn.close()
+
+
+def link_assets_batch(
+    edges: List[Dict[str, Any]],
+) -> int:
+    """Create multiple asset-asset edges in a single transaction.
+
+    Each edge dict should have keys: src_asset_ref, dst_asset_ref,
+    relation_type, and optionally confidence and provenance.
+
+    Args:
+        edges: List of edge dicts
+
+    Returns:
+        Number of edges created
+    """
+    if not edges:
+        return 0
+
+    conn = _get_connection()
+    try:
+        created = 0
+        for edge in edges:
+            try:
+                conn.execute(
+                    """INSERT OR IGNORE INTO asset_asset_edges
+                       (src_asset_ref, dst_asset_ref, relation_type, confidence, provenance)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (
+                        edge["src_asset_ref"],
+                        edge["dst_asset_ref"],
+                        edge["relation_type"],
+                        edge.get("confidence", 1.0),
+                        edge.get("provenance"),
+                    ),
+                )
+                created += conn.total_changes
+            except (sqlite3.IntegrityError, KeyError):
+                pass
+        conn.commit()
+        return created
+    finally:
+        conn.close()
+
+
+def get_asset_neighbors(
+    asset_ref: str,
+    relation_types: Optional[List[str]] = None,
+    direction: str = "both",
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """Get neighboring assets connected by edges.
+
+    Args:
+        asset_ref: The asset's Qdrant source_id
+        relation_types: Optional filter by edge types
+        direction: 'outgoing', 'incoming', or 'both'
+        limit: Max results
+
+    Returns:
+        List of dicts with neighbor_ref, relation_type, direction,
+        confidence, provenance
+    """
+    conn = _get_connection()
+    try:
+        results: List[Dict[str, Any]] = []
+
+        # Build relation_type filter clause
+        type_clause = ""
+        type_params: list = []
+        if relation_types:
+            placeholders = ",".join("?" for _ in relation_types)
+            type_clause = f" AND relation_type IN ({placeholders})"
+            type_params = list(relation_types)
+
+        if direction in ("outgoing", "both"):
+            rows = conn.execute(
+                f"""SELECT dst_asset_ref AS neighbor_ref, relation_type,
+                           confidence, provenance
+                    FROM asset_asset_edges
+                    WHERE src_asset_ref = ?{type_clause}
+                    ORDER BY created_at DESC LIMIT ?""",
+                [asset_ref] + type_params + [limit],
+            ).fetchall()
+            for r in rows:
+                d = dict(r)
+                d["direction"] = "outgoing"
+                results.append(d)
+
+        if direction in ("incoming", "both"):
+            remaining = limit - len(results)
+            if remaining > 0:
+                rows = conn.execute(
+                    f"""SELECT src_asset_ref AS neighbor_ref, relation_type,
+                               confidence, provenance
+                        FROM asset_asset_edges
+                        WHERE dst_asset_ref = ?{type_clause}
+                        ORDER BY created_at DESC LIMIT ?""",
+                    [asset_ref] + type_params + [remaining],
+                ).fetchall()
+                for r in rows:
+                    d = dict(r)
+                    d["direction"] = "incoming"
+                    results.append(d)
+
+        return results
+    finally:
+        conn.close()
+
+
+def get_thread_members(
+    thread_id: str,
+    limit: int = 100,
+) -> List[str]:
+    """Get all asset refs that belong to a thread.
+
+    Looks for edges where either src or dst matches the thread_id
+    and relation_type is 'thread_member'.
+
+    Args:
+        thread_id: The thread identifier
+        limit: Max results
+
+    Returns:
+        List of asset_ref strings in the thread
+    """
+    conn = _get_connection()
+    try:
+        # Thread members are stored as edges from thread_id to asset_ref
+        rows = conn.execute(
+            """SELECT DISTINCT dst_asset_ref AS asset_ref
+               FROM asset_asset_edges
+               WHERE src_asset_ref = ? AND relation_type = 'thread_member'
+               LIMIT ?""",
+            (thread_id, limit),
+        ).fetchall()
+        return [r["asset_ref"] for r in rows]
+    finally:
+        conn.close()
+
+
+def delete_asset_edge(
+    src_asset_ref: str,
+    dst_asset_ref: str,
+    relation_type: Optional[str] = None,
+) -> bool:
+    """Remove an asset-asset edge.
+
+    Args:
+        src_asset_ref: Source asset reference
+        dst_asset_ref: Destination asset reference
+        relation_type: Optional specific type to remove (removes all if None)
+
+    Returns:
+        True if any edges were removed
+    """
+    conn = _get_connection()
+    try:
+        if relation_type:
+            cursor = conn.execute(
+                "DELETE FROM asset_asset_edges WHERE src_asset_ref = ? AND dst_asset_ref = ? AND relation_type = ?",
+                (src_asset_ref, dst_asset_ref, relation_type),
+            )
+        else:
+            cursor = conn.execute(
+                "DELETE FROM asset_asset_edges WHERE src_asset_ref = ? AND dst_asset_ref = ?",
+                (src_asset_ref, dst_asset_ref),
+            )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def get_asset_edge_stats() -> Dict[str, int]:
+    """Get asset-asset edge counts by relation type.
+
+    Returns:
+        Dict mapping relation_type → count
+    """
+    conn = _get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT relation_type, COUNT(*) as cnt
+               FROM asset_asset_edges
+               GROUP BY relation_type
+               ORDER BY cnt DESC"""
+        ).fetchall()
+        return {r["relation_type"]: r["cnt"] for r in rows}
     finally:
         conn.close()
 

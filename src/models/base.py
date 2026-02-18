@@ -220,6 +220,23 @@ class DocumentMetadata(BaseModel):
         default_factory=list,
         description="Entity IDs of persons mentioned in the content"
     )
+    # Asset-asset graph fields: structural pointers for cross-channel coherence
+    asset_id: Optional[str] = Field(
+        default=None,
+        description="Canonical asset node ID — same across all chunks of a document"
+    )
+    parent_asset_id: Optional[str] = Field(
+        default=None,
+        description="Parent asset ID for attachments, replies, chunk containment"
+    )
+    thread_id: Optional[str] = Field(
+        default=None,
+        description="Thread grouping ID (email thread, chat thread)"
+    )
+    chunk_group_id: Optional[str] = Field(
+        default=None,
+        description="Groups chunks from the same ingestion unit"
+    )
     custom_fields: Dict[str, Any] = Field(
         default_factory=dict,
         description="Additional source-specific metadata"
@@ -230,7 +247,9 @@ class DocumentMetadata(BaseModel):
         
         Writes both new fields (source, content_type) and legacy field
         (source_type) for backward compatibility during transition.
-        Includes person_ids and mentioned_person_ids for the person-asset graph.
+        Includes person_ids and mentioned_person_ids for the person-asset graph,
+        and asset graph fields (asset_id, parent_asset_id, thread_id,
+        chunk_group_id) for cross-channel coherence.
         
         Returns:
             Dictionary suitable for Qdrant vector store metadata
@@ -248,6 +267,11 @@ class DocumentMetadata(BaseModel):
             # Person-asset graph: entity IDs for Qdrant keyword filtering
             "person_ids": self.person_ids,
             "mentioned_person_ids": self.mentioned_person_ids,
+            # Asset-asset graph: structural pointers for cross-channel coherence
+            "asset_id": self.asset_id or "",
+            "parent_asset_id": self.parent_asset_id or "",
+            "thread_id": self.thread_id or "",
+            "chunk_group_id": self.chunk_group_id or "",
             **self.custom_fields
         }
         return payload

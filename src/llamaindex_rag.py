@@ -1103,6 +1103,11 @@ class LlamaIndexRAG:
             # Person-asset graph indexes for entity-scoped retrieval
             ("person_ids", PayloadSchemaType.INTEGER, "person_ids integer index"),
             ("mentioned_person_ids", PayloadSchemaType.INTEGER, "mentioned_person_ids integer index"),
+            # Asset-asset graph indexes for cross-channel coherence
+            ("asset_id", PayloadSchemaType.KEYWORD, "asset_id keyword index"),
+            ("parent_asset_id", PayloadSchemaType.KEYWORD, "parent_asset_id keyword index"),
+            ("thread_id", PayloadSchemaType.KEYWORD, "thread_id keyword index"),
+            ("chunk_group_id", PayloadSchemaType.KEYWORD, "chunk_group_id keyword index"),
         ]
         
         for field_name, schema_type, description in index_configs:
