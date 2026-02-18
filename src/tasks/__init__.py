@@ -23,24 +23,29 @@ from celery.signals import worker_process_init
 # ---------------------------------------------------------------------------
 # Redis broker URL
 # ---------------------------------------------------------------------------
-# Reads the same REDIS_HOST / REDIS_PORT that the main app uses, but targets
-# DB 1 to avoid key collisions with the app's cache/state in DB 0.
+# Prefer explicit CELERY_BROKER_URL env var (set in docker-compose) so the
+# URL survives Flask hot-reloads without stale-connection issues.
+# Falls back to constructing from REDIS_HOST/PORT + DB 1.
 
-_redis_host = os.environ.get("REDIS_HOST", "localhost")
-_redis_port = os.environ.get("REDIS_PORT", "6379")
-_redis_db = os.environ.get("CELERY_REDIS_DB", "1")
-_broker_url = f"redis://{_redis_host}:{_redis_port}/{_redis_db}"
+_broker_url = os.environ.get("CELERY_BROKER_URL")
+_backend_url = os.environ.get("CELERY_RESULT_BACKEND")
+
+if not _broker_url:
+    _redis_host = os.environ.get("REDIS_HOST", "localhost")
+    _redis_port = os.environ.get("REDIS_PORT", "6379")
+    _redis_db = os.environ.get("CELERY_REDIS_DB", "1")
+    _broker_url = f"redis://{_redis_host}:{_redis_port}/{_redis_db}"
+
+if not _backend_url:
+    _backend_url = _broker_url
 
 # ---------------------------------------------------------------------------
 # Celery app
 # ---------------------------------------------------------------------------
 
-app = Celery("lucy")
+app = Celery("lucy", broker=_broker_url, backend=_backend_url)
 
 app.conf.update(
-    # Broker + result backend
-    broker_url=_broker_url,
-    result_backend=_broker_url,
 
     # Serialization — JSON only for transparency and debuggability
     task_serializer="json",

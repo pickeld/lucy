@@ -68,6 +68,9 @@ services:
       QDRANT_HOST: qdrant
       WAHA_BASE_URL: "http://waha:3000"
       WEBHOOK_URL: "http://app:8765/webhook"
+      # Celery broker — set as env var so it survives Flask hot-reloads
+      CELERY_BROKER_URL: "redis://redis:6379/1"
+      CELERY_RESULT_BACKEND: "redis://redis:6379/1"
     ports:
       - "8765:8765"
     volumes:
