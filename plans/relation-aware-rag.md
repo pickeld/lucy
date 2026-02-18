@@ -473,6 +473,66 @@ Like `backfill_person_ids.py`, the script uses:
 
 ---
 
+## Phase 7: Interactive Graph Visualization
+
+### 7.1 Library Selection
+
+Use **react-force-graph-2d** via Reflex custom component wrapping. This React library provides interactive force-directed graph rendering with drag, zoom, click events — similar to Neo4j Browser.
+
+Alternative: Cytoscape.js via `rx.html()` iframe embed if React wrapping proves difficult.
+
+### 7.2 Extended Graph Data API
+
+Extend [`get_graph_data()`](src/entity_db.py:1909) to return a unified graph with both identity and asset nodes:
+
+```python
+def get_full_graph_data(
+    limit_persons: int = 100,
+    limit_assets_per_person: int = 10,
+    include_asset_edges: bool = True,
+) -> Dict[str, Any]:
+    """Build a full graph with person nodes, asset nodes, and all edge types."""
+```
+
+Returns:
+- **Person nodes**: `{id, type: "person", label, facts_count, aliases_count}`
+- **Asset nodes**: `{id, type: "whatsapp_msg"|"document"|"call_recording"|"gmail", label, timestamp}`
+- **Identity↔identity edges**: `{source, target, type: "spouse"|"parent"|...}`
+- **Identity↔asset edges**: `{source, target, type: "sender"|"mentioned"|...}`
+- **Asset↔asset edges**: `{source, target, type: "attachment_of"|"thread_member"|...}`
+
+### 7.3 New API Endpoint
+
+Add `GET /entities/graph/full` to [`app.py`](src/app.py) that returns the extended graph data.
+
+### 7.4 Reflex Graph Component
+
+Create `ui-reflex/ui_reflex/components/graph_view.py`:
+
+- Wrap `react-force-graph-2d` as a Reflex custom component
+- Node rendering: color-code by type (person=blue, whatsapp=green, document=orange, call=purple, gmail=red)
+- Node shape: person=circle, others=square
+- Edge rendering: color-code by relation type
+- Click-to-expand: clicking a person node loads their assets; clicking an asset loads related assets
+- Hover tooltip: shows node details (facts for persons, preview for assets)
+- Zoom/pan/drag support (built into react-force-graph)
+
+### 7.5 Replace Existing Graph Tab
+
+Replace the flat card list in [`_graph_tab()`](ui-reflex/ui_reflex/components/entities_page.py:1295) with the interactive graph component. Keep the existing card view as a fallback/alternative view.
+
+### 7.6 Files to Create/Modify
+
+- New: `ui-reflex/ui_reflex/components/graph_view.py`
+- [`src/entity_db.py`](src/entity_db.py) — add `get_full_graph_data()`
+- [`src/app.py`](src/app.py) — add `/entities/graph/full` endpoint
+- [`ui-reflex/ui_reflex/api_client.py`](ui-reflex/ui_reflex/api_client.py) — add `fetch_full_entity_graph()`
+- [`ui-reflex/ui_reflex/state.py`](ui-reflex/ui_reflex/state.py) — add graph state vars
+- [`ui-reflex/ui_reflex/components/entities_page.py`](ui-reflex/ui_reflex/components/entities_page.py) — integrate graph view
+- [`ui-reflex/requirements.txt`](ui-reflex/requirements.txt) — add react-force-graph wrapper if needed
+
+---
+
 ## Migration Strategy
 
 ```mermaid
