@@ -197,84 +197,114 @@ class ArchiveRetriever(BaseRetriever):
             if not tokens:
                 return []
             
-            # Try to resolve each token as a person name
             injected = []
             seen_person_ids: set = set()
+            consumed_tokens: set = set()  # Tokens already resolved via n-gram match
             
+            # Phase 1: Try multi-word combinations (n-grams) as full names.
+            # This ensures "שירן וינטרוב" resolves to a single person via
+            # exact match before individual tokens like "שירן" are tried
+            # (which could match multiple persons via LIKE).
+            for n in range(min(4, len(tokens)), 1, -1):  # 4-gram, 3-gram, 2-gram
+                for i in range(len(tokens) - n + 1):
+                    ngram_tokens = tokens[i:i + n]
+                    # Skip if any component token was already consumed
+                    if any(t.lower() in consumed_tokens for t in ngram_tokens):
+                        continue
+                    ngram = " ".join(ngram_tokens)
+                    person = entity_db.get_person_by_name(ngram)
+                    if person:
+                        pid = person["id"]
+                        if pid not in seen_person_ids:
+                            seen_person_ids.add(pid)
+                            # Mark component tokens as consumed
+                            for t in ngram_tokens:
+                                consumed_tokens.add(t.lower())
+                            logger.debug(
+                                f"Entity n-gram match: '{ngram}' → person {pid} "
+                                f"({person['canonical_name']})"
+                            )
+            
+            # Phase 2: Fall back to individual token resolution for
+            # tokens not consumed by n-gram matches
             for token in tokens:
+                if token.lower() in consumed_tokens:
+                    continue
                 matches = entity_db.resolve_name(token)
                 for match in matches:
                     pid = match["id"]
                     if pid in seen_person_ids:
                         continue
                     seen_person_ids.add(pid)
-                    
-                    # Get full person with facts
-                    person = entity_db.get_person(pid)
-                    if not person:
-                        continue
-                    
-                    facts = person.get("facts", {})
-                    if not facts:
-                        continue
-                    
-                    # Build fact text
-                    fact_lines = [f"Known facts about {person['canonical_name']}:"]
-                    
-                    for key, value in facts.items():
-                        if key == "birth_date":
-                            # Compute age from birth_date
-                            try:
-                                tz = ZoneInfo(settings.get("timezone", "Asia/Jerusalem"))
-                                now = datetime.now(tz)
-                                bd = datetime.fromisoformat(value)
-                                age = now.year - bd.year - (
-                                    (now.month, now.day) < (bd.month, bd.day)
-                                )
-                                fact_lines.append(
-                                    f"- Birth date: {value} (age: {age})"
-                                )
-                            except (ValueError, TypeError):
-                                fact_lines.append(f"- Birth date: {value}")
-                        else:
-                            label = key.replace("_", " ").title()
-                            fact_lines.append(f"- {label}: {value}")
-                    
-                    # Add aliases
-                    aliases = [
-                        a["alias"] for a in person.get("aliases", [])
-                        if a["alias"] != person["canonical_name"]
-                    ]
-                    if aliases:
-                        fact_lines.append(
-                            f"- Also known as: {', '.join(aliases[:5])}"
-                        )
-                    
-                    # Add relationships
-                    rels = person.get("relationships", [])
-                    for rel in rels[:3]:
-                        fact_lines.append(
-                            f"- {rel['relationship_type'].title()} of {rel['related_name']}"
-                        )
-                    
-                    fact_text = "\n".join(fact_lines)
-                    # Format with consistent source header so the LLM
-                    # can cite entity facts like any other source.
-                    formatted_fact_text = (
-                        f"Entity Store | Person: {person['canonical_name']}:\n"
-                        f"{fact_text}"
+            
+            # Phase 3: Build entity fact nodes for ALL resolved person IDs
+            # (from both n-gram and individual token resolution)
+            for pid in seen_person_ids:
+                person = entity_db.get_person(pid)
+                if not person:
+                    continue
+                
+                facts = person.get("facts", {})
+                if not facts:
+                    continue
+                
+                # Build fact text
+                fact_lines = [f"Known facts about {person['canonical_name']}:"]
+                
+                for key, value in facts.items():
+                    if key == "birth_date":
+                        # Compute age from birth_date
+                        try:
+                            tz = ZoneInfo(settings.get("timezone", "Asia/Jerusalem"))
+                            now = datetime.now(tz)
+                            bd = datetime.fromisoformat(value)
+                            age = now.year - bd.year - (
+                                (now.month, now.day) < (bd.month, bd.day)
+                            )
+                            fact_lines.append(
+                                f"- Birth date: {value} (age: {age})"
+                            )
+                        except (ValueError, TypeError):
+                            fact_lines.append(f"- Birth date: {value}")
+                    else:
+                        label = key.replace("_", " ").title()
+                        fact_lines.append(f"- {label}: {value}")
+                
+                # Add aliases
+                aliases = [
+                    a["alias"] for a in person.get("aliases", [])
+                    if a["alias"] != person["canonical_name"]
+                ]
+                if aliases:
+                    fact_lines.append(
+                        f"- Also known as: {', '.join(aliases[:5])}"
                     )
-                    node = TextNode(
-                        text=formatted_fact_text,
-                        metadata={
-                            "source": "entity_store",
-                            "content_type": "entity_facts",
-                            "person_name": person["canonical_name"],
-                            "person_id": pid,
-                        },
+                
+                # Add relationships
+                rels = person.get("relationships", [])
+                for rel in rels[:3]:
+                    fact_lines.append(
+                        f"- {rel['relationship_type'].title()} of {rel['related_name']}"
                     )
-                    # High score so entity facts appear first in context
-                    injected.append(NodeWithScore(node=node, score=1.0))
+                
+                fact_text = "\n".join(fact_lines)
+                # Format with consistent source header so the LLM
+                # can cite entity facts like any other source.
+                formatted_fact_text = (
+                    f"Entity Store | Person: {person['canonical_name']}:\n"
+                    f"{fact_text}"
+                )
+                node = TextNode(
+                    text=formatted_fact_text,
+                    metadata={
+                        "source": "entity_store",
+                        "content_type": "entity_facts",
+                        "person_name": person["canonical_name"],
+                        "person_id": pid,
+                    },
+                )
+                # High score so entity facts appear first in context
+                injected.append(NodeWithScore(node=node, score=1.0))
             
             return injected, list(seen_person_ids)
         except ImportError:
@@ -3681,6 +3711,12 @@ class LlamaIndexRAG:
                     "- Instead, IMMEDIATELY ask the user to clarify with numbered options\n"
                     "- Include ALL matching contacts from the Known Contacts list, "
                     "even if they don't appear in the retrieved messages\n\n"
+                    "IMPORTANT — NEVER disambiguate when there is only ONE match:\n"
+                    "- If only ONE contact matches the name, answer DIRECTLY about "
+                    "that person — do NOT ask which one they mean\n"
+                    "- If the user provided a FULL NAME (first + last) that uniquely "
+                    "identifies one person, answer directly — no disambiguation needed\n"
+                    "- Disambiguation is ONLY for TWO OR MORE matching contacts\n\n"
                     "Example — user asks 'מה דורון שאל אותי?' and contacts include "
                     "'Doron Yazkirovich' and 'דורון עלאני':\n"
                     "✅ Correct response: 'מצאתי כמה אנשים בשם דורון:\n"
@@ -3688,6 +3724,9 @@ class LlamaIndexRAG:
                     "2) דורון עלאני\n"
                     "לאיזה דורון התכוונת?'\n\n"
                     "❌ Wrong: answering or saying no results without asking first.\n\n"
+                    "Example — user asks 'ספר לי על שירן וינטרוב' and only one שירן exists:\n"
+                    "✅ Correct: answer directly about שירן וינטרוב\n"
+                    "❌ Wrong: asking 'לאיזה שירן התכוונת?' with only one option listed\n\n"
                     "Only skip disambiguation if the user provided a full name (first + last) "
                     "or enough context to uniquely identify the person."
                 )
@@ -3910,6 +3949,12 @@ class LlamaIndexRAG:
             "options list in the assistant's previous message, then combine it with "
             "the ORIGINAL question to form a complete standalone query. Use the name "
             "EXACTLY as it appeared in the numbered options (same script).\n"
+            "- AFFIRMATIVE CONFIRMATION: When the user responds with an affirmative "
+            "word (כן, yes, correct, נכון, that one, כן אליה, כן אליו) to a "
+            "disambiguation question that listed ONLY ONE option, map it to that "
+            "single person name and combine with the ORIGINAL question to form a "
+            "complete standalone query. This also applies when the user just "
+            "confirms after a single-option disambiguation.\n"
             "- When a follow-up question references someone discussed in previous "
             "turns (e.g., 'How old is she?', 'בת כמה שירן?'), ALWAYS include the "
             "person's FULL NAME (as established in the conversation) in the rewritten "
@@ -3934,6 +3979,13 @@ class LlamaIndexRAG:
             "  Follow-up: '1' → 'מה Shiran Waintrob עוברת? What is Shiran Waintrob going through?'\n"
             "- Chat: 'What did Doron ask me?' → 'Multiple: 1) Doron Yazkirovich 2) דורון עלאני'\n"
             "  Follow-up: '2' → 'What did דורון עלאני ask me?'\n"
+            "- AFFIRMATIVE CONFIRMATION (כן/yes/correct/נכון to a single-option disambiguation):\n"
+            "- Chat: 'ספר לי על שירן' → 'מצאתי: 1) שירן וינטרוב. לאיזה שירן התכוונת?'\n"
+            "  Follow-up: 'כן' → 'ספר לי על שירן וינטרוב'\n"
+            "- Chat: 'מה שירן אמרה?' → 'Found: 1) Shiran Waintrob. Which one?'\n"
+            "  Follow-up: 'yes' → 'What did Shiran Waintrob say?'\n"
+            "- Chat: 'מה אתה יודע על שירן?' → 'מצאתי: 1) שירן וינטרוב. לאיזה שירן?'\n"
+            "  Follow-up: 'נכון' → 'מה אתה יודע על שירן וינטרוב?'\n"
             "- Chat: discussed Shiran Waintrob's stress about an upcoming event\n"
             "  Follow-up: 'בת כמה שירן?' → 'מה הגיל או תאריך הלידה של Shiran Waintrob?'\n"
             "- Chat: discussed Shiran Waintrob's situation\n"

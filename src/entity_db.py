@@ -853,6 +853,16 @@ def resolve_name(name: str) -> List[Dict[str, Any]]:
     Used for disambiguation: given a first name, returns all
     persons who have that name as a canonical_name or alias.
 
+    Resolution priority:
+    1. Exact canonical_name match (case-insensitive) — highest confidence
+    2. Exact alias match (case-insensitive)
+    3. If exact matches found, return them without LIKE fallback
+    4. Only if no exact match, use LIKE '%name%' on canonical_name
+
+    This prevents a full-name query like "שירן וינטרוב" from also
+    matching unrelated persons whose canonical_name happens to contain
+    the substring "שירן".
+
     Args:
         name: Name to search for (case-insensitive)
 
@@ -864,21 +874,32 @@ def resolve_name(name: str) -> List[Dict[str, Any]]:
         # Find person IDs matching by canonical_name or alias
         person_ids = set()
 
-        # Match canonical name
+        # Phase 1: Exact canonical_name match (case-insensitive)
         rows = conn.execute(
-            "SELECT id FROM persons WHERE canonical_name LIKE ? COLLATE NOCASE",
-            (f"%{name}%",),
+            "SELECT id FROM persons WHERE canonical_name = ? COLLATE NOCASE",
+            (name,),
         ).fetchall()
         for r in rows:
             person_ids.add(r["id"])
 
-        # Match aliases
+        # Phase 2: Exact alias match (case-insensitive)
         alias_rows = conn.execute(
             "SELECT person_id FROM person_aliases WHERE alias = ? COLLATE NOCASE",
             (name,),
         ).fetchall()
         for r in alias_rows:
             person_ids.add(r["person_id"])
+
+        # Phase 3: If exact matches found, skip LIKE fallback
+        # This prevents "שירן וינטרוב" from also matching other "שירן" persons
+        if not person_ids:
+            # Phase 4: LIKE fallback for partial/substring matching
+            rows = conn.execute(
+                "SELECT id FROM persons WHERE canonical_name LIKE ? COLLATE NOCASE",
+                (f"%{name}%",),
+            ).fetchall()
+            for r in rows:
+                person_ids.add(r["id"])
 
         # Build results
         results = []
