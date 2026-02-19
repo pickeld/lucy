@@ -937,6 +937,36 @@ class LlamaIndexRAG:
         
         return LlamaIndexRAG._ingestion_pipeline
     
+    def _truncate_node_for_embedding(self, node: TextNode) -> None:
+        """Truncate node text in-place to fit within the embedding model token limit.
+
+        Hebrew text tokenizes at ~1.5 tokens/char, so character-based limits
+        alone are insufficient.  Uses tiktoken for accurate token counting and
+        estimates the safe character count from the measured token/char ratio.
+
+        Only modifies nodes that actually exceed EMBEDDING_MAX_TOKENS.
+
+        Args:
+            node: TextNode whose ``.text`` may be truncated in place
+        """
+        text = node.text or ""
+        if not text or len(text) <= self.EMBEDDING_MAX_CHARS:
+            return  # Fast path: clearly within limits
+
+        token_count = _count_tokens_tiktoken(text)
+        if token_count <= self.EMBEDDING_MAX_TOKENS:
+            return
+
+        # Compute ratio and derive safe character count
+        ratio = token_count / len(text)
+        target_chars = int(self.EMBEDDING_MAX_TOKENS / ratio * 0.95)  # 5% margin
+        node.text = text[:target_chars]
+        logger.info(
+            f"Truncated node for embedding: {token_count} tokens "
+            f"({len(text)} chars) → ~{self.EMBEDDING_MAX_TOKENS} tokens "
+            f"({target_chars} chars)"
+        )
+
     def ingest_nodes(self, nodes: List[TextNode]) -> int:
         """Ingest nodes via the IngestionPipeline (with embedding cache).
         
@@ -954,6 +984,11 @@ class LlamaIndexRAG:
         """
         if not nodes:
             return 0
+        
+        # Ensure every node fits within the embedding model token limit.
+        # Hebrew text can exceed 8191 tokens at only ~5300 chars.
+        for node in nodes:
+            self._truncate_node_for_embedding(node)
         
         try:
             result_nodes = self.ingestion_pipeline.run(nodes=nodes, show_progress=False)
@@ -1672,9 +1707,13 @@ class LlamaIndexRAG:
             return False
     
     # Safety limit for embedding: truncate text to this many chars before
-    # sending to the embedding API.  Covers worst-case tokenisation
-    # (base64/HTML ≈ 1 char/token).  8191 token limit → 7000 char safety.
-    EMBEDDING_MAX_CHARS = 7_000
+    # sending to the embedding API.  Hebrew tokenizes at ~1.5 tokens/char,
+    # so 5000 chars × 1.55 ≈ 7750 tokens — safely under the 8191 limit.
+    EMBEDDING_MAX_CHARS = 5_000
+
+    # Token-level safety limit for the embedding model.  Used by
+    # _truncate_node_for_embedding() as the hard ceiling.
+    EMBEDDING_MAX_TOKENS = 8_000
 
     def add_node(self, node: TextNode) -> bool:
         """Add a pre-constructed TextNode to the vector store.
@@ -1727,6 +1766,12 @@ class LlamaIndexRAG:
         """
         if not nodes:
             return 0
+        
+        # Safety net: truncate oversized nodes before embedding.
+        # Normally ingest_nodes() already truncated, but add_nodes()
+        # can be called directly as a fallback.
+        for node in nodes:
+            self._truncate_node_for_embedding(node)
         
         try:
             self.index.insert_nodes(nodes)

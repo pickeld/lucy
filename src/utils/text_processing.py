@@ -21,9 +21,11 @@ logger = logging.getLogger(__name__)
 
 # Maximum characters per chunk for embedding.
 # text-embedding-3-large has an 8191 token limit.
-# Using 6000 chars keeps us safely under the limit even for worst-case
-# encoded content (~1 char/token for base64 vs ~4 for prose).
-MAX_CHUNK_CHARS = 6_000
+# Hebrew text tokenizes at ~1.5 tokens/char (vs ~0.25 for English),
+# so we must size for the worst-case multilingual scenario:
+#   4500 chars × 1.55 tok/char ≈ 6975 tokens — safe margin under 8191.
+# The ~100-char header added by sync modules brings this to ~7130 tokens.
+MAX_CHUNK_CHARS = 4_500
 CHUNK_OVERLAP_CHARS = 200
 
 # Minimum useful content length after sanitization (characters).
