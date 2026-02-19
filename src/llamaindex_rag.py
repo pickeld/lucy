@@ -205,6 +205,12 @@ class ArchiveRetriever(BaseRetriever):
             # This ensures "שירן וינטרוב" resolves to a single person via
             # exact match before individual tokens like "שירן" are tried
             # (which could match multiple persons via LIKE).
+            # Uses two strategies:
+            #   a) get_person_by_name() — exact canonical/alias match
+            #   b) resolve_name() — if exactly 1 result, unambiguous match
+            # Strategy (b) handles bilingual canonical names like
+            # "Shiran Waintrob / שירן וינטרוב" where the Hebrew n-gram
+            # won't exact-match but will LIKE-match uniquely.
             for n in range(min(4, len(tokens)), 1, -1):  # 4-gram, 3-gram, 2-gram
                 for i in range(len(tokens) - n + 1):
                     ngram_tokens = tokens[i:i + n]
@@ -212,25 +218,37 @@ class ArchiveRetriever(BaseRetriever):
                     if any(t.lower() in consumed_tokens for t in ngram_tokens):
                         continue
                     ngram = " ".join(ngram_tokens)
+                    
+                    # Strategy (a): exact canonical/alias match
                     person = entity_db.get_person_by_name(ngram)
-                    if person:
-                        pid = person["id"]
-                        if pid not in seen_person_ids:
-                            seen_person_ids.add(pid)
-                            # Mark component tokens as consumed
-                            for t in ngram_tokens:
-                                consumed_tokens.add(t.lower())
-                            logger.debug(
-                                f"Entity n-gram match: '{ngram}' → person {pid} "
-                                f"({person['canonical_name']})"
-                            )
+                    pid = person["id"] if person else None
+                    
+                    # Strategy (b): resolve_name — accept only if exactly 1 match
+                    # (unambiguous). Multiple matches → skip, let Phase 2 handle.
+                    if pid is None:
+                        matches = entity_db.resolve_name(ngram)
+                        if len(matches) == 1:
+                            pid = matches[0]["id"]
+                    
+                    if pid is not None and pid not in seen_person_ids:
+                        seen_person_ids.add(pid)
+                        # Mark component tokens as consumed
+                        for t in ngram_tokens:
+                            consumed_tokens.add(t.lower())
+                        logger.debug(
+                            f"Entity n-gram match: '{ngram}' → person {pid}"
+                        )
             
             # Phase 2: Fall back to individual token resolution for
-            # tokens not consumed by n-gram matches
+            # tokens not consumed by n-gram matches.
+            # Use exact_only=True to prevent common words like "מה"
+            # from substring-matching names like "שלמה" via LIKE.
+            # Only exact alias/canonical matches are allowed for
+            # single tokens — LIKE is reserved for multi-word Phase 1.
             for token in tokens:
                 if token.lower() in consumed_tokens:
                     continue
-                matches = entity_db.resolve_name(token)
+                matches = entity_db.resolve_name(token, exact_only=True)
                 for match in matches:
                     pid = match["id"]
                     if pid in seen_person_ids:

@@ -847,7 +847,7 @@ def add_alias(
         conn.close()
 
 
-def resolve_name(name: str) -> List[Dict[str, Any]]:
+def resolve_name(name: str, exact_only: bool = False) -> List[Dict[str, Any]]:
     """Find all persons matching a name or alias.
 
     Used for disambiguation: given a first name, returns all
@@ -857,14 +857,15 @@ def resolve_name(name: str) -> List[Dict[str, Any]]:
     1. Exact canonical_name match (case-insensitive) — highest confidence
     2. Exact alias match (case-insensitive)
     3. If exact matches found, return them without LIKE fallback
-    4. Only if no exact match, use LIKE '%name%' on canonical_name
+    4. Only if no exact match AND exact_only=False, use LIKE '%name%'
 
-    This prevents a full-name query like "שירן וינטרוב" from also
-    matching unrelated persons whose canonical_name happens to contain
-    the substring "שירן".
+    When ``exact_only=True``, skips the LIKE substring fallback entirely.
+    This is used by entity fact injection for individual tokens to prevent
+    common words like "מה" from substring-matching names like "שלמה".
 
     Args:
         name: Name to search for (case-insensitive)
+        exact_only: If True, only use exact matching (no LIKE fallback)
 
     Returns:
         List of person dicts with id, canonical_name, and aliases
@@ -892,14 +893,17 @@ def resolve_name(name: str) -> List[Dict[str, Any]]:
 
         # Phase 3: If exact matches found, skip LIKE fallback
         # This prevents "שירן וינטרוב" from also matching other "שירן" persons
-        if not person_ids:
-            # Phase 4: LIKE fallback for partial/substring matching
-            rows = conn.execute(
-                "SELECT id FROM persons WHERE canonical_name LIKE ? COLLATE NOCASE",
-                (f"%{name}%",),
-            ).fetchall()
-            for r in rows:
-                person_ids.add(r["id"])
+        if not person_ids and not exact_only:
+            # Phase 4: LIKE fallback for partial/substring matching.
+            # Require minimum 3 characters to prevent short tokens like "מה"
+            # from substring-matching within names like "שלמה".
+            if len(name.strip()) >= 3:
+                rows = conn.execute(
+                    "SELECT id FROM persons WHERE canonical_name LIKE ? COLLATE NOCASE",
+                    (f"%{name}%",),
+                ).fetchall()
+                for r in rows:
+                    person_ids.add(r["id"])
 
         # Build results
         results = []
