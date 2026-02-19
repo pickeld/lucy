@@ -532,6 +532,7 @@ def execute_scheduled_insight(self, task_id: int) -> dict:
         # Retry on transient errors
         transient_indicators = [
             "ConnectionError", "Timeout", "rate_limit", "429", "503",
+            "context_length_exceeded",
         ]
         is_transient = any(ind in str(exc) for ind in transient_indicators)
 

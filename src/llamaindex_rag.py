@@ -621,6 +621,71 @@ class ArchiveRetriever(BaseRetriever):
 WhatsAppRetriever = ArchiveRetriever
 
 
+# =========================================================================
+# Model context window limits (used for insight token budgeting)
+# =========================================================================
+
+_MODEL_CONTEXT_WINDOWS: Dict[str, int] = {
+    "gpt-3.5-turbo": 16_385,
+    "gpt-4": 8_192,
+    "gpt-4-turbo": 128_000,
+    "gpt-4o": 128_000,
+    "gpt-4o-mini": 128_000,
+    "gpt-4.1": 1_047_576,
+    "gpt-4.1-mini": 1_047_576,
+    "gpt-4.1-nano": 1_047_576,
+    "o1": 200_000,
+    "o1-mini": 128_000,
+    "o3-mini": 200_000,
+    "o4-mini": 200_000,
+}
+
+
+def _get_model_context_window(model_name: str) -> int:
+    """Look up the context window for a model, with conservative default.
+
+    Tries exact match first, then prefix-based matching for dated
+    model variants like ``gpt-4o-2024-11-20``.
+
+    Args:
+        model_name: OpenAI model name string
+
+    Returns:
+        Token limit for the model's context window
+    """
+    if model_name in _MODEL_CONTEXT_WINDOWS:
+        return _MODEL_CONTEXT_WINDOWS[model_name]
+    for prefix, limit in _MODEL_CONTEXT_WINDOWS.items():
+        if model_name.startswith(prefix):
+            return limit
+    return 16_000  # Conservative default
+
+
+def _count_tokens_tiktoken(text: str, model: str = "gpt-4o") -> int:
+    """Count tokens accurately using tiktoken.
+
+    Falls back to a conservative 1-char-per-token estimate (safe for
+    Hebrew/multilingual text which tokenizes at ~0.5-1.5 chars/token).
+
+    Args:
+        text: The text to count tokens for
+        model: Model name for tiktoken encoding lookup
+
+    Returns:
+        Estimated token count
+    """
+    try:
+        import tiktoken
+        try:
+            enc = tiktoken.encoding_for_model(model)
+        except KeyError:
+            enc = tiktoken.encoding_for_model("gpt-4o")
+        return len(enc.encode(text))
+    except Exception:
+        # Conservative fallback: 1 char ≈ 1 token (safe for Hebrew)
+        return len(text)
+
+
 class LlamaIndexRAG:
     """LlamaIndex-based RAG for multi-source knowledge base search and retrieval.
     
@@ -4170,35 +4235,77 @@ class LlamaIndexRAG:
             logger.debug(f"[insight] Reranking failed (non-critical): {e}")
         
         # =====================================================================
-        # Step 4: Context budget trim
+        # Step 4: Context budget trim (model-aware, tiktoken-accurate)
         # =====================================================================
-        max_context_chars = max_context_tokens * 4  # ~4 chars per token
-        per_result_cap = int(max_context_chars * 0.3)
-        total_chars = 0
+        llm = llm_override if llm_override is not None else Settings.llm
+        model_name = getattr(llm, "model", "gpt-4o") or "gpt-4o"
+        model_limit = _get_model_context_window(model_name)
+        safety_margin = 500  # tokens reserved for tokenizer variance + response
+        
+        # Compute overhead tokens from system prompt + user message wrapper
+        # (everything EXCEPT the retrieved context)
+        _user_msg_prefix = (
+            "Here are the relevant messages and documents retrieved from the knowledge base:\n"
+            "-----\n"
+        )
+        _user_msg_suffix = (
+            "\n-----\n\n"
+            "UNDERSTANDING THE RETRIEVED ITEMS:\n"
+            "Each item is formatted with a source label. Common formats:\n"
+            "- 'WhatsApp | date | sender in chat: message'\n"
+            "- 'WhatsApp Conversation | chat | date_range (N messages):' multi-line\n"
+            "- 'Paperless | date | Document title:' document text\n"
+            "- 'Gmail | date | sender in subject: body'\n"
+            "- 'Call Recording | date | caller in context:' transcript\n\n"
+            "CITATION RULES:\n"
+            "- Mention the source type, person, and date when citing information\n"
+            "- For conversation chunks, cite the relevant speaker(s)\n\n"
+            "Now produce the insight:\n\n"
+            f"{prompt}"
+        )
+        overhead_tokens = _count_tokens_tiktoken(
+            system_prompt + _user_msg_prefix + _user_msg_suffix, model_name
+        ) + safety_margin
+        
+        # Effective context budget = min(configured setting, what the model allows)
+        effective_budget = min(max_context_tokens, model_limit - overhead_tokens)
+        effective_budget = max(effective_budget, 1000)  # floor to avoid empty context
+        
+        logger.info(
+            f"[insight] Token budget: model={model_name}, model_limit={model_limit}, "
+            f"overhead={overhead_tokens}, configured={max_context_tokens}, "
+            f"effective={effective_budget}"
+        )
+        
+        per_result_cap_tokens = int(effective_budget * 0.3)
+        total_tokens = 0
         trimmed: List[NodeWithScore] = []
         
         for nws in merged:
             node_text = getattr(nws.node, "text", "") if nws.node else ""
-            text_len = len(node_text)
-            effective_len = min(text_len, per_result_cap)
-            if text_len > per_result_cap and nws.node:
-                truncated_text = node_text[:per_result_cap] + "\n[...truncated...]"
+            text_tokens = _count_tokens_tiktoken(node_text, model_name)
+            if text_tokens > per_result_cap_tokens and nws.node:
+                # Truncate long nodes by estimating a safe char cut point
+                # Use ratio of cap/tokens to estimate how many chars to keep
+                ratio = per_result_cap_tokens / max(text_tokens, 1)
+                char_limit = int(len(node_text) * ratio * 0.95)  # 5% safety margin
+                truncated_text = node_text[:char_limit] + "\n[...truncated...]"
                 truncated_node = TextNode(
                     text=truncated_text,
                     metadata=getattr(nws.node, "metadata", {}),
                     id_=nws.node.id_,
                 )
                 nws = NodeWithScore(node=truncated_node, score=nws.score)
-                effective_len = len(truncated_text)
-            if total_chars + effective_len > max_context_chars and trimmed:
+                text_tokens = _count_tokens_tiktoken(truncated_text, model_name)
+            if total_tokens + text_tokens > effective_budget and trimmed:
                 break
             trimmed.append(nws)
-            total_chars += effective_len
+            total_tokens += text_tokens
         
         if len(trimmed) < len(merged):
             logger.info(
                 f"[insight] Context budget trimmed {len(merged)} → {len(trimmed)} "
-                f"results ({total_chars} chars, budget={max_context_chars})"
+                f"results ({total_tokens} tokens, budget={effective_budget})"
             )
         
         # =====================================================================
@@ -4216,25 +4323,10 @@ class LlamaIndexRAG:
             context_str = "[No relevant messages or documents found in the archive for this query]"
         
         user_message = (
-            f"Here are the relevant messages and documents retrieved from the knowledge base:\n"
-            f"-----\n"
-            f"{context_str}\n"
-            f"-----\n\n"
-            f"UNDERSTANDING THE RETRIEVED ITEMS:\n"
-            f"Each item is formatted with a source label. Common formats:\n"
-            f"- 'WhatsApp | date | sender in chat: message'\n"
-            f"- 'WhatsApp Conversation | chat | date_range (N messages):' multi-line\n"
-            f"- 'Paperless | date | Document title:' document text\n"
-            f"- 'Gmail | date | sender in subject: body'\n"
-            f"- 'Call Recording | date | caller in context:' transcript\n\n"
-            f"CITATION RULES:\n"
-            f"- Mention the source type, person, and date when citing information\n"
-            f"- For conversation chunks, cite the relevant speaker(s)\n\n"
-            f"Now produce the insight:\n\n"
-            f"{prompt}"
+            f"{_user_msg_prefix}"
+            f"{context_str}"
+            f"{_user_msg_suffix}"
         )
-        
-        llm = llm_override if llm_override is not None else Settings.llm
         
         messages = [
             ChatMessage(role="system", content=system_prompt),
@@ -4294,15 +4386,15 @@ class LlamaIndexRAG:
             "unique_sources": list(unique_sources),
             "avg_similarity_score": round(avg_score, 4),
             "sub_queries_used": len(queries),
-            "context_chars": total_chars,
-            "context_budget": max_context_chars,
+            "context_tokens": total_tokens,
+            "context_budget_tokens": effective_budget,
             "model_used": getattr(llm, "model", "unknown"),
         }
         
         logger.info(
             f"[insight] Query complete: {len(trimmed)} sources, "
             f"{len(unique_chats)} chats, avg_score={avg_score:.3f}, "
-            f"context={total_chars} chars"
+            f"context={total_tokens} tokens (budget={effective_budget})"
         )
         
         return {
