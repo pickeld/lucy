@@ -2084,12 +2084,22 @@ def get_full_graph_data(
         person_ids_in_graph: set = set()
         asset_refs_in_graph: set = set()
 
-        # --- Person nodes (same query as get_graph_data but simplified) ---
+        # --- Person nodes — prioritize persons with relationships, assets, or facts ---
         persons = conn.execute(
             """SELECT p.id, p.canonical_name, p.phone, p.is_group
                FROM persons p
+               LEFT JOIN (SELECT person_id, COUNT(*) as cnt FROM person_assets GROUP BY person_id) ac
+                   ON ac.person_id = p.id
+               LEFT JOIN (SELECT person_id, COUNT(*) as cnt FROM person_facts GROUP BY person_id) fc
+                   ON fc.person_id = p.id
+               LEFT JOIN (SELECT person_id, COUNT(*) as cnt FROM person_relationships GROUP BY person_id) rc
+                   ON rc.person_id = p.id
                WHERE p.is_group = FALSE
-               ORDER BY p.canonical_name
+                 AND (COALESCE(ac.cnt, 0) > 0 OR COALESCE(fc.cnt, 0) > 0 OR COALESCE(rc.cnt, 0) > 0)
+               ORDER BY (COALESCE(rc.cnt, 0) > 0) DESC,
+                        (COALESCE(ac.cnt, 0) > 0) DESC,
+                        (COALESCE(fc.cnt, 0) > 0) DESC,
+                        p.canonical_name
                LIMIT ?""",
             (limit_persons,),
         ).fetchall()

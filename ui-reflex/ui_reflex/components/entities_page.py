@@ -1369,8 +1369,8 @@ def _graph_tab() -> rx.Component:
                     gap="3",
                     class_name="mb-3",
                 ),
-                # Rendered graph
-                rx.html(AppState.entity_graph_html),
+                # Rendered Plotly network graph
+                rx.plotly(data=AppState.full_graph_figure, config={"scrollZoom": True, "displayModeBar": True}),
                 direction="column",
             ),
             # Fallback: list view or empty state

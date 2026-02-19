@@ -14,6 +14,12 @@ from typing import Any
 
 import reflex as rx
 
+try:
+    import plotly.graph_objects as go
+    import plotly.graph_objs  # noqa: F401 — needed for forward ref resolution
+except ImportError:
+    go = None  # type: ignore[assignment]
+
 from . import api_client
 from .utils.time_utils import group_conversations_by_time
 
@@ -314,6 +320,7 @@ class AppState(rx.State):
     full_graph_edges: list[dict[str, Any]] = []
     full_graph_loading: bool = False
     full_graph_stats: dict[str, str] = {}
+    full_graph_figure_data: dict[str, Any] = {}
 
     # --- Scheduled Insights ---
     insights_tasks: list[dict[str, Any]] = []
@@ -3300,13 +3307,34 @@ class AppState(rx.State):
             "total_edges": str(len(edges)),
         }
 
-        # Generate interactive vis.js HTML
-        self.entity_graph_html = self._build_visjs_html(nodes, edges)
+        # Store figure data as dict (state vars must be serializable)
+        fig_dict = self._build_plotly_graph(nodes, edges)
+        if fig_dict and fig_dict.get("data"):
+            self.full_graph_figure_data = fig_dict
+            self.entity_graph_html = "loaded"  # Flag that graph is ready
+        else:
+            self.full_graph_figure_data = {}
+            self.entity_graph_html = ""
         self.full_graph_loading = False
 
+    @rx.var(cache=True)
+    def full_graph_figure(self) -> go.Figure:
+        """Computed var: convert stored dict to a Plotly Figure for rx.plotly()."""
+        if not self.full_graph_figure_data or not self.full_graph_figure_data.get("data"):
+            return go.Figure()
+        return go.Figure(self.full_graph_figure_data)
+
     @staticmethod
-    def _build_visjs_html(nodes: list, edges: list) -> str:
-        """Generate an interactive force-directed graph using vis-network.js."""
+    def _build_plotly_graph(nodes: list, edges: list) -> dict:
+        """Generate a Plotly network graph figure as a dict.
+
+        Uses a spring layout to position nodes and renders them as
+        a Plotly scatter plot (nodes) + line traces (edges).
+        Returns a dict suitable for rx.plotly(data=...).
+        """
+        import math
+        import random
+
         # Color map by node type / asset_type
         color_map = {
             "person": "#4F81BD",
@@ -3319,75 +3347,177 @@ class AppState(rx.State):
         }
         # Edge color map by category
         edge_color_map = {
-            "identity_identity": "#E74C3C",
-            "identity_asset": "#3498DB",
-            "asset_asset": "#2ECC71",
+            "identity_identity": "rgba(231,76,60,0.4)",
+            "identity_asset": "rgba(52,152,219,0.3)",
+            "asset_asset": "rgba(46,204,113,0.3)",
         }
 
-        vis_nodes = []
-        for n in nodes:
-            ntype = n.get("type", "asset")
-            atype = n.get("asset_type", "")
-            color = color_map.get(atype, color_map.get(ntype, "#95A5A6"))
-            shape = "dot" if ntype == "person" else "square"
-            size = 20 if ntype == "person" else 10
-            label = n.get("label", "?")
-            if len(label) > 25:
-                label = label[:22] + "..."
-            vis_nodes.append({
-                "id": n.get("id", ""),
-                "label": label,
-                "color": color,
-                "shape": shape,
-                "size": size,
-                "title": f"{ntype}: {n.get('label', '')}" + (
-                    f"\\nFacts: {n.get('fact_count', 0)}, Assets: {n.get('total_assets', 0)}"
-                    if ntype == "person" else f"\\nType: {atype}"
-                ),
-            })
+        if not nodes:
+            return {}
 
-        vis_edges = []
+        # Build adjacency and node index
+        node_ids = [n.get("id", "") for n in nodes]
+        node_idx = {nid: i for i, nid in enumerate(node_ids)}
+
+        # Simple force-directed layout (Fruchterman-Reingold approximation)
+        n = len(nodes)
+        random.seed(42)
+        pos_x = [random.uniform(-1, 1) for _ in range(n)]
+        pos_y = [random.uniform(-1, 1) for _ in range(n)]
+
+        # Build edge list for layout
+        edge_pairs = []
         for e in edges:
-            cat = e.get("edge_category", "")
-            color = edge_color_map.get(cat, "#999")
-            vis_edges.append({
-                "from": e.get("source", ""),
-                "to": e.get("target", ""),
-                "label": e.get("type", ""),
-                "color": {"color": color, "opacity": 0.6},
-                "arrows": "to",
-                "font": {"size": 8, "color": "#666"},
+            s = node_idx.get(e.get("source", ""))
+            t = node_idx.get(e.get("target", ""))
+            if s is not None and t is not None and s != t:
+                edge_pairs.append((s, t))
+
+        # Run simple spring layout iterations
+        k = 1.0 / math.sqrt(max(n, 1))  # Optimal distance
+        for _ in range(80):
+            # Repulsion between all pairs (approximated for up to ~500 nodes)
+            dx = [0.0] * n
+            dy = [0.0] * n
+            for i in range(n):
+                for j in range(i + 1, min(n, i + 50)):  # Limit pairs for speed
+                    diffx = pos_x[i] - pos_x[j]
+                    diffy = pos_y[i] - pos_y[j]
+                    dist = math.sqrt(diffx * diffx + diffy * diffy) + 0.001
+                    force = k * k / dist * 0.1
+                    fx = diffx / dist * force
+                    fy = diffy / dist * force
+                    dx[i] += fx
+                    dy[i] += fy
+                    dx[j] -= fx
+                    dy[j] -= fy
+
+            # Attraction along edges
+            for s, t in edge_pairs:
+                diffx = pos_x[s] - pos_x[t]
+                diffy = pos_y[s] - pos_y[t]
+                dist = math.sqrt(diffx * diffx + diffy * diffy) + 0.001
+                force = dist * dist / k * 0.01
+                fx = diffx / dist * force
+                fy = diffy / dist * force
+                dx[s] -= fx
+                dy[s] -= fy
+                dx[t] += fx
+                dy[t] += fy
+
+            # Apply with damping
+            for i in range(n):
+                disp = math.sqrt(dx[i] * dx[i] + dy[i] * dy[i]) + 0.001
+                cap = min(disp, 0.1) / disp
+                pos_x[i] += dx[i] * cap
+                pos_y[i] += dy[i] * cap
+
+        # Build edge traces (one per edge category for legend)
+        edge_traces = {}
+        for e in edges:
+            cat = e.get("edge_category", "other")
+            s = node_idx.get(e.get("source", ""))
+            t = node_idx.get(e.get("target", ""))
+            if s is None or t is None:
+                continue
+            if cat not in edge_traces:
+                edge_traces[cat] = {"x": [], "y": [], "color": edge_color_map.get(cat, "rgba(150,150,150,0.3)")}
+            trace = edge_traces[cat]
+            trace["x"].extend([pos_x[s], pos_x[t], None])
+            trace["y"].extend([pos_y[s], pos_y[t], None])
+
+        # Build Plotly traces
+        traces = []
+
+        # Edge traces
+        cat_labels = {
+            "identity_identity": "Person↔Person",
+            "identity_asset": "Person↔Asset",
+            "asset_asset": "Asset↔Asset",
+        }
+        for cat, trace_data in edge_traces.items():
+            traces.append({
+                "x": trace_data["x"],
+                "y": trace_data["y"],
+                "mode": "lines",
+                "type": "scatter",
+                "line": {"width": 1, "color": trace_data["color"]},
+                "hoverinfo": "none",
+                "name": cat_labels.get(cat, cat),
+                "showlegend": True,
             })
 
-        import json
-        nodes_json = json.dumps(vis_nodes)
-        edges_json = json.dumps(vis_edges)
+        # Group nodes by type for colored legend
+        node_groups: dict = {}
+        for i, nd in enumerate(nodes):
+            ntype = nd.get("type", "asset")
+            atype = nd.get("asset_type", "")
+            group_key = ntype if ntype == "person" else (atype or "asset")
+            if group_key not in node_groups:
+                node_groups[group_key] = {"x": [], "y": [], "text": [], "hover": [], "color": color_map.get(group_key, "#95A5A6"), "size": []}
+            g = node_groups[group_key]
+            g["x"].append(pos_x[i])
+            g["y"].append(pos_y[i])
 
-        return f"""
-        <div id="graph-container" style="width:100%;height:600px;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa;"></div>
-        <script src="https://unpkg.com/vis-network@9.1.6/standalone/umd/vis-network.min.js"></script>
-        <script>
-          (function() {{
-            var container = document.getElementById('graph-container');
-            if (!container) return;
-            var data = {{
-              nodes: new vis.DataSet({nodes_json}),
-              edges: new vis.DataSet({edges_json})
-            }};
-            var options = {{
-              physics: {{
-                solver: 'forceAtlas2Based',
-                forceAtlas2Based: {{ gravitationalConstant: -50, springLength: 120 }},
-                stabilization: {{ iterations: 150 }}
-              }},
-              interaction: {{ hover: true, tooltipDelay: 200, zoomView: true, dragView: true }},
-              nodes: {{ font: {{ size: 11 }}, borderWidth: 2 }},
-              edges: {{ smooth: {{ type: 'continuous' }}, width: 1 }}
-            }};
-            new vis.Network(container, data, options);
-          }})();
-        </script>
-        """
+            label = nd.get("label", "?")
+            if len(label) > 20:
+                label = label[:17] + "…"
+            g["text"].append(label)
+
+            # Hover text
+            if ntype == "person":
+                hover = f"<b>{nd.get('label', '')}</b><br>Facts: {nd.get('fact_count', 0)}<br>Assets: {nd.get('total_assets', 0)}"
+            else:
+                hover = f"<b>{nd.get('label', '')}</b><br>Type: {atype}"
+            g["hover"].append(hover)
+            g["size"].append(18 if ntype == "person" else 10)
+
+        group_labels = {
+            "person": "👤 Person",
+            "whatsapp_msg": "💬 WhatsApp",
+            "document": "📄 Document",
+            "call_recording": "📞 Call",
+            "gmail": "📧 Email",
+            "asset": "📦 Asset",
+            "linked": "🔗 Linked",
+        }
+        for group_key, g in node_groups.items():
+            traces.append({
+                "x": g["x"],
+                "y": g["y"],
+                "mode": "markers+text",
+                "type": "scatter",
+                "marker": {
+                    "size": g["size"],
+                    "color": g["color"],
+                    "line": {"width": 1, "color": "#fff"},
+                },
+                "text": g["text"],
+                "textposition": "top center",
+                "textfont": {"size": 9},
+                "hovertext": g["hover"],
+                "hoverinfo": "text",
+                "name": group_labels.get(group_key, group_key),
+                "showlegend": True,
+            })
+
+        fig = {
+            "data": traces,
+            "layout": {
+                "showlegend": True,
+                "legend": {"x": 0, "y": 1, "bgcolor": "rgba(255,255,255,0.8)"},
+                "hovermode": "closest",
+                "xaxis": {"showgrid": False, "zeroline": False, "showticklabels": False, "visible": False},
+                "yaxis": {"showgrid": False, "zeroline": False, "showticklabels": False, "visible": False},
+                "margin": {"l": 10, "r": 10, "t": 10, "b": 10},
+                "paper_bgcolor": "#fafafa",
+                "plot_bgcolor": "#fafafa",
+                "height": 600,
+                "dragmode": "pan",
+            },
+        }
+
+        return fig
 
     async def load_merge_candidates(self):
         """Fetch merge suggestions from the backend."""
