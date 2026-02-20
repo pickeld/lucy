@@ -596,12 +596,58 @@ def _person_detail_panel() -> rx.Component:
 
 
 def _detail_header() -> rx.Component:
-    """Person name, bilingual name button, close button, delete button."""
+    """Person name (with inline edit), bilingual name button, close button, delete button."""
     return rx.flex(
-        rx.heading(
-            AppState.entity_detail_name,
-            size="5",
-            class_name="text-gray-800",
+        # Name: display or edit mode
+        rx.cond(
+            AppState.entity_editing_name,
+            # Edit mode: input + save/cancel
+            rx.flex(
+                rx.el.input(
+                    type="text",
+                    default_value=AppState.entity_editing_name_value,
+                    on_change=AppState.set_entity_editing_name_value,
+                    auto_focus=True,
+                    class_name=(
+                        "flex-1 bg-white border border-accent rounded-lg "
+                        "px-3 py-1.5 text-lg font-semibold text-gray-800 outline-none"
+                    ),
+                ),
+                rx.icon_button(
+                    rx.icon("check", size=16),
+                    on_click=AppState.save_name_edit,
+                    variant="solid",
+                    size="1",
+                    color_scheme="green",
+                ),
+                rx.icon_button(
+                    rx.icon("x", size=16),
+                    on_click=AppState.cancel_edit_name,
+                    variant="ghost",
+                    size="1",
+                    class_name="text-gray-400 hover:text-gray-600",
+                ),
+                align="center",
+                gap="2",
+                class_name="flex-1",
+            ),
+            # Display mode: heading + edit pencil
+            rx.flex(
+                rx.heading(
+                    AppState.entity_detail_name,
+                    size="5",
+                    class_name="text-gray-800",
+                ),
+                rx.icon_button(
+                    rx.icon("pencil", size=14),
+                    on_click=AppState.start_edit_name,
+                    variant="ghost",
+                    size="1",
+                    class_name="text-gray-300 hover:text-gray-500 ml-1",
+                ),
+                align="center",
+                gap="1",
+            ),
         ),
         rx.flex(
             # Bilingual name merge button
@@ -766,10 +812,10 @@ def _fact_row_display(item: dict) -> rx.Component:
             ),
             rx.fragment(),
         ),
-        # Source icon
+        # Source icon with cause tooltip
         rx.cond(
             item["source_type"] != "",
-            _source_icon(item["source_type"]),
+            _source_icon_with_ref(item["source_type"], item["source_ref"]),
             rx.fragment(),
         ),
         # Edit button
@@ -836,7 +882,22 @@ def _fact_row_edit(item: dict) -> rx.Component:
 
 
 def _source_icon(source_type: rx.Var) -> rx.Component:
-    """Small icon indicating the source of a fact."""
+    """Small icon indicating the source of a fact (tooltip shows source_type only)."""
+    return _source_icon_with_ref(source_type, None)
+
+
+def _source_icon_with_ref(source_type: rx.Var, source_ref: rx.Var = None) -> rx.Component:
+    """Small icon indicating the source of a fact, with optional source_ref tooltip."""
+    # Build tooltip content: prefer source_ref if available, fall back to source_type
+    if source_ref is not None:
+        tooltip_content = rx.cond(
+            source_ref != "",
+            source_ref,
+            source_type,
+        )
+    else:
+        tooltip_content = source_type
+
     return rx.tooltip(
         rx.icon(
             rx.cond(
@@ -867,7 +928,7 @@ def _source_icon(source_type: rx.Var) -> rx.Component:
                 ),
             ),
         ),
-        content=source_type,
+        content=tooltip_content,
     )
 
 
@@ -1090,6 +1151,8 @@ def _facts_tab() -> rx.Component:
                             rx.el.th("Value", class_name="px-3 py-2 text-left text-xs text-gray-500 font-medium"),
                             rx.el.th("Confidence", class_name="px-3 py-2 text-left text-xs text-gray-500 font-medium"),
                             rx.el.th("Source", class_name="px-3 py-2 text-left text-xs text-gray-500 font-medium"),
+                            rx.el.th("Cause", class_name="px-3 py-2 text-left text-xs text-gray-500 font-medium"),
+                            rx.el.th("", class_name="px-3 py-2 text-right text-xs text-gray-500 font-medium w-[80px]"),
                             class_name="bg-gray-50 border-b border-gray-200",
                         ),
                     ),
@@ -1113,12 +1176,13 @@ def _facts_tab() -> rx.Component:
 
 
 def _all_facts_row(fact: dict) -> rx.Component:
-    """Single row in the All Facts table."""
+    """Single row in the All Facts table with source_ref, edit, and delete."""
     return rx.el.tr(
         rx.el.td(
             rx.text(
                 fact["person_name"],
-                class_name="font-medium text-gray-800",
+                class_name="font-medium text-gray-800 cursor-pointer hover:text-accent",
+                on_click=AppState.select_entity(fact["person_id"]),
             ),
             class_name="px-3 py-2",
         ),
@@ -1152,9 +1216,47 @@ def _all_facts_row(fact: dict) -> rx.Component:
             ),
             class_name="px-3 py-2",
         ),
-        on_click=AppState.select_entity(fact["person_id"]),
+        # Cause column — human-readable source_ref
+        rx.el.td(
+            rx.cond(
+                fact["source_ref"] != "",
+                rx.text(
+                    fact["source_ref"],
+                    class_name="text-xs text-gray-500 truncate max-w-[200px]",
+                ),
+                rx.text("—", class_name="text-gray-300"),
+            ),
+            class_name="px-3 py-2",
+        ),
+        # Actions column — edit + delete
+        rx.el.td(
+            rx.flex(
+                rx.icon_button(
+                    rx.icon("pencil", size=12),
+                    on_click=AppState.edit_fact_from_all_tab(
+                        fact["person_id"], fact["fact_key"], fact["fact_value"],
+                    ),
+                    variant="ghost",
+                    size="1",
+                    class_name="text-gray-300 hover:text-gray-500",
+                ),
+                rx.icon_button(
+                    rx.icon("trash-2", size=12),
+                    on_click=AppState.delete_fact_from_all_tab(
+                        fact["person_id"], fact["fact_key"],
+                    ),
+                    variant="ghost",
+                    size="1",
+                    class_name="text-gray-300 hover:text-red-500",
+                ),
+                gap="1",
+                align="center",
+                justify="end",
+            ),
+            class_name="px-3 py-2",
+        ),
         class_name=(
-            "border-b border-gray-100 cursor-pointer hover:bg-gray-50 "
+            "border-b border-gray-100 hover:bg-gray-50 "
             "transition-colors duration-100"
         ),
     )

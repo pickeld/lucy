@@ -810,6 +810,48 @@ def delete_person(person_id: int) -> bool:
         conn.close()
 
 
+def rename_person(person_id: int, new_name: str) -> Optional[str]:
+    """Rename a person's canonical name.
+
+    Args:
+        person_id: The person to rename
+        new_name: New canonical name
+
+    Returns:
+        The new name if updated, None if person not found or name conflicts
+    """
+    new_name = new_name.strip()
+    if not new_name:
+        return None
+
+    conn = _get_connection()
+    try:
+        # Verify person exists
+        row = conn.execute(
+            "SELECT id FROM persons WHERE id = ?", (person_id,)
+        ).fetchone()
+        if not row:
+            return None
+
+        # Check uniqueness
+        dup = conn.execute(
+            "SELECT id FROM persons WHERE canonical_name = ? AND id != ?",
+            (new_name, person_id),
+        ).fetchone()
+        if dup:
+            return None  # Name already taken
+
+        conn.execute(
+            "UPDATE persons SET canonical_name = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?",
+            (new_name, person_id),
+        )
+        conn.commit()
+        logger.info(f"Renamed person {person_id} to '{new_name}'")
+        return new_name
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Alias management
 # ---------------------------------------------------------------------------

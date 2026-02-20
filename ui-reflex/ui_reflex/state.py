@@ -75,6 +75,50 @@ _CATEGORIZED_KEYS: set[str] = set()
 for _cat in FACT_CATEGORIES:
     _CATEGORIZED_KEYS.update(_cat["keys"])  # type: ignore[arg-type]
 
+
+def _format_source_ref(source_ref: str, source_type: str = "") -> str:
+    """Convert a raw source_ref string into a human-readable label.
+
+    Examples:
+        "chat:972501234567@c.us:1708012345" → "WhatsApp · 2024-02-15"
+        "paperless:42" → "Paperless #42"
+        "" / None → "Manual" (if source_type == "manual") or ""
+    """
+    if not source_ref:
+        if source_type == "manual":
+            return "Manual entry"
+        return ""
+
+    # WhatsApp message: "chat:{chat_id}:{unix_timestamp}"
+    if source_ref.startswith("chat:"):
+        parts = source_ref.split(":")
+        if len(parts) >= 3:
+            try:
+                from datetime import datetime, timezone
+                ts = int(parts[-1])
+                dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+                return f"WhatsApp · {dt.strftime('%Y-%m-%d')}"
+            except (ValueError, OSError):
+                pass
+        return "WhatsApp"
+
+    # Paperless document: "paperless:{doc_id}"
+    if source_ref.startswith("paperless:"):
+        doc_id = source_ref.replace("paperless:", "")
+        return f"Paperless #{doc_id}"
+
+    # Gmail
+    if source_ref.startswith("gmail:"):
+        return "Gmail"
+
+    # Call recording
+    if source_ref.startswith("call:"):
+        return "Call Recording"
+
+    # Fallback: show as-is (truncated)
+    return source_ref[:40]
+
+
 # ---------------------------------------------------------------------------
 # Human-readable display labels for settings keys
 # ---------------------------------------------------------------------------
@@ -298,6 +342,8 @@ class AppState(rx.State):
     entity_new_alias: str = ""
     entity_editing_fact_key: str = ""
     entity_editing_fact_value: str = ""
+    entity_editing_name: bool = False
+    entity_editing_name_value: str = ""
     entity_all_facts: list[dict[str, str]] = []
     entity_fact_keys: list[str] = []
     entity_fact_key_filter: str = ""
@@ -1250,7 +1296,7 @@ class AppState(rx.State):
         """Facts grouped into flat list with category headers for rx.foreach.
 
         Each item: {type: "header"|"fact", category, icon, key, label, value,
-                     confidence, source_type, fact_key}
+                     confidence, source_type, source_ref, fact_key}
         """
         facts_detail = self.entity_detail.get("facts_detail", [])
         if not facts_detail:
@@ -1272,6 +1318,8 @@ class AppState(rx.State):
                     f = fact_map[key]
                     conf = f.get("confidence")
                     conf_str = f"{float(conf) * 100:.0f}%" if conf is not None else ""
+                    raw_ref = str(f.get("source_ref", "") or "")
+                    src_type = str(f.get("source_type", "") or "")
                     cat_facts.append({
                         "type": "fact",
                         "category": str(cat["name"]),
@@ -1280,7 +1328,8 @@ class AppState(rx.State):
                         "label": FACT_LABELS.get(key, key.replace("_", " ").title()),
                         "value": str(f.get("fact_value", "")),
                         "confidence": conf_str,
-                        "source_type": str(f.get("source_type", "")),
+                        "source_type": src_type,
+                        "source_ref": _format_source_ref(raw_ref, src_type),
                         "fact_key": key,
                     })
                     used_keys.add(key)
@@ -1290,7 +1339,7 @@ class AppState(rx.State):
                     "category": str(cat["name"]),
                     "icon": str(cat["icon"]),
                     "key": "", "label": "", "value": "",
-                    "confidence": "", "source_type": "", "fact_key": "",
+                    "confidence": "", "source_type": "", "source_ref": "", "fact_key": "",
                 })
                 result.extend(cat_facts)
 
@@ -1300,6 +1349,8 @@ class AppState(rx.State):
             if key not in used_keys:
                 conf = f.get("confidence")
                 conf_str = f"{float(conf) * 100:.0f}%" if conf is not None else ""
+                raw_ref = str(f.get("source_ref", "") or "")
+                src_type = str(f.get("source_type", "") or "")
                 other_facts.append({
                     "type": "fact",
                     "category": "Other",
@@ -1308,7 +1359,8 @@ class AppState(rx.State):
                     "label": FACT_LABELS.get(key, key.replace("_", " ").title()),
                     "value": str(f.get("fact_value", "")),
                     "confidence": conf_str,
-                    "source_type": str(f.get("source_type", "")),
+                    "source_type": src_type,
+                    "source_ref": _format_source_ref(raw_ref, src_type),
                     "fact_key": key,
                 })
         if other_facts:
@@ -1317,7 +1369,7 @@ class AppState(rx.State):
                 "category": "Other",
                 "icon": "file-text",
                 "key": "", "label": "", "value": "",
-                "confidence": "", "source_type": "", "fact_key": "",
+                "confidence": "", "source_type": "", "source_ref": "", "fact_key": "",
             })
             result.extend(other_facts)
 
@@ -3002,9 +3054,78 @@ class AppState(rx.State):
         self.entity_selected_id = 0
         self.entity_detail = {}
         self.entity_editing_fact_key = ""
+        self.entity_editing_name = False
+        self.entity_editing_name_value = ""
         self.entity_new_fact_key = ""
         self.entity_new_fact_value = ""
         self.entity_new_alias = ""
+
+    # --- Entity name editing ---
+
+    def start_edit_name(self):
+        """Enter inline edit mode for the person's canonical name."""
+        current_name = self.entity_detail.get("canonical_name", "")
+        self.entity_editing_name = True
+        self.entity_editing_name_value = current_name
+
+    def cancel_edit_name(self):
+        """Cancel inline name editing."""
+        self.entity_editing_name = False
+        self.entity_editing_name_value = ""
+
+    async def save_name_edit(self):
+        """Save the edited person name via API."""
+        new_name = self.entity_editing_name_value.strip()
+        if not new_name or self.entity_selected_id <= 0:
+            return
+        result = await api_client.rename_entity(self.entity_selected_id, new_name)
+        if "error" in result:
+            self.entity_save_message = f"❌ {result['error']}"
+        else:
+            self.entity_save_message = f"✅ Renamed to '{new_name}'"
+            self.entity_editing_name = False
+            self.entity_editing_name_value = ""
+            # Refresh detail and person list
+            data = await api_client.fetch_entity(self.entity_selected_id)
+            if "error" not in data:
+                self.entity_detail = data
+            await self._load_entity_list()
+
+    # --- All Facts tab CRUD ---
+
+    async def delete_fact_from_all_tab(self, person_id: str, fact_key: str):
+        """Delete a fact from the All Facts tab."""
+        pid = int(person_id)
+        result = await api_client.delete_entity_fact(pid, fact_key)
+        if "error" in result:
+            self.entity_save_message = f"❌ {result['error']}"
+        else:
+            self.entity_save_message = f"✅ Fact '{fact_key}' deleted"
+        # Refresh the All Facts table
+        await self.load_all_entity_facts()
+        # Also refresh detail if this person is selected
+        if self.entity_selected_id == pid:
+            data = await api_client.fetch_entity(pid)
+            if "error" not in data:
+                self.entity_detail = data
+        stats = await api_client.fetch_entity_stats()
+        self.entity_stats = {k: str(v) for k, v in stats.items()}
+
+    async def edit_fact_from_all_tab(self, person_id: str, fact_key: str, current_value: str):
+        """Navigate to person detail with inline edit open for a specific fact."""
+        pid = int(person_id)
+        self.entity_tab = "people"
+        self.entity_selected_id = pid
+        self.entity_detail_loading = True
+        yield  # type: ignore[misc]
+        data = await api_client.fetch_entity(pid)
+        if "error" not in data:
+            self.entity_detail = data
+            self.entity_editing_fact_key = fact_key
+            self.entity_editing_fact_value = current_value
+        else:
+            self.entity_save_message = f"❌ {data['error']}"
+        self.entity_detail_loading = False
 
     async def delete_entity(self):
         """Delete the currently selected person."""
@@ -3156,10 +3277,15 @@ class AppState(rx.State):
         key_filter = self.entity_fact_key_filter or None
         data = await api_client.fetch_all_entity_facts(key=key_filter)
         raw_facts = data.get("facts", [])
-        self.entity_all_facts = [
-            {k: str(v) if v is not None else "" for k, v in f.items()}
-            for f in raw_facts
-        ]
+        result: list[dict[str, str]] = []
+        for f in raw_facts:
+            row = {k: str(v) if v is not None else "" for k, v in f.items()}
+            # Format source_ref into human-readable cause text
+            raw_ref = str(f.get("source_ref", "") or "")
+            src_type = str(f.get("source_type", "") or "")
+            row["source_ref"] = _format_source_ref(raw_ref, src_type)
+            result.append(row)
+        self.entity_all_facts = result
         keys = data.get("available_keys", [])
         self.entity_fact_keys = [str(k) for k in keys]
 

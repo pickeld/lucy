@@ -881,6 +881,20 @@ async def delete_entity(person_id: int) -> dict[str, Any]:
         return {"error": str(e)}
 
 
+async def rename_entity(person_id: int, new_name: str) -> dict[str, Any]:
+    """Rename a person entity's canonical name."""
+    try:
+        resp = await _get_client().put(
+            f"/entities/{person_id}",
+            json={"canonical_name": new_name},
+            timeout=10,
+        )
+        return resp.json()
+    except Exception as e:
+        logger.error(f"Error renaming entity {person_id}: {e}")
+        return {"error": str(e)}
+
+
 async def add_entity_fact(
     person_id: int, key: str, value: str,
 ) -> dict[str, Any]:

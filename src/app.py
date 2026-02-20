@@ -1107,6 +1107,29 @@ def get_entity(person_id: int):
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
+@app.route("/entities/<int:person_id>", methods=["PUT"])
+def update_entity(person_id: int):
+    """Update a person entity (rename canonical_name)."""
+    try:
+        data = request.json or {}
+        new_name = data.get("canonical_name")
+        if not new_name or not new_name.strip():
+            return jsonify({"error": "Missing 'canonical_name'"}), 400
+
+        result = entity_db.rename_person(person_id, new_name.strip())
+        if result is None:
+            return jsonify({"error": "Person not found or name already taken"}), 400
+        return jsonify({
+            "status": "ok",
+            "person_id": person_id,
+            "canonical_name": result,
+        }), 200
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Entity update error: {e}\n{trace}")
+        return jsonify({"error": str(e), "traceback": trace}), 500
+
+
 @app.route("/entities/<int:person_id>", methods=["DELETE"])
 def delete_entity(person_id: int):
     """Delete a person entity and all associated data."""
