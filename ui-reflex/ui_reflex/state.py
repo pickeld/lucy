@@ -1296,7 +1296,7 @@ class AppState(rx.State):
         """Facts grouped into flat list with category headers for rx.foreach.
 
         Each item: {type: "header"|"fact", category, icon, key, label, value,
-                     confidence, source_type, source_ref, fact_key}
+                     confidence, source_type, source_ref, source_quote, fact_key}
         """
         facts_detail = self.entity_detail.get("facts_detail", [])
         if not facts_detail:
@@ -1330,6 +1330,7 @@ class AppState(rx.State):
                         "confidence": conf_str,
                         "source_type": src_type,
                         "source_ref": _format_source_ref(raw_ref, src_type),
+                        "source_quote": str(f.get("source_quote", "") or ""),
                         "fact_key": key,
                     })
                     used_keys.add(key)
@@ -1339,7 +1340,7 @@ class AppState(rx.State):
                     "category": str(cat["name"]),
                     "icon": str(cat["icon"]),
                     "key": "", "label": "", "value": "",
-                    "confidence": "", "source_type": "", "source_ref": "", "fact_key": "",
+                    "confidence": "", "source_type": "", "source_ref": "", "source_quote": "", "fact_key": "",
                 })
                 result.extend(cat_facts)
 
@@ -1361,6 +1362,7 @@ class AppState(rx.State):
                     "confidence": conf_str,
                     "source_type": src_type,
                     "source_ref": _format_source_ref(raw_ref, src_type),
+                    "source_quote": str(f.get("source_quote", "") or ""),
                     "fact_key": key,
                 })
         if other_facts:
@@ -1369,7 +1371,7 @@ class AppState(rx.State):
                 "category": "Other",
                 "icon": "file-text",
                 "key": "", "label": "", "value": "",
-                "confidence": "", "source_type": "", "source_ref": "", "fact_key": "",
+                "confidence": "", "source_type": "", "source_ref": "", "source_quote": "", "fact_key": "",
             })
             result.extend(other_facts)
 
@@ -2976,7 +2978,18 @@ class AppState(rx.State):
                 fact_count = p.get("fact_count", 0)
 
             # Use display_name (bilingual) if available, else canonical_name
-            display_name = str(p.get("display_name", "") or p.get("canonical_name", ""))
+            # For list cards, show only English part; Hebrew goes to aliases preview
+            raw_display = str(p.get("display_name", "") or p.get("canonical_name", ""))
+            if " / " in raw_display:
+                # Bilingual: "English Name / Hebrew Name" — show English in card
+                parts = raw_display.split(" / ", 1)
+                display_name = parts[0].strip()
+                # Prepend Hebrew part to aliases preview
+                hebrew_part = parts[1].strip() if len(parts) > 1 else ""
+                if hebrew_part and hebrew_part not in aliases_preview:
+                    aliases_preview = hebrew_part + (", " + aliases_preview if aliases_preview else "")
+            else:
+                display_name = raw_display
 
             processed.append({
                 "id": str(p.get("id", "")),

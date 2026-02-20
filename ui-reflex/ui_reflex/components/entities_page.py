@@ -783,59 +783,75 @@ def _fact_row(item: dict) -> rx.Component:
 
 
 def _fact_row_display(item: dict) -> rx.Component:
-    """Fact row in display mode."""
-    return rx.flex(
-        # Label
-        rx.text(
-            item["label"],
-            class_name="text-sm text-gray-500 w-[120px] shrink-0",
-        ),
-        # Value
-        rx.text(
-            item["value"],
-            class_name="text-sm text-gray-800 flex-1",
-        ),
-        # Confidence badge
-        rx.cond(
-            item["confidence"] != "",
+    """Fact row in display mode with optional source quote."""
+    return rx.box(
+        rx.flex(
+            # Label
             rx.text(
-                item["confidence"],
-                class_name=rx.cond(
-                    item["confidence"].contains("100") | item["confidence"].contains("9") | item["confidence"].contains("8") | item["confidence"].contains("7"),  # type: ignore[union-attr]
-                    "text-xs text-green-600 bg-green-50 px-1.5 py-0.5 rounded",
-                    rx.cond(
-                        item["confidence"].contains("6") | item["confidence"].contains("5") | item["confidence"].contains("4"),  # type: ignore[union-attr]
-                        "text-xs text-yellow-600 bg-yellow-50 px-1.5 py-0.5 rounded",
-                        "text-xs text-red-600 bg-red-50 px-1.5 py-0.5 rounded",
+                item["label"],
+                class_name="text-sm text-gray-500 w-[120px] shrink-0",
+            ),
+            # Value
+            rx.text(
+                item["value"],
+                class_name="text-sm text-gray-800 flex-1",
+            ),
+            # Confidence badge
+            rx.cond(
+                item["confidence"] != "",
+                rx.text(
+                    item["confidence"],
+                    class_name=rx.cond(
+                        item["confidence"].contains("100") | item["confidence"].contains("9") | item["confidence"].contains("8") | item["confidence"].contains("7"),  # type: ignore[union-attr]
+                        "text-xs text-green-600 bg-green-50 px-1.5 py-0.5 rounded",
+                        rx.cond(
+                            item["confidence"].contains("6") | item["confidence"].contains("5") | item["confidence"].contains("4"),  # type: ignore[union-attr]
+                            "text-xs text-yellow-600 bg-yellow-50 px-1.5 py-0.5 rounded",
+                            "text-xs text-red-600 bg-red-50 px-1.5 py-0.5 rounded",
+                        ),
                     ),
                 ),
+                rx.fragment(),
+            ),
+            # Source icon with cause tooltip
+            rx.cond(
+                item["source_type"] != "",
+                _source_icon_with_ref(item["source_type"], item["source_ref"]),
+                rx.fragment(),
+            ),
+            # Edit button
+            rx.icon_button(
+                rx.icon("pencil", size=12),
+                on_click=AppState.start_edit_fact(item["fact_key"], item["value"]),
+                variant="ghost",
+                size="1",
+                class_name="text-gray-300 hover:text-gray-500",
+            ),
+            # Delete button
+            rx.icon_button(
+                rx.icon("trash-2", size=12),
+                on_click=AppState.delete_entity_fact(item["fact_key"]),
+                variant="ghost",
+                size="1",
+                class_name="text-gray-300 hover:text-red-500",
+            ),
+            align="center",
+            gap="2",
+        ),
+        # Source quote (shown below the fact row if available)
+        rx.cond(
+            item["source_quote"] != "",
+            rx.flex(
+                rx.icon("quote", size=10, class_name="text-gray-300 shrink-0 mt-0.5"),
+                rx.text(
+                    item["source_quote"],
+                    class_name="text-xs text-gray-400 italic",
+                ),
+                gap="1.5",
+                class_name="pl-[120px] mt-0.5",
             ),
             rx.fragment(),
         ),
-        # Source icon with cause tooltip
-        rx.cond(
-            item["source_type"] != "",
-            _source_icon_with_ref(item["source_type"], item["source_ref"]),
-            rx.fragment(),
-        ),
-        # Edit button
-        rx.icon_button(
-            rx.icon("pencil", size=12),
-            on_click=AppState.start_edit_fact(item["fact_key"], item["value"]),
-            variant="ghost",
-            size="1",
-            class_name="text-gray-300 hover:text-gray-500",
-        ),
-        # Delete button
-        rx.icon_button(
-            rx.icon("trash-2", size=12),
-            on_click=AppState.delete_entity_fact(item["fact_key"]),
-            variant="ghost",
-            size="1",
-            class_name="text-gray-300 hover:text-red-500",
-        ),
-        align="center",
-        gap="2",
         class_name="px-4 py-2 border-b border-gray-100 last:border-b-0 hover:bg-gray-50",
     )
 
@@ -1151,7 +1167,7 @@ def _facts_tab() -> rx.Component:
                             rx.el.th("Value", class_name="px-3 py-2 text-left text-xs text-gray-500 font-medium"),
                             rx.el.th("Confidence", class_name="px-3 py-2 text-left text-xs text-gray-500 font-medium"),
                             rx.el.th("Source", class_name="px-3 py-2 text-left text-xs text-gray-500 font-medium"),
-                            rx.el.th("Cause", class_name="px-3 py-2 text-left text-xs text-gray-500 font-medium"),
+                            rx.el.th("Quote", class_name="px-3 py-2 text-left text-xs text-gray-500 font-medium"),
                             rx.el.th("", class_name="px-3 py-2 text-right text-xs text-gray-500 font-medium w-[80px]"),
                             class_name="bg-gray-50 border-b border-gray-200",
                         ),
@@ -1216,15 +1232,25 @@ def _all_facts_row(fact: dict) -> rx.Component:
             ),
             class_name="px-3 py-2",
         ),
-        # Cause column — human-readable source_ref
+        # Quote column — the source text snippet
         rx.el.td(
             rx.cond(
-                fact["source_ref"] != "",
-                rx.text(
-                    fact["source_ref"],
-                    class_name="text-xs text-gray-500 truncate max-w-[200px]",
+                fact["source_quote"] != "",
+                rx.tooltip(
+                    rx.text(
+                        fact["source_quote"],
+                        class_name="text-xs text-gray-500 italic truncate max-w-[250px] cursor-help",
+                    ),
+                    content=fact["source_quote"],
                 ),
-                rx.text("—", class_name="text-gray-300"),
+                rx.cond(
+                    fact["source_ref"] != "",
+                    rx.text(
+                        fact["source_ref"],
+                        class_name="text-xs text-gray-400 truncate max-w-[200px]",
+                    ),
+                    rx.text("—", class_name="text-gray-300"),
+                ),
             ),
             class_name="px-3 py-2",
         ),

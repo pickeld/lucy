@@ -144,6 +144,13 @@ def init_entity_db() -> None:
             conn.execute("ALTER TABLE persons ADD COLUMN email TEXT")
             logger.info("Migration: added email column to persons table")
 
+        # Migration: add source_quote column to person_facts if missing
+        try:
+            conn.execute("SELECT source_quote FROM person_facts LIMIT 1")
+        except sqlite3.OperationalError:
+            conn.execute("ALTER TABLE person_facts ADD COLUMN source_quote TEXT")
+            logger.info("Migration: added source_quote column to person_facts table")
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS person_aliases (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -669,7 +676,7 @@ def get_person(person_id: int) -> Optional[Dict[str, Any]]:
 
         # Fetch facts
         fact_rows = conn.execute(
-            "SELECT fact_key, fact_value, confidence, source_type, source_ref, extracted_at "
+            "SELECT fact_key, fact_value, confidence, source_type, source_ref, source_quote, extracted_at "
             "FROM person_facts WHERE person_id = ?",
             (person_id,),
         ).fetchall()
@@ -1036,6 +1043,7 @@ def set_fact(
     confidence: float = 0.5,
     source_type: str = "extracted",
     source_ref: Optional[str] = None,
+    source_quote: Optional[str] = None,
 ) -> None:
     """Upsert a fact for a person.
 
@@ -1050,6 +1058,7 @@ def set_fact(
         confidence: How confident we are in this fact (0.0-1.0)
         source_type: Where this fact came from ("whatsapp", "paperless", "manual", "inferred")
         source_ref: Reference to source (e.g., "chat:972501234567@c.us:1708012345")
+        source_quote: The original text snippet the fact was extracted from
     """
     conn = _get_connection()
     try:
@@ -1065,16 +1074,16 @@ def set_fact(
                 conn.execute(
                     """UPDATE person_facts
                        SET fact_value = ?, confidence = ?, source_type = ?,
-                           source_ref = ?, extracted_at = CURRENT_TIMESTAMP
+                           source_ref = ?, source_quote = ?, extracted_at = CURRENT_TIMESTAMP
                        WHERE person_id = ? AND fact_key = ?""",
-                    (value, confidence, source_type, source_ref, person_id, key),
+                    (value, confidence, source_type, source_ref, source_quote, person_id, key),
                 )
         else:
             conn.execute(
                 """INSERT INTO person_facts
-                   (person_id, fact_key, fact_value, confidence, source_type, source_ref)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (person_id, key, value, confidence, source_type, source_ref),
+                   (person_id, fact_key, fact_value, confidence, source_type, source_ref, source_quote)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (person_id, key, value, confidence, source_type, source_ref, source_quote),
             )
 
         # Update person's last_updated timestamp
@@ -1421,7 +1430,7 @@ def get_all_facts_global(
         if fact_key:
             rows = conn.execute(
                 """SELECT f.fact_key, f.fact_value, f.confidence, f.source_type,
-                          f.source_ref, f.extracted_at, f.person_id,
+                          f.source_ref, f.source_quote, f.extracted_at, f.person_id,
                           p.canonical_name AS person_name
                    FROM person_facts f
                    JOIN persons p ON p.id = f.person_id
@@ -1433,7 +1442,7 @@ def get_all_facts_global(
         else:
             rows = conn.execute(
                 """SELECT f.fact_key, f.fact_value, f.confidence, f.source_type,
-                          f.source_ref, f.extracted_at, f.person_id,
+                          f.source_ref, f.source_quote, f.extracted_at, f.person_id,
                           p.canonical_name AS person_name
                    FROM person_facts f
                    JOIN persons p ON p.id = f.person_id

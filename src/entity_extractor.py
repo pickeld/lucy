@@ -45,6 +45,7 @@ RULES:
 - If nothing extractable, return {"entities": []}
 - For dates, use ISO format (YYYY-MM-DD) when possible
 - Names should be in their original script (Hebrew/English as written)
+- For each fact, include a "quote" field with the exact short snippet from the source text that supports this fact
 
 RESPONSE FORMAT:
 {
@@ -52,14 +53,14 @@ RESPONSE FORMAT:
     {
       "name": "Full Person Name",
       "facts": {
-        "birth_date": "1994-03-15",
-        "city": "Tel Aviv",
-        "job_title": "Product Manager",
-        "employer": "Wix",
-        "id_number": "038041612",
-        "gender": "female",
-        "marital_status": "married",
-        "email": "name@example.com"
+        "birth_date": {"value": "1994-03-15", "quote": "I'm turning 30 on March 15th"},
+        "city": {"value": "Tel Aviv", "quote": "I live in Tel Aviv"},
+        "job_title": {"value": "Product Manager", "quote": "started my new PM role"},
+        "employer": {"value": "Wix", "quote": "working at Wix now"},
+        "id_number": {"value": "038041612", "quote": "my ID is 038041612"},
+        "gender": {"value": "female", "quote": "as a woman in tech"},
+        "marital_status": {"value": "married", "quote": "my husband and I"},
+        "email": {"value": "name@example.com", "quote": "reach me at name@example.com"}
       },
       "relationships": [
         {"related_to": "Other Person Name", "type": "spouse"}
@@ -68,6 +69,7 @@ RESPONSE FORMAT:
   ]
 }
 
+NOTE: Each fact value can be either a simple string OR an object with "value" and "quote" fields.
 Only include facts that are EXPLICITLY stated or very clearly implied. Do NOT guess."""
 
 
@@ -271,9 +273,14 @@ def _store_extracted_entities(
         facts = entity.get("facts", {})
         extracted_email = None
         if isinstance(facts, dict):
-            extracted_email = facts.get("email")
-            if extracted_email and isinstance(extracted_email, str):
-                extracted_email = extracted_email.strip()
+            email_val = facts.get("email")
+            # Handle both string and {value, quote} formats
+            if isinstance(email_val, dict):
+                extracted_email = email_val.get("value", "")
+            elif isinstance(email_val, str):
+                extracted_email = email_val
+            if extracted_email:
+                extracted_email = extracted_email.strip() or None
             else:
                 extracted_email = None
 
@@ -284,17 +291,27 @@ def _store_extracted_entities(
             email=extracted_email,
         )
 
-        # Store facts
+        # Store facts — handle both string and {value, quote} formats
         if isinstance(facts, dict):
-            for key, value in facts.items():
-                if value and isinstance(value, str) and value.strip():
+            for key, raw_val in facts.items():
+                # Parse value and optional quote
+                fact_value: str = ""
+                fact_quote: str = ""
+                if isinstance(raw_val, dict):
+                    fact_value = str(raw_val.get("value", "")).strip()
+                    fact_quote = str(raw_val.get("quote", "")).strip()
+                elif isinstance(raw_val, str):
+                    fact_value = raw_val.strip()
+
+                if fact_value:
                     entity_db.set_fact(
                         person_id=person_id,
                         key=key,
-                        value=value.strip(),
+                        value=fact_value,
                         confidence=0.6,  # LLM extraction confidence
                         source_type=source_type,
                         source_ref=source_ref,
+                        source_quote=fact_quote or None,
                     )
                     facts_stored += 1
 
