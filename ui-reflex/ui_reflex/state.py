@@ -1260,7 +1260,7 @@ class AppState(rx.State):
         return self.identity_selected_id > 0
 
     @rx.var(cache=True)
-    def ididentity_detail_name(self) -> str:
+    def identity_detail_name(self) -> str:
         """Display name — uses bilingual display_name if available."""
         display = self.identity_detail.get("display_name", "")
         if display:
@@ -1268,11 +1268,11 @@ class AppState(rx.State):
         return str(self.identity_detail.get("canonical_name", ""))
 
     @rx.var(cache=True)
-    def ididentity_detail_phone(self) -> str:
+    def identity_detail_phone(self) -> str:
         return str(self.identity_detail.get("phone", "") or "")
 
     @rx.var(cache=True)
-    def ididentity_detail_whatsapp(self) -> str:
+    def identity_detail_whatsapp(self) -> str:
         return str(self.identity_detail.get("whatsapp_id", "") or "")
 
     @rx.var(cache=True)
