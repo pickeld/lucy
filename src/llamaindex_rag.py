@@ -4908,15 +4908,16 @@ class FulltextOnlyRetriever(BaseRetriever):
 
 class IdentityExtractionTransform:
     """LlamaIndex-compatible transform that runs identity extraction on nodes.
-    
+
     When added to an IngestionPipeline, automatically extracts person facts
     (birth dates, cities, relationships, etc.) from ingested documents and
-    stores them in the Identity Store.
-    
-    This is an alternative to calling entity_extractor directly from the
-    sync files. The transform passes nodes through unchanged — it only
-    has the side effect of populating the identity store.
-    
+    stores them via the unified IdentityExtractor service.
+
+    The transform passes nodes through unchanged — it only has the side
+    effect of populating the identity store. All filtering, dedup, and
+    source-specific logic is handled by the ``IdentityExtractor.submit()``
+    method.
+
     Usage:
         pipeline = IngestionPipeline(
             transformations=[
@@ -4926,28 +4927,24 @@ class IdentityExtractionTransform:
             ],
         )
     """
-    
+
     def __call__(self, nodes: List[TextNode], **kwargs) -> List[TextNode]:
         """Extract identities from nodes and store in identity_db.
-        
+
         Nodes are passed through unchanged. Identity extraction is a
         side effect that populates the identity store.
-        
+
         Args:
             nodes: List of TextNode instances from the pipeline
-            
+
         Returns:
             The same nodes, unchanged
         """
-        if settings.get("rag_entity_extraction_in_pipeline", "false").lower() != "true":
-            return nodes
-        
-        if not settings.get("entity_extraction_enabled", "true").lower() == "true":
-            return nodes
-        
         try:
-            from identity_extractor import extract_identities_from_document
-            
+            from identity_extractor import get_extractor, ExtractionSource
+
+            extractor = get_extractor()
+
             for node in nodes:
                 metadata = getattr(node, "metadata", {})
                 source = metadata.get("source", "")
@@ -4955,27 +4952,28 @@ class IdentityExtractionTransform:
                 sender = metadata.get("sender", "")
                 text = getattr(node, "text", "")
                 source_id = metadata.get("source_id", "")
-                
+
                 if not text or len(text) < 20:
                     continue
-                
+
                 # Only extract from document-type content (not short messages)
                 content_type = metadata.get("content_type", "")
                 if content_type in ("document", "text") and source in ("paperless", "gmail"):
                     try:
-                        extract_identities_from_document(
-                            doc_title=title or "Document",
-                            doc_text=text,
+                        extractor.submit(
+                            content=text,
+                            source=ExtractionSource.RAG_PIPELINE,
                             source_ref=source_id,
                             sender=sender,
+                            chat_name=title or "Document",
                         )
                     except Exception as e:
                         logger.debug(f"Identity extraction failed for node (non-critical): {e}")
         except ImportError:
-            logger.debug("entity_extractor not available — skipping pipeline extraction")
+            logger.debug("identity_extractor not available — skipping pipeline extraction")
         except Exception as e:
             logger.debug(f"IdentityExtractionTransform failed (non-critical): {e}")
-        
+
         return nodes
 
 

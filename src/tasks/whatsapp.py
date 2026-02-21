@@ -98,14 +98,16 @@ def process_whatsapp_message(self, payload: dict) -> dict:
 
             # Entity extraction (non-blocking — failures are logged and ignored)
             try:
-                from identity_extractor import maybe_extract_identities
-                maybe_extract_identities(
+                from identity_extractor import get_extractor, ExtractionSource
+                get_extractor().submit(
+                    content=msg.message,
+                    source=ExtractionSource.WHATSAPP_MESSAGE,
+                    source_ref=f"chat:{chat_id or ''}:{msg.timestamp or '0'}",
                     sender=sender,
                     chat_name=chat_name or "Unknown",
-                    message=msg.message,
                     timestamp=str(msg.timestamp) if msg.timestamp else "0",
                     chat_id=chat_id or "",
-                    whatsapp_id=msg.contact.id,
+                    sender_whatsapp_id=msg.contact.id,
                 )
             except Exception as ee:
                 logger.debug(f"[task] Entity extraction failed (non-critical): {ee}")

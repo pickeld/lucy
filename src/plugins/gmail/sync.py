@@ -623,28 +623,28 @@ class EmailSyncer:
                             "sync_run_id": self._sync_run_id,
                             "indexed_at": int(time.time()),
                             # Person-asset graph: default empty, populated below
-                                "person_ids": [],
-                                "mentioned_person_ids": [],
+                            "person_ids": [],
+                            "mentioned_person_ids": [],
                             # Asset-asset graph: structural pointers
-                                "asset_id": "",
-                                "parent_asset_id": "",
-                                "thread_id": "",
-                                "chunk_group_id": "",
-                            }
-    
-                            # Asset-asset graph: set structural pointers
-                            try:
-                                from asset_linker import generate_asset_id, link_thread_member
-                                email_asset_id = generate_asset_id("gmail", msg_id)
-                                base_metadata["asset_id"] = email_asset_id
-                                base_metadata["thread_id"] = parsed.thread_id
-                                base_metadata["chunk_group_id"] = f"gm:{msg_id}"
-                                if parsed.thread_id:
-                                    link_thread_member(parsed.thread_id, source_id, provenance="gmail_sync")
-                            except Exception as al_err:
-                                logger.debug(f"Asset linking failed for email '{parsed.subject}' (non-critical): {al_err}")
-    
-                            # Person-asset graph: resolve sender → person_id
+                            "asset_id": "",
+                            "parent_asset_id": "",
+                            "thread_id": "",
+                            "chunk_group_id": "",
+                        }
+
+                        # Asset-asset graph: set structural pointers
+                        try:
+                            from asset_linker import generate_asset_id, link_thread_member
+                            email_asset_id = generate_asset_id("gmail", msg_id)
+                            base_metadata["asset_id"] = email_asset_id
+                            base_metadata["thread_id"] = parsed.thread_id
+                            base_metadata["chunk_group_id"] = f"gm:{msg_id}"
+                            if parsed.thread_id:
+                                link_thread_member(parsed.thread_id, source_id, provenance="gmail_sync")
+                        except Exception as al_err:
+                            logger.debug(f"Asset linking failed for email '{parsed.subject}' (non-critical): {al_err}")
+
+                        # Person-asset graph: resolve sender → person_id
                         try:
                             from person_resolver import resolve_and_link
                             person_ids, mentioned_ids = resolve_and_link(
@@ -713,12 +713,13 @@ class EmailSyncer:
                             
                             # Entity extraction from email content
                             try:
-                                from identity_extractor import extract_identities_from_document
-                                extract_identities_from_document(
-                                    doc_title=parsed.subject or "Email",
-                                    doc_text=body,
+                                from identity_extractor import get_extractor, ExtractionSource
+                                get_extractor().submit(
+                                    content=body,
+                                    source=ExtractionSource.GMAIL_EMAIL,
                                     source_ref=f"gmail:{msg_id}",
                                     sender=parsed.from_address or "",
+                                    chat_name=parsed.subject or "Email",
                                 )
                             except Exception as ee:
                                 logger.debug(f"Entity extraction failed for email '{parsed.subject}' (non-critical): {ee}")

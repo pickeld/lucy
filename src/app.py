@@ -398,11 +398,12 @@ def rag_query():
         # and facts the user provides in conversation (e.g., "David has a son
         # named Ben"). Non-blocking: failures never affect the chat response.
         try:
-            from identity_extractor import extract_from_chat_message
-            extract_from_chat_message(
-                user_message=question,
-                llm_answer=answer,
-                conversation_id=conversation_id,
+            from identity_extractor import get_extractor, ExtractionSource
+            get_extractor().submit(
+                content=question,
+                source=ExtractionSource.CHAT_CORRECTION,
+                source_ref=f"chat_correction:{conversation_id}" if conversation_id else "",
+                llm_context=answer,
             )
         except Exception as e:
             logger.debug(f"Chat entity extraction failed (non-critical): {e}")
@@ -1209,7 +1210,10 @@ def set_identity_fact(person_id: int):
         person = Identity.get(person_id)
         if not person:
             return jsonify({"error": "Person not found"}), 404
-        person.set_fact(
+
+        from identity_extractor import get_extractor
+        get_extractor().set_fact(
+            person_id=person_id,
             key=key,
             value=value,
             confidence=data.get("confidence", 0.8),

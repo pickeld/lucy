@@ -693,13 +693,13 @@ class CallRecordingSyncer:
 
             # Entity extraction (non-critical)
             try:
-                from identity_extractor import extract_identities_from_document
-
-                extract_identities_from_document(
-                    doc_title=f"Call Recording: {filename}",
-                    doc_text=transcript_text,
+                from identity_extractor import get_extractor, ExtractionSource
+                get_extractor().submit(
+                    content=transcript_text,
+                    source=ExtractionSource.CALL_RECORDING,
                     source_ref=source_id,
                     sender=participants_str,
+                    chat_name=f"Call Recording: {filename}",
                 )
             except Exception as ee:
                 logger.debug(f"Entity extraction failed (non-critical): {ee}")

@@ -210,6 +210,17 @@ def init_entity_db() -> None:
             )
         """)
 
+        # Extraction log: dedup tracker for identity extraction service.
+        # Prevents re-extracting facts from the same source_ref during re-syncs.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS extraction_log (
+                source_ref TEXT PRIMARY KEY,
+                source_type TEXT NOT NULL,
+                extracted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                facts_stored INTEGER DEFAULT 0
+            )
+        """)
+
         # Asset-asset graph: edges between assets for cross-channel coherence.
         # Relation types: thread_member, attachment_of, chunk_of, reply_to,
         # references, transcript_of.
@@ -259,6 +270,10 @@ def init_entity_db() -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_person_assets_type ON person_assets(asset_type)"
+        )
+        # Extraction log indexes
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_extraction_log_type ON extraction_log(source_type)"
         )
         # Asset-asset graph indexes
         conn.execute(
@@ -2788,6 +2803,66 @@ def get_asset_edge_stats() -> Dict[str, int]:
                ORDER BY cnt DESC"""
         ).fetchall()
         return {r["relation_type"]: r["cnt"] for r in rows}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Extraction log — dedup tracker for identity extraction service
+# ---------------------------------------------------------------------------
+
+def check_extracted(source_ref: str) -> Optional[int]:
+    """Check if a source_ref has already been extracted.
+
+    Args:
+        source_ref: The source reference to check (e.g., "chat:972...:170...")
+
+    Returns:
+        Number of facts stored on previous extraction, or None if not yet extracted
+    """
+    if not source_ref:
+        return None
+
+    conn = _get_connection()
+    try:
+        row = conn.execute(
+            "SELECT facts_stored FROM extraction_log WHERE source_ref = ?",
+            (source_ref,),
+        ).fetchone()
+        return row["facts_stored"] if row else None
+    finally:
+        conn.close()
+
+
+def mark_extracted(
+    source_ref: str,
+    source_type: str,
+    facts_stored: int = 0,
+) -> None:
+    """Record that a source_ref has been extracted.
+
+    Upserts into the extraction_log so subsequent calls with the same
+    source_ref are skipped by ``check_extracted()``.
+
+    Args:
+        source_ref: The source reference (e.g., "chat:972...:170...")
+        source_type: Extraction source type (e.g., "whatsapp", "paperless")
+        facts_stored: Number of facts stored from this extraction
+    """
+    if not source_ref:
+        return
+
+    conn = _get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO extraction_log (source_ref, source_type, facts_stored)
+               VALUES (?, ?, ?)
+               ON CONFLICT(source_ref) DO UPDATE SET
+                   facts_stored = excluded.facts_stored,
+                   extracted_at = CURRENT_TIMESTAMP""",
+            (source_ref, source_type, facts_stored),
+        )
+        conn.commit()
     finally:
         conn.close()
 

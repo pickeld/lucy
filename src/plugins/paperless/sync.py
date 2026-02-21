@@ -563,12 +563,13 @@ class DocumentSyncer:
                             
                             # Entity extraction from document content
                             try:
-                                from identity_extractor import extract_identities_from_document
-                                extract_identities_from_document(
-                                    doc_title=title,
-                                    doc_text=content,
+                                from identity_extractor import get_extractor, ExtractionSource
+                                get_extractor().submit(
+                                    content=content,
+                                    source=ExtractionSource.PAPERLESS_DOCUMENT,
                                     source_ref=source_id,
                                     sender=sender,
+                                    chat_name=title,
                                 )
                             except Exception as ee:
                                 logger.debug(f"Entity extraction failed for '{title}' (non-critical): {ee}")
