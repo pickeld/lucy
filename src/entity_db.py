@@ -1,4 +1,4 @@
-"""SQLite-backed entity store for person knowledge management.
+"""SQLite-backed identity store for person knowledge management.
 
 Accumulates structured knowledge about people over time from WhatsApp
 messages, Paperless documents, and other sources. Provides:
@@ -7,8 +7,8 @@ messages, Paperless documents, and other sources. Provides:
 - Multi-script name aliases for cross-script disambiguation (שירן ↔ Shiran)
 - Key-value facts (birth_date, city, job, etc.) with confidence scores
 - Person-to-person relationships (friend, spouse, parent, etc.)
-- Entity deduplication by phone (primary), email (secondary), name (tertiary)
-- Entity merging: combine duplicate persons into one record
+- Identity deduplication by phone (primary), email (secondary), name (tertiary)
+- Identity merging: combine duplicate persons into one record
 - Automatic Hebrew+English display name merging
 
 Database location: data/settings.db (shared with settings_db, conversations_db)
@@ -272,7 +272,7 @@ def init_entity_db() -> None:
         )
 
         conn.commit()
-        logger.info("Entity database tables initialized")
+        logger.info("Identity database tables initialized")
     finally:
         conn.close()
 
@@ -491,7 +491,7 @@ def get_or_create_person(
         whatsapp_id: WhatsApp ID (e.g., "972501234567@c.us")
         phone: Phone number (e.g., "+972501234567")
         email: Email address
-        is_group: Whether this is a group entity
+        is_group: Whether this is a group identity
 
     Returns:
         Person ID (integer)
@@ -1472,7 +1472,7 @@ def get_fact_keys() -> List[str]:
 
 
 def get_stats() -> Dict[str, int]:
-    """Get entity store statistics.
+    """Get identity store statistics.
 
     Returns:
         Dict with counts of persons, aliases, facts, relationships
@@ -1500,7 +1500,7 @@ def get_stats() -> Dict[str, int]:
 # ---------------------------------------------------------------------------
 
 def seed_from_whatsapp_contacts(contacts: List[Dict[str, Any]]) -> Dict[str, int]:
-    """Seed the entity store from WhatsApp contact data.
+    """Seed the identity store from WhatsApp contact data.
 
     Takes a list of contact dicts (from WAHA API) and creates
     person records with aliases. Existing persons are updated
@@ -1587,20 +1587,20 @@ def seed_from_whatsapp_contacts(contacts: List[Dict[str, Any]]) -> Dict[str, int
             )
 
     logger.info(
-        f"Entity seeding complete: {created} created, {updated} updated, {skipped} skipped"
+        f"Identity seeding complete: {created} created, {updated} updated, {skipped} skipped"
     )
     return {"created": created, "updated": updated, "skipped": skipped}
 
 
 # ---------------------------------------------------------------------------
-# Entity merging
+# Identity merging
 # ---------------------------------------------------------------------------
 
 def merge_persons(
     target_id: int,
     source_ids: List[int],
 ) -> Dict[str, Any]:
-    """Merge multiple person records into one target person.
+    """Merge multiple identity records into one target person.
 
     The target person keeps its canonical_name and core fields.
     From each source person, we absorb:
@@ -1806,7 +1806,7 @@ def merge_persons(
         final_name = final_row["canonical_name"] if final_row else ""
 
         logger.info(
-            f"Entity merge: {sources_deleted} persons merged into {target_id} "
+            f"Identity merge: {sources_deleted} persons merged into {target_id} "
             f"({aliases_moved} aliases, {facts_moved} facts, {rels_moved} rels)"
         )
         return {
@@ -1822,7 +1822,7 @@ def merge_persons(
 
 
 def find_merge_candidates(limit: int = 50) -> List[Dict[str, Any]]:
-    """Find potential duplicate persons that could be merged.
+    """Find potential duplicate identities that could be merged.
 
     Detection strategies (in priority order):
     1. Same phone number
@@ -1984,7 +1984,7 @@ def _find_name_similarity_candidates(
 
 
 def _get_mini_persons(conn: sqlite3.Connection, ids: List[int]) -> List[Dict[str, Any]]:
-    """Get minimal person info for a list of IDs (used in merge candidates)."""
+    """Get minimal person info for a list of IDs (used in identity merge candidates)."""
     result: list[Dict[str, Any]] = []
     for pid in ids:
         row = conn.execute(
@@ -2325,7 +2325,7 @@ def get_full_graph_data(
 
 
 def cleanup_garbage_persons() -> Dict[str, Any]:
-    """Remove persons with invalid/garbage names from the entity store.
+    """Remove persons with invalid/garbage names from the identity store.
 
     Identifies persons whose canonical_name fails _is_valid_person_name()
     and deletes them (cascades to aliases, facts, relationships).
@@ -2356,7 +2356,7 @@ def cleanup_garbage_persons() -> Dict[str, Any]:
             conn.commit()
 
         logger.info(
-            f"Entity cleanup: removed {len(garbage_ids)} garbage persons"
+            f"Identity cleanup: removed {len(garbage_ids)} garbage persons"
         )
         return {"deleted": len(garbage_ids), "names": garbage_names}
     finally:

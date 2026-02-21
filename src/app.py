@@ -1090,11 +1090,11 @@ def costs_breakdown():
 
 
 # =============================================================================
-# ENTITY STORE ENDPOINTS
+# IDENTITY STORE ENDPOINTS (formerly /entities, now /identities)
 # =============================================================================
 
-@app.route("/entities", methods=["GET"])
-def list_entities():
+@app.route("/identities", methods=["GET"])
+def list_identities():
     """List all person entities with summary info.
 
     Supports ?q=search for searching, and ?limit=N to cap results.
@@ -1117,8 +1117,8 @@ def list_entities():
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
-@app.route("/entities/stats", methods=["GET"])
-def entity_stats():
+@app.route("/identities/stats", methods=["GET"])
+def identity_stats():
     """Get entity store statistics."""
     try:
         stats = entity_db.get_stats()
@@ -1127,8 +1127,8 @@ def entity_stats():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/entities/<int:person_id>", methods=["GET"])
-def get_entity(person_id: int):
+@app.route("/identities/<int:person_id>", methods=["GET"])
+def get_identity(person_id: int):
     """Get a person entity with all facts, aliases, and relationships."""
     try:
         person = Identity.get(person_id)
@@ -1141,8 +1141,8 @@ def get_entity(person_id: int):
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
-@app.route("/entities/<int:person_id>", methods=["PUT"])
-def update_entity(person_id: int):
+@app.route("/identities/<int:person_id>", methods=["PUT"])
+def update_identity(person_id: int):
     """Update a person entity (rename canonical_name)."""
     try:
         data = request.json or {}
@@ -1167,8 +1167,8 @@ def update_entity(person_id: int):
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
-@app.route("/entities/<int:person_id>", methods=["DELETE"])
-def delete_entity(person_id: int):
+@app.route("/identities/<int:person_id>", methods=["DELETE"])
+def delete_identity(person_id: int):
     """Delete a person entity and all associated data."""
     try:
         person = Identity.get(person_id)
@@ -1182,8 +1182,8 @@ def delete_entity(person_id: int):
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
-@app.route("/entities/<int:person_id>/facts", methods=["GET"])
-def get_entity_facts(person_id: int):
+@app.route("/identities/<int:person_id>/facts", methods=["GET"])
+def get_identity_facts(person_id: int):
     """Get all facts for a person entity."""
     try:
         person = Identity.get(person_id)
@@ -1196,8 +1196,8 @@ def get_entity_facts(person_id: int):
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
-@app.route("/entities/<int:person_id>/facts", methods=["POST"])
-def set_entity_fact(person_id: int):
+@app.route("/identities/<int:person_id>/facts", methods=["POST"])
+def set_identity_fact(person_id: int):
     """Add or update a fact for a person entity."""
     try:
         data = request.json or {}
@@ -1222,8 +1222,8 @@ def set_entity_fact(person_id: int):
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
-@app.route("/entities/<int:person_id>/aliases", methods=["POST"])
-def add_entity_alias(person_id: int):
+@app.route("/identities/<int:person_id>/aliases", methods=["POST"])
+def add_identity_alias(person_id: int):
     """Add a name alias to a person entity."""
     try:
         data = request.json or {}
@@ -1242,8 +1242,8 @@ def add_entity_alias(person_id: int):
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
-@app.route("/entities/<int:person_id>/facts/<fact_key>", methods=["DELETE"])
-def delete_entity_fact(person_id: int, fact_key: str):
+@app.route("/identities/<int:person_id>/facts/<fact_key>", methods=["DELETE"])
+def delete_identity_fact(person_id: int, fact_key: str):
     """Delete a single fact for a person entity."""
     try:
         person = Identity.get(person_id)
@@ -1259,8 +1259,8 @@ def delete_entity_fact(person_id: int, fact_key: str):
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
-@app.route("/entities/<int:person_id>/aliases/<int:alias_id>", methods=["DELETE"])
-def delete_entity_alias_by_id(person_id: int, alias_id: int):
+@app.route("/identities/<int:person_id>/aliases/<int:alias_id>", methods=["DELETE"])
+def delete_identity_alias_by_id(person_id: int, alias_id: int):
     """Delete a single alias for a person entity by alias row ID."""
     try:
         person = Identity.get(person_id)
@@ -1276,8 +1276,8 @@ def delete_entity_alias_by_id(person_id: int, alias_id: int):
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
-@app.route("/entities/resolve/<name>", methods=["GET"])
-def resolve_entity_name(name: str):
+@app.route("/identities/resolve/<name>", methods=["GET"])
+def resolve_identity_name(name: str):
     """Resolve a name to matching person entities (for disambiguation)."""
     try:
         matches = entity_db.resolve_name(name)
@@ -1288,7 +1288,7 @@ def resolve_entity_name(name: str):
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
-@app.route("/entities/facts/all", methods=["GET"])
+@app.route("/identities/facts/all", methods=["GET"])
 def list_all_facts():
     """List all facts across all persons, optionally filtered by fact_key."""
     try:
@@ -1303,8 +1303,8 @@ def list_all_facts():
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
-@app.route("/entities/seed", methods=["POST"])
-def seed_entities():
+@app.route("/identities/seed", methods=["POST"])
+def seed_identities():
     """Seed entity store from WhatsApp contacts.
     
     Fetches all contacts from WAHA API and creates person records
@@ -1356,8 +1356,8 @@ def seed_entities():
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
-@app.route("/entities/cleanup", methods=["POST"])
-def cleanup_entities():
+@app.route("/identities/cleanup", methods=["POST"])
+def cleanup_identities():
     """Remove persons with garbage/invalid names from the entity store."""
     try:
         result = entity_db.cleanup_garbage_persons()
@@ -1373,8 +1373,8 @@ def cleanup_entities():
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
-@app.route("/entities/merge", methods=["POST"])
-def merge_entities():
+@app.route("/identities/merge", methods=["POST"])
+def merge_identities():
     """Merge multiple person entities into one.
     
     Body: {"target_id": 42, "source_ids": [10, 15, 23]}
@@ -1432,7 +1432,7 @@ def merge_entities():
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
-@app.route("/entities/merge-candidates", methods=["GET"])
+@app.route("/identities/merge-candidates", methods=["GET"])
 def merge_candidates():
     """Find potential duplicate persons that could be merged.
     
@@ -1448,8 +1448,8 @@ def merge_candidates():
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
-@app.route("/entities/graph", methods=["GET"])
-def entity_graph():
+@app.route("/identities/graph", methods=["GET"])
+def identity_graph():
     """Get graph data for person-relationship-asset visualization.
     
     Returns nodes (persons with asset counts) and edges (relationships)
@@ -1468,8 +1468,8 @@ def entity_graph():
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
-@app.route("/entities/graph/full", methods=["GET"])
-def entity_graph_full():
+@app.route("/identities/graph/full", methods=["GET"])
+def identity_graph_full():
     """Get full graph data including person nodes, asset nodes, and all edge types.
     
     Returns a rich graph suitable for interactive Neo4j-style visualization
@@ -1496,8 +1496,8 @@ def entity_graph_full():
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
-@app.route("/entities/<int:person_id>/display-name", methods=["POST"])
-def update_entity_display_name(person_id: int):
+@app.route("/identities/<int:person_id>/display-name", methods=["POST"])
+def update_identity_display_name(person_id: int):
     """Recalculate and update the bilingual display name for a person.
     
     Checks if the person has aliases in both Hebrew and Latin scripts
@@ -1523,12 +1523,149 @@ def update_entity_display_name(person_id: int):
         return jsonify({"error": str(e), "traceback": trace}), 500
 
 
-@app.route("/entities/ui", methods=["GET"])
-def entities_ui():
-    """Serve the entity management web UI."""
+@app.route("/identities/ui", methods=["GET"])
+def identities_ui():
+    """Serve the identity management web UI."""
     from flask import send_from_directory
     templates_dir = Path(__file__).resolve().parent / "templates"
     return send_from_directory(str(templates_dir), "entities.html")
+
+
+# =============================================================================
+# LEGACY /entities/* ROUTES — Backward Compatibility (deprecated)
+#
+# These routes delegate to the primary /identities/* handlers above.
+# They log a deprecation warning on each access to encourage migration.
+# =============================================================================
+
+def _log_deprecated_route():
+    """Log a deprecation warning for legacy /entities/* route access."""
+    logger.warning(
+        "Deprecated route %s %s accessed — migrate to %s",
+        request.method,
+        request.path,
+        request.path.replace("/entities", "/identities", 1),
+    )
+
+
+@app.route("/entities", methods=["GET"])
+def list_entities_legacy():
+    _log_deprecated_route()
+    return list_identities()
+
+
+@app.route("/entities/stats", methods=["GET"])
+def entity_stats_legacy():
+    _log_deprecated_route()
+    return identity_stats()
+
+
+@app.route("/entities/<int:person_id>", methods=["GET"])
+def get_entity_legacy(person_id: int):
+    _log_deprecated_route()
+    return get_identity(person_id)
+
+
+@app.route("/entities/<int:person_id>", methods=["PUT"])
+def update_entity_legacy(person_id: int):
+    _log_deprecated_route()
+    return update_identity(person_id)
+
+
+@app.route("/entities/<int:person_id>", methods=["DELETE"])
+def delete_entity_legacy(person_id: int):
+    _log_deprecated_route()
+    return delete_identity(person_id)
+
+
+@app.route("/entities/<int:person_id>/facts", methods=["GET"])
+def get_entity_facts_legacy(person_id: int):
+    _log_deprecated_route()
+    return get_identity_facts(person_id)
+
+
+@app.route("/entities/<int:person_id>/facts", methods=["POST"])
+def set_entity_fact_legacy(person_id: int):
+    _log_deprecated_route()
+    return set_identity_fact(person_id)
+
+
+@app.route("/entities/<int:person_id>/aliases", methods=["POST"])
+def add_entity_alias_legacy(person_id: int):
+    _log_deprecated_route()
+    return add_identity_alias(person_id)
+
+
+@app.route("/entities/<int:person_id>/facts/<fact_key>", methods=["DELETE"])
+def delete_entity_fact_legacy(person_id: int, fact_key: str):
+    _log_deprecated_route()
+    return delete_identity_fact(person_id, fact_key)
+
+
+@app.route("/entities/<int:person_id>/aliases/<int:alias_id>", methods=["DELETE"])
+def delete_entity_alias_by_id_legacy(person_id: int, alias_id: int):
+    _log_deprecated_route()
+    return delete_identity_alias_by_id(person_id, alias_id)
+
+
+@app.route("/entities/resolve/<name>", methods=["GET"])
+def resolve_entity_name_legacy(name: str):
+    _log_deprecated_route()
+    return resolve_identity_name(name)
+
+
+@app.route("/entities/facts/all", methods=["GET"])
+def list_all_facts_legacy():
+    _log_deprecated_route()
+    return list_all_facts()
+
+
+@app.route("/entities/seed", methods=["POST"])
+def seed_entities_legacy():
+    _log_deprecated_route()
+    return seed_identities()
+
+
+@app.route("/entities/cleanup", methods=["POST"])
+def cleanup_entities_legacy():
+    _log_deprecated_route()
+    return cleanup_identities()
+
+
+@app.route("/entities/merge", methods=["POST"])
+def merge_entities_legacy():
+    _log_deprecated_route()
+    return merge_identities()
+
+
+@app.route("/entities/merge-candidates", methods=["GET"])
+def merge_candidates_legacy():
+    _log_deprecated_route()
+    return merge_candidates()
+
+
+@app.route("/entities/graph", methods=["GET"])
+def entity_graph_legacy():
+    _log_deprecated_route()
+    return identity_graph()
+
+
+@app.route("/entities/graph/full", methods=["GET"])
+def entity_graph_full_legacy():
+    _log_deprecated_route()
+    return identity_graph_full()
+
+
+@app.route("/entities/<int:person_id>/display-name", methods=["POST"])
+def update_entity_display_name_legacy(person_id: int):
+    _log_deprecated_route()
+    return update_identity_display_name(person_id)
+
+
+@app.route("/entities/ui", methods=["GET"])
+def entities_ui_legacy():
+    _log_deprecated_route()
+    return identities_ui()
 
 
 # =============================================================================

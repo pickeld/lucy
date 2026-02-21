@@ -833,7 +833,7 @@ async def fetch_entities(query: str | None = None) -> list[dict[str, Any]]:
         params: dict[str, Any] = {}
         if query:
             params["q"] = query
-        resp = await _get_client().get("/entities", params=params, timeout=15)
+        resp = await _get_client().get("/identities", params=params, timeout=15)
         if resp.status_code == 200:
             return resp.json().get("persons", [])
     except (httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadError):
@@ -844,10 +844,10 @@ async def fetch_entities(query: str | None = None) -> list[dict[str, Any]]:
     return []
 
 
-async def fetch_entity_stats() -> dict[str, Any]:
+async def fetch_identity_stats() -> dict[str, Any]:
     """Fetch entity store statistics (persons, aliases, facts, relationships)."""
     try:
-        resp = await _get_client().get("/entities/stats", timeout=10)
+        resp = await _get_client().get("/identities/stats", timeout=10)
         if resp.status_code == 200:
             return resp.json()
     except Exception as e:
@@ -858,7 +858,7 @@ async def fetch_entity_stats() -> dict[str, Any]:
 async def fetch_entity(person_id: int) -> dict[str, Any]:
     """Fetch a single person entity with all facts, aliases, and relationships."""
     try:
-        resp = await _get_client().get(f"/entities/{person_id}", timeout=10)
+        resp = await _get_client().get(f"/identities/{person_id}", timeout=10)
         if resp.status_code == 200:
             return resp.json()
         elif resp.status_code == 404:
@@ -874,7 +874,7 @@ async def fetch_entity(person_id: int) -> dict[str, Any]:
 async def delete_entity(person_id: int) -> dict[str, Any]:
     """Delete a person entity and all associated data."""
     try:
-        resp = await _get_client().delete(f"/entities/{person_id}", timeout=10)
+        resp = await _get_client().delete(f"/identities/{person_id}", timeout=10)
         return resp.json()
     except Exception as e:
         logger.error(f"Error deleting entity {person_id}: {e}")
@@ -885,7 +885,7 @@ async def rename_entity(person_id: int, new_name: str) -> dict[str, Any]:
     """Rename a person entity's canonical name."""
     try:
         resp = await _get_client().put(
-            f"/entities/{person_id}",
+            f"/identities/{person_id}",
             json={"canonical_name": new_name},
             timeout=10,
         )
@@ -895,13 +895,13 @@ async def rename_entity(person_id: int, new_name: str) -> dict[str, Any]:
         return {"error": str(e)}
 
 
-async def add_entity_fact(
+async def add_identity_fact(
     person_id: int, key: str, value: str,
 ) -> dict[str, Any]:
     """Add or update a fact for a person entity."""
     try:
         resp = await _get_client().post(
-            f"/entities/{person_id}/facts",
+            f"/identities/{person_id}/facts",
             json={"key": key, "value": value},
             timeout=10,
         )
@@ -911,11 +911,11 @@ async def add_entity_fact(
         return {"error": str(e)}
 
 
-async def delete_entity_fact(person_id: int, fact_key: str) -> dict[str, Any]:
+async def delete_identity_fact(person_id: int, fact_key: str) -> dict[str, Any]:
     """Delete a single fact for a person entity."""
     try:
         resp = await _get_client().delete(
-            f"/entities/{person_id}/facts/{fact_key}", timeout=10,
+            f"/identities/{person_id}/facts/{fact_key}", timeout=10,
         )
         return resp.json()
     except Exception as e:
@@ -923,11 +923,11 @@ async def delete_entity_fact(person_id: int, fact_key: str) -> dict[str, Any]:
         return {"error": str(e)}
 
 
-async def add_entity_alias(person_id: int, alias: str) -> dict[str, Any]:
+async def add_identity_alias(person_id: int, alias: str) -> dict[str, Any]:
     """Add a name alias to a person entity."""
     try:
         resp = await _get_client().post(
-            f"/entities/{person_id}/aliases",
+            f"/identities/{person_id}/aliases",
             json={"alias": alias},
             timeout=10,
         )
@@ -937,13 +937,13 @@ async def add_entity_alias(person_id: int, alias: str) -> dict[str, Any]:
         return {"error": str(e)}
 
 
-async def delete_entity_alias(
+async def delete_identity_alias(
     person_id: int, alias_id: int,
 ) -> dict[str, Any]:
     """Delete a single alias for a person entity by alias row ID."""
     try:
         resp = await _get_client().delete(
-            f"/entities/{person_id}/aliases/{alias_id}", timeout=10,
+            f"/identities/{person_id}/aliases/{alias_id}", timeout=10,
         )
         return resp.json()
     except Exception as e:
@@ -951,11 +951,11 @@ async def delete_entity_alias(
         return {"error": str(e)}
 
 
-async def seed_entities() -> dict[str, Any]:
+async def seed_identities() -> dict[str, Any]:
     """Seed entity store from WhatsApp contacts."""
     try:
         resp = await _get_client().post(
-            "/entities/seed",
+            "/identities/seed",
             json={"confirm": True},
             timeout=60,
         )
@@ -969,17 +969,17 @@ async def seed_entities() -> dict[str, Any]:
         return {"error": str(e)}
 
 
-async def cleanup_entities() -> dict[str, Any]:
+async def cleanup_identities() -> dict[str, Any]:
     """Remove persons with garbage/invalid names."""
     try:
-        resp = await _get_client().post("/entities/cleanup", timeout=30)
+        resp = await _get_client().post("/identities/cleanup", timeout=30)
         return resp.json()
     except Exception as e:
         logger.error(f"Error cleaning up entities: {e}")
         return {"error": str(e)}
 
 
-async def merge_entities(
+async def merge_identities(
     target_id: int, source_ids: list[int],
 ) -> dict[str, Any]:
     """Merge multiple person entities into one target.
@@ -990,7 +990,7 @@ async def merge_entities(
     """
     try:
         resp = await _get_client().post(
-            "/entities/merge",
+            "/identities/merge",
             json={"target_id": target_id, "source_ids": source_ids},
             timeout=30,
         )
@@ -1004,7 +1004,7 @@ async def fetch_merge_candidates(limit: int = 50) -> dict[str, Any]:
     """Fetch potential duplicate persons that could be merged."""
     try:
         resp = await _get_client().get(
-            "/entities/merge-candidates",
+            "/identities/merge-candidates",
             params={"limit": limit},
             timeout=15,
         )
@@ -1015,11 +1015,11 @@ async def fetch_merge_candidates(limit: int = 50) -> dict[str, Any]:
     return {"candidates": [], "count": 0}
 
 
-async def update_entity_display_name(person_id: int) -> dict[str, Any]:
+async def update_identity_display_name(person_id: int) -> dict[str, Any]:
     """Recalculate bilingual display name for a person."""
     try:
         resp = await _get_client().post(
-            f"/entities/{person_id}/display-name", timeout=10,
+            f"/identities/{person_id}/display-name", timeout=10,
         )
         return resp.json()
     except Exception as e:
@@ -1027,7 +1027,7 @@ async def update_entity_display_name(person_id: int) -> dict[str, Any]:
         return {"error": str(e)}
 
 
-async def fetch_all_entity_facts(
+async def fetch_all_identity_facts(
     key: str | None = None,
 ) -> dict[str, Any]:
     """Fetch all facts across all persons, optionally filtered by key."""
@@ -1036,7 +1036,7 @@ async def fetch_all_entity_facts(
         if key:
             params["key"] = key
         resp = await _get_client().get(
-            "/entities/facts/all", params=params, timeout=15,
+            "/identities/facts/all", params=params, timeout=15,
         )
         if resp.status_code == 200:
             return resp.json()
@@ -1045,11 +1045,11 @@ async def fetch_all_entity_facts(
     return {"facts": [], "available_keys": []}
 
 
-async def fetch_entity_graph(limit: int = 100) -> dict[str, Any]:
+async def fetch_identity_graph(limit: int = 100) -> dict[str, Any]:
     """Fetch person-relationship-asset graph data for visualization."""
     try:
         resp = await _get_client().get(
-            "/entities/graph", params={"limit": limit}, timeout=15,
+            "/identities/graph", params={"limit": limit}, timeout=15,
         )
         if resp.status_code == 200:
             return resp.json()
@@ -1058,7 +1058,7 @@ async def fetch_entity_graph(limit: int = 100) -> dict[str, Any]:
     return {"nodes": [], "edges": []}
 
 
-async def fetch_full_entity_graph(
+async def fetch_full_identity_graph(
     limit_persons: int = 100,
     limit_assets: int = 10,
     include_asset_edges: bool = True,
@@ -1069,7 +1069,7 @@ async def fetch_full_entity_graph(
     """
     try:
         resp = await _get_client().get(
-            "/entities/graph/full",
+            "/identities/graph/full",
             params={
                 "limit_persons": limit_persons,
                 "limit_assets": limit_assets,

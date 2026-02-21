@@ -1,8 +1,8 @@
-"""LLM-based entity extraction from messages and documents.
+"""LLM-based identity extraction from messages and documents.
 
 Extracts person facts (birth dates, ages, cities, jobs, relationships, etc.)
 from WhatsApp messages and Paperless documents using GPT-4o-mini, then stores
-them in the Entity Store (entity_db).
+them in the Identity Store (entity_db).
 
 Extraction is designed to be:
 - **Cheap**: Uses GPT-4o-mini (~$0.15/1M tokens), not the main LLM
@@ -12,12 +12,12 @@ Extraction is designed to be:
 
 Usage:
     # From WhatsApp webhook (after RAG storage):
-    maybe_extract_entities(sender="Shiran Waintrob", chat_name="Shiran Waintrob",
+    maybe_extract_identities(sender="Shiran Waintrob", chat_name="Shiran Waintrob",
                            message="I'm turning 32 next week!", ...)
     
     # From Paperless sync:
-    extract_entities_from_document(doc_title="פרטים אישיים", doc_text="...",
-                                   source_ref="paperless:42")
+    extract_identities_from_document(doc_title="פרטים אישיים", doc_text="...",
+                                    source_ref="paperless:42")
 """
 
 import json
@@ -32,7 +32,7 @@ from utils.logger import logger
 # Extraction prompt
 # ---------------------------------------------------------------------------
 
-_EXTRACTION_SYSTEM_PROMPT = """You are a structured entity extraction system. Given a message or document, extract factual information about PEOPLE mentioned or implied.
+_EXTRACTION_SYSTEM_PROMPT = """You are a structured identity extraction system. Given a message or document, extract factual information about PEOPLE mentioned or implied.
 
 RULES:
 - Extract ONLY permanent, time-invariant facts — NOT temporary states or opinions
@@ -163,7 +163,7 @@ def _should_extract(message: str, is_document: bool = False) -> bool:
 # ---------------------------------------------------------------------------
 
 def _call_extraction_llm(user_prompt: str) -> Optional[Dict[str, Any]]:
-    """Call GPT-4o-mini for entity extraction.
+    """Call GPT-4o-mini for identity extraction.
 
     Args:
         user_prompt: The formatted extraction prompt
@@ -209,25 +209,25 @@ def _call_extraction_llm(user_prompt: str) -> Optional[Dict[str, Any]]:
         return None
 
     except json.JSONDecodeError as e:
-        logger.warning(f"Entity extraction returned invalid JSON: {e}")
+        logger.warning(f"Identity extraction returned invalid JSON: {e}")
         return None
     except Exception as e:
-        logger.error(f"Entity extraction LLM call failed: {e}")
+        logger.error(f"Identity extraction LLM call failed: {e}")
         return None
 
 
 # ---------------------------------------------------------------------------
-# Entity storage
+# Identity storage
 # ---------------------------------------------------------------------------
 
-def _store_extracted_entities(
+def _store_extracted_identities(
     extraction_result: Dict[str, Any],
     source_type: str = "extracted",
     source_ref: Optional[str] = None,
     sender_whatsapp_id: Optional[str] = None,
     confidence: float = 0.6,
 ) -> int:
-    """Store extracted entities in the Entity Store.
+    """Store extracted identities in the Identity Store.
 
     Also creates person-asset links for mentioned persons so that the
     person-asset graph tracks which messages/documents mention which people.
@@ -352,7 +352,7 @@ def _store_extracted_entities(
 # Public API — called from plugin pipelines
 # ---------------------------------------------------------------------------
 
-def maybe_extract_entities(
+def maybe_extract_identities(
     sender: str,
     chat_name: str,
     message: str,
@@ -360,7 +360,7 @@ def maybe_extract_entities(
     chat_id: str = "",
     whatsapp_id: Optional[str] = None,
 ) -> int:
-    """Extract entities from a WhatsApp message (if it passes filtering).
+    """Extract identities from a WhatsApp message (if it passes filtering).
 
     This is the main entry point called from the WhatsApp webhook pipeline.
     It filters low-value messages, runs LLM extraction, and stores results.
@@ -399,7 +399,7 @@ def maybe_extract_entities(
         return 0
 
     source_ref = f"chat:{chat_id}:{timestamp}" if chat_id else None
-    facts_stored = _store_extracted_entities(
+    facts_stored = _store_extracted_identities(
         extraction_result=result,
         source_type="whatsapp",
         source_ref=source_ref,
@@ -408,19 +408,19 @@ def maybe_extract_entities(
 
     if facts_stored > 0:
         logger.info(
-            f"Entity extraction: {facts_stored} facts from {sender} in {chat_name}"
+            f"Identity extraction: {facts_stored} facts from {sender} in {chat_name}"
         )
 
     return facts_stored
 
 
-def extract_entities_from_document(
+def extract_identities_from_document(
     doc_title: str,
     doc_text: str,
     source_ref: str = "",
     sender: str = "",
 ) -> int:
-    """Extract entities from a Paperless document.
+    """Extract identities from a Paperless document.
 
     Documents always get extracted (no filtering).
     For long documents, only the first 4000 chars are sent to the LLM
@@ -456,7 +456,7 @@ def extract_entities_from_document(
     if not result:
         return 0
 
-    facts_stored = _store_extracted_entities(
+    facts_stored = _store_extracted_identities(
         extraction_result=result,
         source_type="paperless",
         source_ref=source_ref,
@@ -464,7 +464,7 @@ def extract_entities_from_document(
 
     if facts_stored > 0:
         logger.info(
-            f"Entity extraction from document '{doc_title}': {facts_stored} facts"
+            f"Identity extraction from document '{doc_title}': {facts_stored} facts"
         )
 
     return facts_stored
@@ -475,11 +475,11 @@ def extract_from_chat_message(
     llm_answer: str = "",
     conversation_id: str = "",
 ) -> int:
-    """Extract entities from a user's chat message (corrections, facts shared in conversation).
+    """Extract identities from a user's chat message (corrections, facts shared in conversation).
 
     When a user tells the assistant something like "David has a son named Ben
     and a daughter named Mia", this function extracts those relationships and
-    stores them in the Entity Store.
+    stores them in the Identity Store.
 
     Uses higher confidence (0.8) than auto-extraction (0.6) because the user
     is explicitly providing factual information.
@@ -527,7 +527,7 @@ def extract_from_chat_message(
         f"new information about people. Pay special attention to:\n"
         f"- Family relationships (son, daughter, parent, spouse)\n"
         f"- Personal facts (name, birth date, city, job)\n"
-        f"- Identity corrections (actual name, nickname)\n"
+        f"- Name corrections (actual name, nickname)\n"
         f"Use the conversation context to resolve pronouns (he/she/him/her → the person being discussed)."
     )
 
@@ -536,7 +536,7 @@ def extract_from_chat_message(
         return 0
 
     source_ref = f"chat_correction:{conversation_id}" if conversation_id else "chat_correction"
-    facts_stored = _store_extracted_entities(
+    facts_stored = _store_extracted_identities(
         extraction_result=result,
         source_type="user_correction",
         source_ref=source_ref,
@@ -545,7 +545,7 @@ def extract_from_chat_message(
 
     if facts_stored > 0:
         logger.info(
-            f"Chat entity extraction: {facts_stored} facts from user message "
+            f"Chat identity extraction: {facts_stored} facts from user message "
             f"(conversation={conversation_id})"
         )
 

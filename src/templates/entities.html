@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Entity Store — Person Management</title>
+<title>Identity Store — Person Management</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f23; color: #e0e0e0; min-height: 100vh; }
@@ -73,7 +73,7 @@ h1 { color: #7c8aff; margin-bottom: 8px; font-size: 1.8rem; }
 </head>
 <body>
 <div class="container">
-    <h1>👤 Entity Store</h1>
+    <h1>👤 Identity Store</h1>
     <p class="subtitle">Person knowledge base — manage contacts, aliases, and facts</p>
 
     <!-- Stats -->
@@ -390,7 +390,7 @@ async function deletePerson() {
 }
 
 async function seedEntities() {
-    if (!confirm('Seed entity store from WhatsApp contacts?\n\nThis will fetch all contacts from WAHA and create person records.')) return;
+    if (!confirm('Seed identity store from WhatsApp contacts?\n\nThis will fetch all contacts from WAHA and create person records.')) return;
     
     showToast('Seeding from WhatsApp contacts...');
     

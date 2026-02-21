@@ -408,7 +408,7 @@ def _bottom_section() -> rx.Component:
             rx.link(
                 rx.flex(
                     rx.icon("users", size=16, class_name="text-sidebar-muted"),
-                    rx.text("Entities", class_name="text-sm text-sidebar-text ml-2"),
+                    rx.text("Identities", class_name="text-sm text-sidebar-text ml-2"),
                     align="center",
                     class_name=(
                         "px-3 py-2 rounded-lg hover:bg-sidebar-hover "
@@ -497,7 +497,7 @@ def _collapsed_bottom() -> rx.Component:
             justify="center",
             class_name="py-0.5",
         ),
-        # Entities icon
+        # Identities icon
         rx.flex(
             rx.tooltip(
                 rx.link(
@@ -512,7 +512,7 @@ def _collapsed_bottom() -> rx.Component:
                     href="/entities",
                     underline="none",
                 ),
-                content="Entities",
+                content="Identities",
                 side="right",
             ),
             justify="center",

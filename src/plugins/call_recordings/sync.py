@@ -693,9 +693,9 @@ class CallRecordingSyncer:
 
             # Entity extraction (non-critical)
             try:
-                from entity_extractor import extract_entities_from_document
+                from entity_extractor import extract_identities_from_document
 
-                extract_entities_from_document(
+                extract_identities_from_document(
                     doc_title=f"Call Recording: {filename}",
                     doc_text=transcript_text,
                     source_ref=source_id,

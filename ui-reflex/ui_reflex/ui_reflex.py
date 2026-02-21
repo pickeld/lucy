@@ -78,7 +78,7 @@ app.add_page(
     entities,
     route="/entities",
     title="Entities — RAG Assistant",
-    on_load=AppState.on_entities_load,
+    on_load=AppState.on_identities_load,
 )
 
 app.add_page(

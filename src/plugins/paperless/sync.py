@@ -563,8 +563,8 @@ class DocumentSyncer:
                             
                             # Entity extraction from document content
                             try:
-                                from entity_extractor import extract_entities_from_document
-                                extract_entities_from_document(
+                                from entity_extractor import extract_identities_from_document
+                                extract_identities_from_document(
                                     doc_title=title,
                                     doc_text=content,
                                     source_ref=source_id,

@@ -98,8 +98,8 @@ def process_whatsapp_message(self, payload: dict) -> dict:
 
             # Entity extraction (non-blocking — failures are logged and ignored)
             try:
-                from entity_extractor import maybe_extract_entities
-                maybe_extract_entities(
+                from entity_extractor import maybe_extract_identities
+                maybe_extract_identities(
                     sender=sender,
                     chat_name=chat_name or "Unknown",
                     message=msg.message,

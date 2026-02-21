@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Human-readable labels for entity fact keys
+# Human-readable labels for identity fact keys
 # ---------------------------------------------------------------------------
 
 FACT_LABELS: dict[str, str] = {
@@ -60,7 +60,7 @@ FACT_LABELS: dict[str, str] = {
     "recent_mood": "Recent Mood",
 }
 
-# Fact keys grouped by semantic category for the entity detail panel.
+# Fact keys grouped by semantic category for the identity detail panel.
 # Order matters — categories are displayed top-to-bottom.
 FACT_CATEGORIES: list[dict[str, object]] = [
     {"name": "Identity", "icon": "tag", "keys": ["gender", "birth_date", "age", "id_number"]},
@@ -317,7 +317,7 @@ class AppState(rx.State):
     # --- Recordings page (dedicated /recordings) ---
     recordings_expanded_hash: str = ""            # Which row is expanded
     recordings_speaker_map: list[dict[str, str]] = []  # [{old_label, new_name}, ...]
-    recordings_entity_names: list[str] = []       # Entity names for dropdown
+    recordings_identity_names: list[str] = []       # Identity names for dropdown
     recordings_filter_date_from: str = ""         # Date filter from
     recordings_filter_date_to: str = ""           # Date filter to
     recordings_sort_column: str = "modified_at"   # Sort column
@@ -333,40 +333,40 @@ class AppState(rx.State):
     # --- RAG stats ---
     rag_stats: dict[str, Any] = {}
 
-    # --- Entity store ---
-    entity_persons: list[dict[str, str]] = []
-    entity_stats: dict[str, str] = {}
-    entity_search: str = ""
-    entity_selected_id: int = 0
-    entity_detail: dict[str, Any] = {}
-    entity_tab: str = "people"
-    entity_loading: bool = False
-    entity_detail_loading: bool = False
-    entity_save_message: str = ""
-    entity_new_fact_key: str = ""
-    entity_new_fact_value: str = ""
-    entity_new_alias: str = ""
-    entity_editing_fact_key: str = ""
-    entity_editing_fact_value: str = ""
-    entity_editing_name: bool = False
-    entity_editing_name_value: str = ""
-    entity_all_facts: list[dict[str, str]] = []
-    entity_fact_keys: list[str] = []
-    entity_fact_key_filter: str = ""
-    entity_seed_status: str = ""
-    entity_seed_message: str = ""
+    # --- Identity store ---
+    identity_persons: list[dict[str, str]] = []
+    identity_stats: dict[str, str] = {}
+    identity_search: str = ""
+    identity_selected_id: int = 0
+    identity_detail: dict[str, Any] = {}
+    identity_tab: str = "people"
+    identity_loading: bool = False
+    identity_detail_loading: bool = False
+    identity_save_message: str = ""
+    identity_new_fact_key: str = ""
+    identity_new_fact_value: str = ""
+    identity_new_alias: str = ""
+    identity_editing_fact_key: str = ""
+    identity_editing_fact_value: str = ""
+    identity_editing_name: bool = False
+    identity_editing_name_value: str = ""
+    identity_all_facts: list[dict[str, str]] = []
+    identity_fact_keys: list[str] = []
+    identity_fact_key_filter: str = ""
+    identity_seed_status: str = ""
+    identity_seed_message: str = ""
 
-    # --- Entity merge ---
-    entity_merge_mode: bool = False
-    entity_merge_selection: list[str] = []  # person IDs as strings
-    entity_merge_candidates: list[dict[str, Any]] = []
-    entity_candidates_loading: bool = False
+    # --- Identity merge ---
+    identity_merge_mode: bool = False
+    identity_merge_selection: list[str] = []  # person IDs as strings
+    identity_merge_candidates: list[dict[str, Any]] = []
+    identity_candidates_loading: bool = False
 
-    # --- Entity graph ---
-    entity_graph_nodes: list[dict[str, Any]] = []
-    entity_graph_edges: list[dict[str, Any]] = []
-    entity_graph_loading: bool = False
-    entity_graph_html: str = ""
+    # --- Identity graph ---
+    identity_graph_nodes: list[dict[str, Any]] = []
+    identity_graph_edges: list[dict[str, Any]] = []
+    identity_graph_loading: bool = False
+    identity_graph_html: str = ""
     # --- Full graph (interactive visualization) ---
     full_graph_nodes: list[dict[str, Any]] = []
     full_graph_edges: list[dict[str, Any]] = []
@@ -537,45 +537,45 @@ class AppState(rx.State):
         self.selected_content_types = []
         self.sort_order = "relevance"
 
-    # --- Entity setters ---
+    # --- Identity setters ---
 
-    def set_entity_search(self, value: str):
-        """Set entity search text."""
-        self.entity_search = value
+    def set_identity_search(self, value: str):
+        """Set identity search text."""
+        self.identity_search = value
 
-    def set_entity_tab(self, value: str):
-        """Set the active entity tab."""
-        self.entity_tab = value
+    def set_identity_tab(self, value: str):
+        """Set the active identity tab."""
+        self.identity_tab = value
 
-    def set_entity_new_fact_key(self, value: str):
-        self.entity_new_fact_key = value
+    def set_identity_new_fact_key(self, value: str):
+        self.identity_new_fact_key = value
 
-    def set_entity_new_fact_value(self, value: str):
-        self.entity_new_fact_value = value
+    def set_identity_new_fact_value(self, value: str):
+        self.identity_new_fact_value = value
 
-    def set_entity_new_alias(self, value: str):
-        self.entity_new_alias = value
+    def set_identity_new_alias(self, value: str):
+        self.identity_new_alias = value
 
-    def set_entity_editing_fact_value(self, value: str):
-        self.entity_editing_fact_value = value
+    def set_identity_editing_fact_value(self, value: str):
+        self.identity_editing_fact_value = value
 
-    def set_entity_fact_key_filter(self, value: str):
-        self.entity_fact_key_filter = value
+    def set_identity_fact_key_filter(self, value: str):
+        self.identity_fact_key_filter = value
 
     def toggle_merge_mode(self):
-        """Toggle entity merge selection mode on/off."""
-        self.entity_merge_mode = not self.entity_merge_mode
-        if not self.entity_merge_mode:
-            self.entity_merge_selection = []
+        """Toggle identity merge selection mode on/off."""
+        self.identity_merge_mode = not self.identity_merge_mode
+        if not self.identity_merge_mode:
+            self.identity_merge_selection = []
 
     def toggle_merge_selection(self, person_id: str):
         """Toggle a person in/out of the merge selection."""
-        new_sel = list(self.entity_merge_selection)
+        new_sel = list(self.identity_merge_selection)
         if person_id in new_sel:
             new_sel.remove(person_id)
         else:
             new_sel.append(person_id)
-        self.entity_merge_selection = new_sel
+        self.identity_merge_selection = new_sel
 
     # =====================================================================
     # COMPUTED VARS
@@ -1227,58 +1227,58 @@ class AppState(rx.State):
             ("app", "cost_tracking_enabled"),
         ])
 
-    # ----- Entity computed vars -----
+    # ----- Identity computed vars -----
 
     @rx.var(cache=True)
-    def entity_stats_persons(self) -> str:
-        return str(self.entity_stats.get("persons", "0"))
+    def ididentity_stats_persons(self) -> str:
+        return str(self.identity_stats.get("persons", "0"))
 
     @rx.var(cache=True)
-    def entity_stats_aliases(self) -> str:
-        return str(self.entity_stats.get("aliases", "0"))
+    def ididentity_stats_aliases(self) -> str:
+        return str(self.identity_stats.get("aliases", "0"))
 
     @rx.var(cache=True)
-    def entity_stats_facts(self) -> str:
-        return str(self.entity_stats.get("facts", "0"))
+    def ididentity_stats_facts(self) -> str:
+        return str(self.identity_stats.get("facts", "0"))
 
     @rx.var(cache=True)
-    def entity_stats_relationships(self) -> str:
-        return str(self.entity_stats.get("relationships", "0"))
+    def ididentity_stats_relationships(self) -> str:
+        return str(self.identity_stats.get("relationships", "0"))
 
     @rx.var(cache=True)
-    def entity_merge_count(self) -> int:
+    def identity_merge_count(self) -> int:
         """Number of persons currently selected for merge."""
-        return len(self.entity_merge_selection)
+        return len(self.identity_merge_selection)
 
     @rx.var(cache=True)
-    def entity_can_merge(self) -> bool:
+    def identity_can_merge(self) -> bool:
         """Whether enough persons are selected to perform a merge (≥2)."""
-        return len(self.entity_merge_selection) >= 2
+        return len(self.identity_merge_selection) >= 2
 
     @rx.var(cache=True)
-    def entity_has_detail(self) -> bool:
-        return self.entity_selected_id > 0
+    def identity_has_detail(self) -> bool:
+        return self.identity_selected_id > 0
 
     @rx.var(cache=True)
-    def entity_detail_name(self) -> str:
+    def ididentity_detail_name(self) -> str:
         """Display name — uses bilingual display_name if available."""
-        display = self.entity_detail.get("display_name", "")
+        display = self.identity_detail.get("display_name", "")
         if display:
             return str(display)
-        return str(self.entity_detail.get("canonical_name", ""))
+        return str(self.identity_detail.get("canonical_name", ""))
 
     @rx.var(cache=True)
-    def entity_detail_phone(self) -> str:
-        return str(self.entity_detail.get("phone", "") or "")
+    def ididentity_detail_phone(self) -> str:
+        return str(self.identity_detail.get("phone", "") or "")
 
     @rx.var(cache=True)
-    def entity_detail_whatsapp(self) -> str:
-        return str(self.entity_detail.get("whatsapp_id", "") or "")
+    def ididentity_detail_whatsapp(self) -> str:
+        return str(self.identity_detail.get("whatsapp_id", "") or "")
 
     @rx.var(cache=True)
-    def entity_aliases_list(self) -> list[dict[str, str]]:
-        """Aliases from entity_detail with id, alias, script, source."""
-        aliases = self.entity_detail.get("aliases", [])
+    def identity_aliases_list(self) -> list[dict[str, str]]:
+        """Aliases from identity_detail with id, alias, script, source."""
+        aliases = self.identity_detail.get("aliases", [])
         result: list[dict[str, str]] = []
         for a in aliases:
             result.append({
@@ -1290,9 +1290,9 @@ class AppState(rx.State):
         return result
 
     @rx.var(cache=True)
-    def entity_relationships_list(self) -> list[dict[str, str]]:
-        """Relationships from entity_detail."""
-        rels = self.entity_detail.get("relationships", [])
+    def identity_relationships_list(self) -> list[dict[str, str]]:
+        """Relationships from identity_detail."""
+        rels = self.identity_detail.get("relationships", [])
         result: list[dict[str, str]] = []
         for r in rels:
             result.append({
@@ -1303,13 +1303,13 @@ class AppState(rx.State):
         return result
 
     @rx.var(cache=True)
-    def entity_facts_grouped(self) -> list[dict[str, str]]:
+    def identity_facts_grouped(self) -> list[dict[str, str]]:
         """Facts grouped into flat list with category headers for rx.foreach.
 
         Each item: {type: "header"|"fact", category, icon, key, label, value,
                      confidence, source_type, source_ref, source_quote, fact_key}
         """
-        facts_detail = self.entity_detail.get("facts_detail", [])
+        facts_detail = self.identity_detail.get("facts_detail", [])
         if not facts_detail:
             return []
 
@@ -1439,27 +1439,27 @@ class AppState(rx.State):
             self._load_cost_data(),
         )
 
-    async def on_entities_load(self):
-        """Called when entities page loads.
+    async def on_identities_load(self):
+        """Called when identities page loads.
 
-        Runs on_load and entity fetches in parallel.
+        Runs on_load and identity fetches in parallel.
         """
         import asyncio
 
         results = await asyncio.gather(
             self.on_load(),
-            self._load_entity_list(),
-            api_client.fetch_entity_stats(),
+            self._load_identity_list(),
+            api_client.fetch_identity_stats(),
             return_exceptions=True,
         )
         # Assign stats from the third result
         stats = results[2] if not isinstance(results[2], BaseException) else {}
-        self.entity_stats = {k: str(v) for k, v in stats.items()}
+        self.identity_stats = {k: str(v) for k, v in stats.items()}
 
     async def on_recordings_load(self):
         """Called when the /recordings page loads.
 
-        Loads recordings files, entity names for speaker dropdowns,
+        Loads recordings files, identity names for speaker dropdowns,
         and the 'My Name' setting in parallel.
         """
         import asyncio
@@ -1472,9 +1472,9 @@ class AppState(rx.State):
             return_exceptions=True,
         )
 
-        # Entity names for speaker dropdown
+        # Identity names for speaker dropdown
         entities = results[2] if not isinstance(results[2], BaseException) else []
-        self.recordings_entity_names = [
+        self.recordings_identity_names = [
             str(p.get("display_name", "") or p.get("canonical_name", ""))
             for p in entities
             if p.get("canonical_name")
@@ -2959,9 +2959,9 @@ class AppState(rx.State):
     # ENTITY STORE
     # =====================================================================
 
-    async def _load_entity_list(self, query: str | None = None):
-        """Fetch person list from backend."""
-        self.entity_loading = True
+    async def _load_identity_list(self, query: str | None = None):
+        """Fetch identity list from backend."""
+        self.identity_loading = True
         raw = await api_client.fetch_entities(query=query or None)
         processed: list[dict[str, str]] = []
         for p in raw:
@@ -3011,30 +3011,30 @@ class AppState(rx.State):
                 "fact_count": str(fact_count),
                 "aliases_preview": aliases_preview,
             })
-        self.entity_persons = processed
-        self.entity_loading = False
+        self.identity_persons = processed
+        self.identity_loading = False
 
-    async def search_entities(self):
-        """Search entities using current entity_search value.
+    async def search_identities(self):
+        """Search identities using current identity_search value.
         
         When in merge mode, preserves already-selected persons at the top
         of the list even if they don't match the current search query.
         """
-        q = self.entity_search.strip()
+        q = self.identity_search.strip()
         
-        if self.entity_merge_mode and self.entity_merge_selection:
+        if self.identity_merge_mode and self.identity_merge_selection:
             # Save current selection before reloading
-            saved_selection = list(self.entity_merge_selection)
+            saved_selection = list(self.identity_merge_selection)
             
             # Load search results
-            await self._load_entity_list(q if q else None)
+            await self._load_identity_list(q if q else None)
             
             # Restore selection (it's preserved in state, but the persons
             # may not be in the filtered list — fetch them individually)
-            self.entity_merge_selection = saved_selection
+            self.identity_merge_selection = saved_selection
             
             # Ensure selected persons appear in the list
-            current_ids = {p["id"] for p in self.entity_persons}
+            current_ids = {p["id"] for p in self.identity_persons}
             missing_ids = [pid for pid in saved_selection if pid not in current_ids]
             
             if missing_ids:
@@ -3047,7 +3047,7 @@ class AppState(rx.State):
                         facts_raw = data.get("facts", {})
                         fact_count = len(facts_raw) if isinstance(facts_raw, dict) else 0
                         
-                        self.entity_persons.insert(0, {
+                        self.identity_persons.insert(0, {
                             "id": str(data.get("id", "")),
                             "canonical_name": display_name,
                             "phone": str(data.get("phone", "") or ""),
@@ -3057,249 +3057,249 @@ class AppState(rx.State):
                             "aliases_preview": "",
                         })
         else:
-            await self._load_entity_list(q if q else None)
+            await self._load_identity_list(q if q else None)
 
-    async def select_entity(self, person_id: str):
-        """Load full person detail for the side panel."""
+    async def select_identity(self, person_id: str):
+        """Load full identity detail for the side panel."""
         pid = int(person_id)
-        self.entity_selected_id = pid
-        self.entity_detail_loading = True
-        self.entity_editing_fact_key = ""
+        self.identity_selected_id = pid
+        self.identity_detail_loading = True
+        self.identity_editing_fact_key = ""
         yield
         data = await api_client.fetch_entity(pid)
         if "error" not in data:
-            self.entity_detail = data
+            self.identity_detail = data
         else:
-            self.entity_save_message = f"❌ {data['error']}"
-        self.entity_detail_loading = False
+            self.identity_save_message = f"❌ {data['error']}"
+        self.identity_detail_loading = False
 
-    def close_entity_detail(self):
+    def close_identity_detail(self):
         """Close the detail side panel."""
-        self.entity_selected_id = 0
-        self.entity_detail = {}
-        self.entity_editing_fact_key = ""
-        self.entity_editing_name = False
-        self.entity_editing_name_value = ""
-        self.entity_new_fact_key = ""
-        self.entity_new_fact_value = ""
-        self.entity_new_alias = ""
+        self.identity_selected_id = 0
+        self.identity_detail = {}
+        self.identity_editing_fact_key = ""
+        self.identity_editing_name = False
+        self.identity_editing_name_value = ""
+        self.identity_new_fact_key = ""
+        self.identity_new_fact_value = ""
+        self.identity_new_alias = ""
 
-    # --- Entity name editing ---
+    # --- Identity name editing ---
 
     def start_edit_name(self):
         """Enter inline edit mode for the person's canonical name."""
-        current_name = self.entity_detail.get("canonical_name", "")
-        self.entity_editing_name = True
-        self.entity_editing_name_value = current_name
+        current_name = self.identity_detail.get("canonical_name", "")
+        self.identity_editing_name = True
+        self.identity_editing_name_value = current_name
 
     def cancel_edit_name(self):
         """Cancel inline name editing."""
-        self.entity_editing_name = False
-        self.entity_editing_name_value = ""
+        self.identity_editing_name = False
+        self.identity_editing_name_value = ""
 
     async def save_name_edit(self):
         """Save the edited person name via API."""
-        new_name = self.entity_editing_name_value.strip()
-        if not new_name or self.entity_selected_id <= 0:
+        new_name = self.identity_editing_name_value.strip()
+        if not new_name or self.identity_selected_id <= 0:
             return
-        result = await api_client.rename_entity(self.entity_selected_id, new_name)
+        result = await api_client.rename_entity(self.identity_selected_id, new_name)
         if "error" in result:
-            self.entity_save_message = f"❌ {result['error']}"
+            self.identity_save_message = f"❌ {result['error']}"
         else:
-            self.entity_save_message = f"✅ Renamed to '{new_name}'"
-            self.entity_editing_name = False
-            self.entity_editing_name_value = ""
+            self.identity_save_message = f"✅ Renamed to '{new_name}'"
+            self.identity_editing_name = False
+            self.identity_editing_name_value = ""
             # Refresh detail and person list
-            data = await api_client.fetch_entity(self.entity_selected_id)
+            data = await api_client.fetch_entity(self.identity_selected_id)
             if "error" not in data:
-                self.entity_detail = data
-            await self._load_entity_list()
+                self.identity_detail = data
+            await self._load_identity_list()
 
     # --- All Facts tab CRUD ---
 
     async def delete_fact_from_all_tab(self, person_id: str, fact_key: str):
         """Delete a fact from the All Facts tab."""
         pid = int(person_id)
-        result = await api_client.delete_entity_fact(pid, fact_key)
+        result = await api_client.delete_identity_fact(pid, fact_key)
         if "error" in result:
-            self.entity_save_message = f"❌ {result['error']}"
+            self.identity_save_message = f"❌ {result['error']}"
         else:
-            self.entity_save_message = f"✅ Fact '{fact_key}' deleted"
+            self.identity_save_message = f"✅ Fact '{fact_key}' deleted"
         # Refresh the All Facts table
-        await self.load_all_entity_facts()
+        await self.load_all_identity_facts()
         # Also refresh detail if this person is selected
-        if self.entity_selected_id == pid:
+        if self.identity_selected_id == pid:
             data = await api_client.fetch_entity(pid)
             if "error" not in data:
-                self.entity_detail = data
-        stats = await api_client.fetch_entity_stats()
-        self.entity_stats = {k: str(v) for k, v in stats.items()}
+                self.identity_detail = data
+        stats = await api_client.fetch_identity_stats()
+        self.identity_stats = {k: str(v) for k, v in stats.items()}
 
     async def edit_fact_from_all_tab(self, person_id: str, fact_key: str, current_value: str):
         """Navigate to person detail with inline edit open for a specific fact."""
         pid = int(person_id)
-        self.entity_tab = "people"
-        self.entity_selected_id = pid
-        self.entity_detail_loading = True
+        self.identity_tab = "people"
+        self.identity_selected_id = pid
+        self.identity_detail_loading = True
         yield  # type: ignore[misc]
         data = await api_client.fetch_entity(pid)
         if "error" not in data:
-            self.entity_detail = data
-            self.entity_editing_fact_key = fact_key
-            self.entity_editing_fact_value = current_value
+            self.identity_detail = data
+            self.identity_editing_fact_key = fact_key
+            self.identity_editing_fact_value = current_value
         else:
-            self.entity_save_message = f"❌ {data['error']}"
-        self.entity_detail_loading = False
+            self.identity_save_message = f"❌ {data['error']}"
+        self.identity_detail_loading = False
 
     async def delete_entity(self):
-        """Delete the currently selected person."""
-        if self.entity_selected_id <= 0:
+        """Delete the currently selected identity."""
+        if self.identity_selected_id <= 0:
             return
-        pid = self.entity_selected_id
+        pid = self.identity_selected_id
         result = await api_client.delete_entity(pid)
         if "error" in result:
-            self.entity_save_message = f"❌ {result['error']}"
+            self.identity_save_message = f"❌ {result['error']}"
         else:
-            self.entity_save_message = "✅ Person deleted"
-            self.close_entity_detail()
-            await self._load_entity_list()
-            stats = await api_client.fetch_entity_stats()
-            self.entity_stats = {k: str(v) for k, v in stats.items()}
+            self.identity_save_message = "✅ Person deleted"
+            self.close_identity_detail()
+            await self._load_identity_list()
+            stats = await api_client.fetch_identity_stats()
+            self.identity_stats = {k: str(v) for k, v in stats.items()}
 
-    async def add_entity_fact(self):
-        """Add a new fact to the selected person."""
-        key = self.entity_new_fact_key.strip()
-        value = self.entity_new_fact_value.strip()
-        if not key or not value or self.entity_selected_id <= 0:
+    async def add_identity_fact(self):
+        """Add a new fact to the selected identity."""
+        key = self.identity_new_fact_key.strip()
+        value = self.identity_new_fact_value.strip()
+        if not key or not value or self.identity_selected_id <= 0:
             return
-        result = await api_client.add_entity_fact(
-            self.entity_selected_id, key, value,
+        result = await api_client.add_identity_fact(
+            self.identity_selected_id, key, value,
         )
         if "error" in result:
-            self.entity_save_message = f"❌ {result['error']}"
+            self.identity_save_message = f"❌ {result['error']}"
         else:
-            self.entity_save_message = f"✅ Fact '{key}' saved"
-            self.entity_new_fact_key = ""
-            self.entity_new_fact_value = ""
+            self.identity_save_message = f"✅ Fact '{key}' saved"
+            self.identity_new_fact_key = ""
+            self.identity_new_fact_value = ""
             # Refresh detail
-            data = await api_client.fetch_entity(self.entity_selected_id)
+            data = await api_client.fetch_entity(self.identity_selected_id)
             if "error" not in data:
-                self.entity_detail = data
-            stats = await api_client.fetch_entity_stats()
-            self.entity_stats = {k: str(v) for k, v in stats.items()}
+                self.identity_detail = data
+            stats = await api_client.fetch_identity_stats()
+            self.identity_stats = {k: str(v) for k, v in stats.items()}
 
-    async def save_entity_fact_edit(self):
+    async def save_identity_fact_edit(self):
         """Save an inline fact edit."""
-        key = self.entity_editing_fact_key.strip()
-        value = self.entity_editing_fact_value.strip()
-        if not key or not value or self.entity_selected_id <= 0:
+        key = self.identity_editing_fact_key.strip()
+        value = self.identity_editing_fact_value.strip()
+        if not key or not value or self.identity_selected_id <= 0:
             return
-        result = await api_client.add_entity_fact(
-            self.entity_selected_id, key, value,
+        result = await api_client.add_identity_fact(
+            self.identity_selected_id, key, value,
         )
         if "error" in result:
-            self.entity_save_message = f"❌ {result['error']}"
+            self.identity_save_message = f"❌ {result['error']}"
         else:
-            self.entity_save_message = f"✅ Fact '{key}' updated"
-        self.entity_editing_fact_key = ""
-        self.entity_editing_fact_value = ""
+            self.identity_save_message = f"✅ Fact '{key}' updated"
+        self.identity_editing_fact_key = ""
+        self.identity_editing_fact_value = ""
         # Refresh detail
-        data = await api_client.fetch_entity(self.entity_selected_id)
+        data = await api_client.fetch_entity(self.identity_selected_id)
         if "error" not in data:
-            self.entity_detail = data
+            self.identity_detail = data
 
     def start_edit_fact(self, fact_key: str, current_value: str):
         """Enter inline edit mode for a fact."""
-        self.entity_editing_fact_key = fact_key
-        self.entity_editing_fact_value = current_value
+        self.identity_editing_fact_key = fact_key
+        self.identity_editing_fact_value = current_value
 
     def cancel_edit_fact(self):
         """Cancel inline fact editing."""
-        self.entity_editing_fact_key = ""
-        self.entity_editing_fact_value = ""
+        self.identity_editing_fact_key = ""
+        self.identity_editing_fact_value = ""
 
-    async def delete_entity_fact(self, fact_key: str):
+    async def delete_identity_fact(self, fact_key: str):
         """Delete a fact from the selected person."""
-        if self.entity_selected_id <= 0:
+        if self.identity_selected_id <= 0:
             return
-        result = await api_client.delete_entity_fact(
-            self.entity_selected_id, fact_key,
+        result = await api_client.delete_identity_fact(
+            self.identity_selected_id, fact_key,
         )
         if "error" in result:
-            self.entity_save_message = f"❌ {result['error']}"
+            self.identity_save_message = f"❌ {result['error']}"
         else:
-            self.entity_save_message = f"✅ Fact deleted"
+            self.identity_save_message = f"✅ Fact deleted"
         # Refresh detail
-        data = await api_client.fetch_entity(self.entity_selected_id)
+        data = await api_client.fetch_entity(self.identity_selected_id)
         if "error" not in data:
-            self.entity_detail = data
-        stats = await api_client.fetch_entity_stats()
-        self.entity_stats = {k: str(v) for k, v in stats.items()}
+            self.identity_detail = data
+        stats = await api_client.fetch_identity_stats()
+        self.identity_stats = {k: str(v) for k, v in stats.items()}
 
-    async def add_entity_alias(self):
-        """Add a new alias to the selected person."""
-        alias = self.entity_new_alias.strip()
-        if not alias or self.entity_selected_id <= 0:
+    async def add_identity_alias(self):
+        """Add a new alias to the selected identity."""
+        alias = self.identity_new_alias.strip()
+        if not alias or self.identity_selected_id <= 0:
             return
-        result = await api_client.add_entity_alias(
-            self.entity_selected_id, alias,
+        result = await api_client.add_identity_alias(
+            self.identity_selected_id, alias,
         )
         if "error" in result:
-            self.entity_save_message = f"❌ {result['error']}"
+            self.identity_save_message = f"❌ {result['error']}"
         else:
-            self.entity_save_message = f"✅ Alias '{alias}' added"
-            self.entity_new_alias = ""
+            self.identity_save_message = f"✅ Alias '{alias}' added"
+            self.identity_new_alias = ""
         # Refresh detail
-        data = await api_client.fetch_entity(self.entity_selected_id)
+        data = await api_client.fetch_entity(self.identity_selected_id)
         if "error" not in data:
-            self.entity_detail = data
-        stats = await api_client.fetch_entity_stats()
-        self.entity_stats = {k: str(v) for k, v in stats.items()}
+            self.identity_detail = data
+        stats = await api_client.fetch_identity_stats()
+        self.identity_stats = {k: str(v) for k, v in stats.items()}
 
-    async def delete_entity_alias(self, alias_id: str):
-        """Delete an alias from the selected person."""
-        if self.entity_selected_id <= 0:
+    async def delete_identity_alias(self, alias_id: str):
+        """Delete an alias from the selected identity."""
+        if self.identity_selected_id <= 0:
             return
-        result = await api_client.delete_entity_alias(
-            self.entity_selected_id, int(alias_id),
+        result = await api_client.delete_identity_alias(
+            self.identity_selected_id, int(alias_id),
         )
         if "error" in result:
-            self.entity_save_message = f"❌ {result['error']}"
+            self.identity_save_message = f"❌ {result['error']}"
         else:
-            self.entity_save_message = "✅ Alias deleted"
+            self.identity_save_message = "✅ Alias deleted"
         # Refresh detail
-        data = await api_client.fetch_entity(self.entity_selected_id)
+        data = await api_client.fetch_entity(self.identity_selected_id)
         if "error" not in data:
-            self.entity_detail = data
-        stats = await api_client.fetch_entity_stats()
-        self.entity_stats = {k: str(v) for k, v in stats.items()}
+            self.identity_detail = data
+        stats = await api_client.fetch_identity_stats()
+        self.identity_stats = {k: str(v) for k, v in stats.items()}
 
-    async def seed_entities(self):
-        """Seed entity store from WhatsApp contacts."""
-        self.entity_seed_status = "seeding"
-        self.entity_seed_message = "⏳ Seeding from WhatsApp contacts…"
+    async def seed_identities(self):
+        """Seed identity store from WhatsApp contacts."""
+        self.identity_seed_status = "seeding"
+        self.identity_seed_message = "⏳ Seeding from WhatsApp contacts…"
         yield
-        result = await api_client.seed_entities()
+        result = await api_client.seed_identities()
         if "error" in result:
-            self.entity_seed_status = "error"
-            self.entity_seed_message = f"❌ {result['error']}"
+            self.identity_seed_status = "error"
+            self.identity_seed_message = f"❌ {result['error']}"
         else:
             r = result.get("result", {})
             created = r.get("created", 0)
             updated = r.get("updated", 0)
             skipped = r.get("skipped", 0)
-            self.entity_seed_status = "complete"
-            self.entity_seed_message = (
+            self.identity_seed_status = "complete"
+            self.identity_seed_message = (
                 f"✅ Seeded: {created} created, {updated} updated, {skipped} skipped"
             )
-            await self._load_entity_list()
-            stats = await api_client.fetch_entity_stats()
-            self.entity_stats = {k: str(v) for k, v in stats.items()}
+            await self._load_identity_list()
+            stats = await api_client.fetch_identity_stats()
+            self.identity_stats = {k: str(v) for k, v in stats.items()}
 
-    async def load_all_entity_facts(self):
-        """Load all facts across all persons for the All Facts tab."""
-        key_filter = self.entity_fact_key_filter or None
-        data = await api_client.fetch_all_entity_facts(key=key_filter)
+    async def load_all_identity_facts(self):
+        """Load all facts across all identities for the All Facts tab."""
+        key_filter = self.identity_fact_key_filter or None
+        data = await api_client.fetch_all_identity_facts(key=key_filter)
         raw_facts = data.get("facts", [])
         result: list[dict[str, str]] = []
         for f in raw_facts:
@@ -3309,91 +3309,91 @@ class AppState(rx.State):
             src_type = str(f.get("source_type", "") or "")
             row["source_ref"] = _format_source_ref(raw_ref, src_type)
             result.append(row)
-        self.entity_all_facts = result
+        self.identity_all_facts = result
         keys = data.get("available_keys", [])
-        self.entity_fact_keys = [str(k) for k in keys]
+        self.identity_fact_keys = [str(k) for k in keys]
 
-    async def refresh_entities(self):
-        """Refresh entity list and stats."""
-        await self._load_entity_list()
-        stats = await api_client.fetch_entity_stats()
-        self.entity_stats = {k: str(v) for k, v in stats.items()}
+    async def refresh_identities(self):
+        """Refresh identity list and stats."""
+        await self._load_identity_list()
+        stats = await api_client.fetch_identity_stats()
+        self.identity_stats = {k: str(v) for k, v in stats.items()}
 
-    async def cleanup_entities(self):
-        """Remove persons with garbage/invalid names."""
-        self.entity_save_message = "⏳ Cleaning up…"
+    async def cleanup_identities(self):
+        """Remove identities with garbage/invalid names."""
+        self.identity_save_message = "⏳ Cleaning up…"
         yield
-        result = await api_client.cleanup_entities()
+        result = await api_client.cleanup_identities()
         if "error" in result:
-            self.entity_save_message = f"❌ {result['error']}"
+            self.identity_save_message = f"❌ {result['error']}"
         else:
             deleted = result.get("deleted", 0)
-            self.entity_save_message = f"✅ Removed {deleted} garbage entries"
-            await self._load_entity_list()
-            stats = await api_client.fetch_entity_stats()
-            self.entity_stats = {k: str(v) for k, v in stats.items()}
+            self.identity_save_message = f"✅ Removed {deleted} garbage entries"
+            await self._load_identity_list()
+            stats = await api_client.fetch_identity_stats()
+            self.identity_stats = {k: str(v) for k, v in stats.items()}
 
     async def execute_merge(self):
-        """Merge selected persons — first selected becomes the target."""
-        if len(self.entity_merge_selection) < 2:
-            self.entity_save_message = "❌ Select at least 2 persons to merge"
+        """Merge selected identities — first selected becomes the target."""
+        if len(self.identity_merge_selection) < 2:
+            self.identity_save_message = "❌ Select at least 2 persons to merge"
             return
 
-        target_id = int(self.entity_merge_selection[0])
-        source_ids = [int(s) for s in self.entity_merge_selection[1:]]
+        target_id = int(self.identity_merge_selection[0])
+        source_ids = [int(s) for s in self.identity_merge_selection[1:]]
 
-        self.entity_save_message = "⏳ Merging…"
+        self.identity_save_message = "⏳ Merging…"
         yield
 
-        result = await api_client.merge_entities(target_id, source_ids)
+        result = await api_client.merge_identities(target_id, source_ids)
         if "error" in result:
-            self.entity_save_message = f"❌ {result['error']}"
+            self.identity_save_message = f"❌ {result['error']}"
         else:
             merged = result.get("sources_deleted", 0)
             aliases = result.get("aliases_moved", 0)
             facts = result.get("facts_moved", 0)
             name = result.get("display_name", "")
-            self.entity_save_message = (
+            self.identity_save_message = (
                 f"✅ Merged {merged + 1} persons into \"{name}\" "
                 f"({aliases} aliases, {facts} facts moved)"
             )
-            self.entity_merge_selection = []
-            self.entity_merge_mode = False
-            # Close detail if the selected entity was a merge source
-            if self.entity_selected_id > 0 and str(self.entity_selected_id) in [str(s) for s in source_ids]:
-                self.close_entity_detail()
-            await self._load_entity_list()
-            stats = await api_client.fetch_entity_stats()
-            self.entity_stats = {k: str(v) for k, v in stats.items()}
+            self.identity_merge_selection = []
+            self.identity_merge_mode = False
+            # Close detail if the selected identity was a merge source
+            if self.identity_selected_id > 0 and str(self.identity_selected_id) in [str(s) for s in source_ids]:
+                self.close_identity_detail()
+            await self._load_identity_list()
+            stats = await api_client.fetch_identity_stats()
+            self.identity_stats = {k: str(v) for k, v in stats.items()}
             # Reload detail if target was selected
-            if self.entity_selected_id == target_id:
+            if self.identity_selected_id == target_id:
                 data = await api_client.fetch_entity(target_id)
                 if "error" not in data:
-                    self.entity_detail = data
+                    self.identity_detail = data
 
-    async def update_entity_display_name(self):
-        """Recalculate bilingual display name for the selected person."""
-        if self.entity_selected_id <= 0:
+    async def update_identity_display_name(self):
+        """Recalculate bilingual display name for the selected identity."""
+        if self.identity_selected_id <= 0:
             return
-        result = await api_client.update_entity_display_name(self.entity_selected_id)
+        result = await api_client.update_identity_display_name(self.identity_selected_id)
         if "error" in result:
-            self.entity_save_message = f"❌ {result['error']}"
+            self.identity_save_message = f"❌ {result['error']}"
         elif result.get("status") == "ok":
             new_name = result.get("display_name", "")
-            self.entity_save_message = f"✅ Display name updated: {new_name}"
+            self.identity_save_message = f"✅ Display name updated: {new_name}"
             # Refresh detail and list
-            data = await api_client.fetch_entity(self.entity_selected_id)
+            data = await api_client.fetch_entity(self.identity_selected_id)
             if "error" not in data:
-                self.entity_detail = data
-            await self._load_entity_list()
+                self.identity_detail = data
+            await self._load_identity_list()
         else:
-            self.entity_save_message = result.get("message", "No change needed")
+            self.identity_save_message = result.get("message", "No change needed")
 
-    async def load_entity_graph(self):
-        """Fetch person-relationship-asset graph data for display."""
-        self.entity_graph_loading = True
+    async def load_identity_graph(self):
+        """Fetch identity-relationship-asset graph data for display."""
+        self.identity_graph_loading = True
         yield
-        data = await api_client.fetch_entity_graph(limit=200)
+        data = await api_client.fetch_identity_graph(limit=200)
         nodes = data.get("nodes", [])
         edges = data.get("edges", [])
 
@@ -3422,15 +3422,15 @@ class AppState(rx.State):
                 n["badges"] = " · ".join(badges) if badges else ""
                 filtered_nodes.append(n)
 
-        self.entity_graph_nodes = filtered_nodes  # type: ignore[assignment]
-        self.entity_graph_edges = edges  # type: ignore[assignment]
-        self.entity_graph_loading = False
+        self.identity_graph_nodes = filtered_nodes  # type: ignore[assignment]
+        self.identity_graph_edges = edges  # type: ignore[assignment]
+        self.identity_graph_loading = False
 
-    async def load_full_entity_graph(self):
-        """Fetch full graph data (persons + assets + all edge types) for interactive visualization."""
+    async def load_full_identity_graph(self):
+        """Fetch full graph data (identities + assets + all edge types) for interactive visualization."""
         self.full_graph_loading = True
         yield
-        data = await api_client.fetch_full_entity_graph(
+        data = await api_client.fetch_full_identity_graph(
             limit_persons=100,
             limit_assets=10,
             include_asset_edges=True,
@@ -3461,10 +3461,10 @@ class AppState(rx.State):
         fig_dict = self._build_plotly_graph(nodes, edges)
         if fig_dict and fig_dict.get("data"):
             self.full_graph_figure_data = fig_dict
-            self.entity_graph_html = "loaded"  # Flag that graph is ready
+            self.identity_graph_html = "loaded"  # Flag that graph is ready
         else:
             self.full_graph_figure_data = {}
-            self.entity_graph_html = ""
+            self.identity_graph_html = ""
         self.full_graph_loading = False
 
     @rx.var(cache=True)
@@ -3670,8 +3670,8 @@ class AppState(rx.State):
         return fig
 
     async def load_merge_candidates(self):
-        """Fetch merge suggestions from the backend."""
-        self.entity_candidates_loading = True
+        """Fetch identity merge suggestions from the backend."""
+        self.identity_candidates_loading = True
         yield
         data = await api_client.fetch_merge_candidates(limit=50)
         raw_candidates = data.get("candidates", [])
@@ -3711,28 +3711,28 @@ class AppState(rx.State):
                 "target_id": person_ids[0] if person_ids else "",
                 "source_ids": ",".join(person_ids[1:]),
             })
-        self.entity_merge_candidates = processed  # type: ignore[assignment]
-        self.entity_candidates_loading = False
+        self.identity_merge_candidates = processed  # type: ignore[assignment]
+        self.identity_candidates_loading = False
 
     async def merge_candidate_group(self, target_id: str, source_ids_str: str):
         """Merge a suggested candidate group with one click."""
         if not target_id or not source_ids_str:
             return
         source_ids = [int(s) for s in source_ids_str.split(",") if s]
-        self.entity_save_message = "⏳ Merging…"
+        self.identity_save_message = "⏳ Merging…"
         yield
-        result = await api_client.merge_entities(int(target_id), source_ids)
+        result = await api_client.merge_identities(int(target_id), source_ids)
         if "error" in result:
-            self.entity_save_message = f"❌ {result['error']}"
+            self.identity_save_message = f"❌ {result['error']}"
         else:
             merged = result.get("sources_deleted", 0)
             name = result.get("display_name", "")
-            self.entity_save_message = f"✅ Merged {merged + 1} → \"{name}\""
+            self.identity_save_message = f"✅ Merged {merged + 1} → \"{name}\""
             # Refresh suggestions and entity list
             await self._reload_merge_candidates()
-            await self._load_entity_list()
-            stats = await api_client.fetch_entity_stats()
-            self.entity_stats = {k: str(v) for k, v in stats.items()}
+            await self._load_identity_list()
+            stats = await api_client.fetch_identity_stats()
+            self.identity_stats = {k: str(v) for k, v in stats.items()}
 
     async def _reload_merge_candidates(self):
         """Internal: reload merge candidates without yield (non-generator)."""
@@ -3771,7 +3771,7 @@ class AppState(rx.State):
                 "target_id": person_ids[0] if person_ids else "",
                 "source_ids": ",".join(person_ids[1:]),
             })
-        self.entity_merge_candidates = processed  # type: ignore[assignment]
+        self.identity_merge_candidates = processed  # type: ignore[assignment]
 
 
 # =========================================================================

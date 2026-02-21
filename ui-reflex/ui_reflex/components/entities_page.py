@@ -1,4 +1,4 @@
-"""Entity Store page — person knowledge management UI.
+"""Identity Store page — person knowledge management UI.
 
 Redesigned as a native Reflex component matching the settings page style.
 Two tabs: People (master-detail side panel) and All Facts (filterable table).
@@ -10,22 +10,22 @@ from ..state import AppState
 
 
 # =========================================================================
-# MAIN ENTITIES PAGE
+# MAIN IDENTITIES PAGE
 # =========================================================================
 
 
 def entities_page() -> rx.Component:
-    """Full entities page with tabbed interface matching settings page."""
+    """Full identities page with tabbed interface matching settings page."""
     return rx.box(
         rx.flex(
             # Header: back + title + stat badges
             _header(),
             # Status message (action confirmation)
             rx.cond(
-                AppState.entity_save_message != "",
+                AppState.identity_save_message != "",
                 rx.box(
                     rx.text(
-                        AppState.entity_save_message,
+                        AppState.identity_save_message,
                         class_name="text-sm",
                     ),
                     class_name="mb-4 px-3 py-2 bg-gray-50 rounded-lg border border-gray-200",
@@ -34,10 +34,10 @@ def entities_page() -> rx.Component:
             ),
             # Seed status message
             rx.cond(
-                AppState.entity_seed_message != "",
+                AppState.identity_seed_message != "",
                 rx.box(
                     rx.text(
-                        AppState.entity_seed_message,
+                        AppState.identity_seed_message,
                         class_name="text-sm",
                     ),
                     class_name="mb-4 px-3 py-2 bg-gray-50 rounded-lg border border-gray-200",
@@ -57,8 +57,8 @@ def entities_page() -> rx.Component:
                 rx.tabs.content(_facts_tab(), value="facts", class_name="pt-4"),
                 rx.tabs.content(_suggestions_tab(), value="suggestions", class_name="pt-4"),
                 rx.tabs.content(_graph_tab(), value="graph", class_name="pt-4"),
-                value=AppState.entity_tab,
-                on_change=AppState.set_entity_tab,
+                value=AppState.identity_tab,
+                on_change=AppState.set_identity_tab,
                 default_value="people",
                 class_name="mt-2",
             ),
@@ -87,16 +87,16 @@ def _header() -> rx.Component:
                 ),
                 href="/",
             ),
-            rx.heading("Entity Store", size="6", class_name="text-gray-800"),
+            rx.heading("Identity Store", size="6", class_name="text-gray-800"),
             align="center",
             gap="3",
         ),
         # Right: stat badges
         rx.flex(
-            _stat_badge("👤", AppState.entity_stats_persons, "Persons"),
-            _stat_badge("📋", AppState.entity_stats_facts, "Facts"),
-            _stat_badge("📝", AppState.entity_stats_aliases, "Aliases"),
-            _stat_badge("🔗", AppState.entity_stats_relationships, "Rels"),
+            _stat_badge("👤", AppState.identity_stats_persons, "Persons"),
+            _stat_badge("📋", AppState.identity_stats_facts, "Facts"),
+            _stat_badge("📝", AppState.identity_stats_aliases, "Aliases"),
+            _stat_badge("🔗", AppState.identity_stats_relationships, "Rels"),
             gap="3",
             align="center",
         ),
@@ -159,12 +159,12 @@ def _people_tab() -> rx.Component:
         _toolbar(),
         # Merge action bar (shown when merge mode is active)
         rx.cond(
-            AppState.entity_merge_mode,
+            AppState.identity_merge_mode,
             _merge_action_bar(),
             rx.fragment(),
         ),
         rx.cond(
-            AppState.entity_has_detail,
+            AppState.identity_has_detail,
             # Two-column: person list (left) + detail panel (right)
             rx.flex(
                 _person_list_column(),
@@ -186,10 +186,10 @@ def _merge_action_bar() -> rx.Component:
         rx.flex(
             rx.icon("merge", size=16, class_name="text-purple-500"),
             rx.cond(
-                AppState.entity_merge_count > 0,
+                AppState.identity_merge_count > 0,
                 rx.flex(
                     rx.text(
-                        AppState.entity_merge_count.to(str),  # type: ignore[union-attr]
+                        AppState.identity_merge_count.to(str),  # type: ignore[union-attr]
                         class_name="text-sm font-semibold text-purple-600",
                     ),
                     rx.text("selected", class_name="text-sm text-gray-600"),
@@ -212,7 +212,7 @@ def _merge_action_bar() -> rx.Component:
             rx.icon("git-merge", size=14, class_name="mr-1"),
             "Merge Selected",
             on_click=AppState.execute_merge,
-            disabled=~AppState.entity_can_merge,
+            disabled=~AppState.identity_can_merge,
             size="2",
             class_name="bg-purple-500 text-white hover:bg-purple-600 disabled:opacity-50",
         ),
@@ -230,8 +230,8 @@ def _toolbar() -> rx.Component:
     return rx.flex(
         rx.el.input(
             placeholder="Search persons…",
-            default_value=AppState.entity_search,
-            on_change=AppState.set_entity_search,
+            default_value=AppState.identity_search,
+            on_change=AppState.set_identity_search,
             class_name=(
                 "flex-1 bg-white border border-gray-200 rounded-lg "
                 "px-3 py-2 text-sm text-gray-700 outline-none "
@@ -241,29 +241,29 @@ def _toolbar() -> rx.Component:
         rx.button(
             rx.icon("search", size=14, class_name="mr-1"),
             "Search",
-            on_click=AppState.search_entities,
+            on_click=AppState.search_identities,
             variant="outline",
             size="2",
         ),
         rx.button(
             rx.icon("refresh-cw", size=14, class_name="mr-1"),
             "Refresh",
-            on_click=AppState.refresh_entities,
+            on_click=AppState.refresh_identities,
             variant="outline",
             size="2",
         ),
         rx.button(
             rx.icon("sprout", size=14, class_name="mr-1"),
             "Seed",
-            on_click=AppState.seed_entities,
-            loading=AppState.entity_seed_status == "seeding",
+            on_click=AppState.seed_identities,
+            loading=AppState.identity_seed_status == "seeding",
             size="2",
             class_name="bg-green-500 text-white hover:bg-green-600",
         ),
         rx.button(
             rx.icon("trash-2", size=14, class_name="mr-1"),
             "Cleanup",
-            on_click=AppState.cleanup_entities,
+            on_click=AppState.cleanup_identities,
             variant="outline",
             size="2",
             color_scheme="red",
@@ -272,14 +272,14 @@ def _toolbar() -> rx.Component:
         rx.button(
             rx.icon("merge", size=14, class_name="mr-1"),
             rx.cond(
-                AppState.entity_merge_mode,
+                AppState.identity_merge_mode,
                 "Cancel Merge",
                 "Merge",
             ),
             on_click=AppState.toggle_merge_mode,
-            variant=rx.cond(AppState.entity_merge_mode, "solid", "outline"),
+            variant=rx.cond(AppState.identity_merge_mode, "solid", "outline"),
             size="2",
-            color_scheme=rx.cond(AppState.entity_merge_mode, "purple", "gray"),
+            color_scheme=rx.cond(AppState.identity_merge_mode, "purple", "gray"),
         ),
         gap="2",
         align="center",
@@ -295,7 +295,7 @@ def _toolbar() -> rx.Component:
 def _person_grid_full() -> rx.Component:
     """Full-width person card grid."""
     return rx.cond(
-        AppState.entity_loading,
+        AppState.identity_loading,
         rx.flex(
             rx.spinner(size="3"),
             rx.text("Loading…", class_name="text-sm text-gray-400 ml-2"),
@@ -304,10 +304,10 @@ def _person_grid_full() -> rx.Component:
             class_name="py-12",
         ),
         rx.cond(
-            AppState.entity_persons.length() > 0,  # type: ignore[union-attr]
+            AppState.identity_persons.length() > 0,  # type: ignore[union-attr]
             rx.box(
                 rx.foreach(
-                    AppState.entity_persons,
+                    AppState.identity_persons,
                     _person_card,
                 ),
                 class_name=(
@@ -337,13 +337,13 @@ def _person_grid_full() -> rx.Component:
 
 def _person_card(person: dict) -> rx.Component:
     """Single person card for the grid — with merge checkbox when in merge mode."""
-    is_selected_for_merge = AppState.entity_merge_selection.contains(person["id"])
+    is_selected_for_merge = AppState.identity_merge_selection.contains(person["id"])
     merge_index = _merge_index_label(person["id"])
 
     return rx.box(
         # Merge mode: checkbox overlay
         rx.cond(
-            AppState.entity_merge_mode,
+            AppState.identity_merge_mode,
             rx.flex(
                 rx.cond(
                     is_selected_for_merge,
@@ -414,9 +414,9 @@ def _person_card(person: dict) -> rx.Component:
             class_name="mt-2",
         ),
         on_click=rx.cond(
-            AppState.entity_merge_mode,
+            AppState.identity_merge_mode,
             AppState.toggle_merge_selection(person["id"]),
-            AppState.select_entity(person["id"]),
+            AppState.select_identity(person["id"]),
         ),
         class_name=rx.cond(
             is_selected_for_merge,
@@ -438,9 +438,9 @@ def _merge_index_label(person_id: rx.Var) -> rx.Var:
     Uses a simple conditional since rx.foreach doesn't support index tracking.
     """
     return rx.cond(
-        AppState.entity_merge_selection.length() > 0,  # type: ignore[union-attr]
+        AppState.identity_merge_selection.length() > 0,  # type: ignore[union-attr]
         rx.cond(
-            AppState.entity_merge_selection[0] == person_id,
+            AppState.identity_merge_selection[0] == person_id,
             "① target",
             "②+",
         ),
@@ -457,7 +457,7 @@ def _person_list_column() -> rx.Component:
     """Narrow scrollable person list for master-detail layout."""
     return rx.box(
         rx.foreach(
-            AppState.entity_persons,
+            AppState.identity_persons,
             _person_list_item,
         ),
         class_name=(
@@ -469,14 +469,14 @@ def _person_list_column() -> rx.Component:
 
 def _person_list_item(person: dict) -> rx.Component:
     """Compact person item for the side list — with merge checkbox."""
-    is_selected = AppState.entity_selected_id == person["id"].to(int)
-    is_merge_selected = AppState.entity_merge_selection.contains(person["id"])
+    is_selected = AppState.identity_selected_id == person["id"].to(int)
+    is_merge_selected = AppState.identity_merge_selection.contains(person["id"])
 
     return rx.box(
         rx.flex(
             # Merge checkbox (when in merge mode)
             rx.cond(
-                AppState.entity_merge_mode,
+                AppState.identity_merge_mode,
                 rx.cond(
                     is_merge_selected,
                     rx.flex(
@@ -528,9 +528,9 @@ def _person_list_item(person: dict) -> rx.Component:
             gap="2",
         ),
         on_click=rx.cond(
-            AppState.entity_merge_mode,
+            AppState.identity_merge_mode,
             AppState.toggle_merge_selection(person["id"]),
-            AppState.select_entity(person["id"]),
+            AppState.select_identity(person["id"]),
         ),
         class_name=rx.cond(
             is_merge_selected,
@@ -563,7 +563,7 @@ def _person_detail_panel() -> rx.Component:
     """Detail side panel showing full person info."""
     return rx.box(
         rx.cond(
-            AppState.entity_detail_loading,
+            AppState.identity_detail_loading,
             rx.flex(
                 rx.spinner(size="3"),
                 rx.text("Loading…", class_name="text-sm text-gray-400 ml-2"),
@@ -600,13 +600,13 @@ def _detail_header() -> rx.Component:
     return rx.flex(
         # Name: display or edit mode
         rx.cond(
-            AppState.entity_editing_name,
+            AppState.identity_editing_name,
             # Edit mode: input + save/cancel
             rx.flex(
                 rx.el.input(
                     type="text",
-                    default_value=AppState.entity_editing_name_value,
-                    on_change=AppState.set_entity_editing_name_value,
+                    default_value=AppState.identity_editing_name_value,
+                    on_change=AppState.set_identity_editing_name_value,
                     auto_focus=True,
                     class_name=(
                         "flex-1 bg-white border border-accent rounded-lg "
@@ -634,7 +634,7 @@ def _detail_header() -> rx.Component:
             # Display mode: heading + edit pencil
             rx.flex(
                 rx.heading(
-                    AppState.entity_detail_name,
+                    AppState.identity_detail_name,
                     size="5",
                     class_name="text-gray-800",
                 ),
@@ -654,7 +654,7 @@ def _detail_header() -> rx.Component:
             rx.tooltip(
                 rx.icon_button(
                     rx.icon("languages", size=14),
-                    on_click=AppState.update_entity_display_name,
+                    on_click=AppState.update_identity_display_name,
                     variant="outline",
                     size="1",
                     class_name="text-blue-500 hover:text-blue-700",
@@ -671,7 +671,7 @@ def _detail_header() -> rx.Component:
             ),
             rx.icon_button(
                 rx.icon("x", size=18),
-                on_click=AppState.close_entity_detail,
+                on_click=AppState.close_identity_detail,
                 variant="ghost",
                 class_name="text-gray-400 hover:text-gray-600",
             ),
@@ -687,14 +687,14 @@ def _detail_header() -> rx.Component:
 def _detail_contact_info() -> rx.Component:
     """WhatsApp ID and phone display."""
     return rx.cond(
-        (AppState.entity_detail_phone != "") | (AppState.entity_detail_whatsapp != ""),
+        (AppState.identity_detail_phone != "") | (AppState.identity_detail_whatsapp != ""),
         rx.flex(
             rx.cond(
-                AppState.entity_detail_phone != "",
+                AppState.identity_detail_phone != "",
                 rx.flex(
                     rx.icon("phone", size=14, class_name="text-gray-400"),
                     rx.text(
-                        AppState.entity_detail_phone,
+                        AppState.identity_detail_phone,
                         class_name="text-sm text-gray-600",
                     ),
                     align="center",
@@ -703,11 +703,11 @@ def _detail_contact_info() -> rx.Component:
                 rx.fragment(),
             ),
             rx.cond(
-                AppState.entity_detail_whatsapp != "",
+                AppState.identity_detail_whatsapp != "",
                 rx.flex(
                     rx.icon("message-circle", size=14, class_name="text-green-500"),
                     rx.text(
-                        AppState.entity_detail_whatsapp,
+                        AppState.identity_detail_whatsapp,
                         class_name="text-sm text-gray-600",
                     ),
                     align="center",
@@ -730,10 +730,10 @@ def _detail_contact_info() -> rx.Component:
 def _detail_facts() -> rx.Component:
     """Render grouped facts with category headers and inline edit/delete."""
     return rx.cond(
-        AppState.entity_facts_grouped.length() > 0,  # type: ignore[union-attr]
+        AppState.identity_facts_grouped.length() > 0,  # type: ignore[union-attr]
         rx.box(
             rx.foreach(
-                AppState.entity_facts_grouped,
+                AppState.identity_facts_grouped,
                 _render_fact_item,
             ),
         ),
@@ -773,7 +773,7 @@ def _fact_category_header(item: dict) -> rx.Component:
 
 def _fact_row(item: dict) -> rx.Component:
     """Single fact row with label, value, confidence, source, edit/delete."""
-    is_editing = AppState.entity_editing_fact_key == item["fact_key"]
+    is_editing = AppState.identity_editing_fact_key == item["fact_key"]
 
     return rx.cond(
         is_editing,
@@ -830,7 +830,7 @@ def _fact_row_display(item: dict) -> rx.Component:
             # Delete button
             rx.icon_button(
                 rx.icon("trash-2", size=12),
-                on_click=AppState.delete_entity_fact(item["fact_key"]),
+                on_click=AppState.delete_identity_fact(item["fact_key"]),
                 variant="ghost",
                 size="1",
                 class_name="text-gray-300 hover:text-red-500",
@@ -867,8 +867,8 @@ def _fact_row_edit(item: dict) -> rx.Component:
         # Editable input
         rx.el.input(
             type="text",
-            default_value=AppState.entity_editing_fact_value,
-            on_change=AppState.set_entity_editing_fact_value,
+            default_value=AppState.identity_editing_fact_value,
+            on_change=AppState.set_identity_editing_fact_value,
             auto_focus=True,
             class_name=(
                 "flex-1 bg-white border border-accent rounded-lg "
@@ -878,7 +878,7 @@ def _fact_row_edit(item: dict) -> rx.Component:
         # Save
         rx.icon_button(
             rx.icon("check", size=14),
-            on_click=AppState.save_entity_fact_edit,
+            on_click=AppState.save_identity_fact_edit,
             variant="solid",
             size="1",
             color_scheme="green",
@@ -959,10 +959,10 @@ def _detail_aliases() -> rx.Component:
         "Aliases", "tag",
         # Alias bubbles
         rx.cond(
-            AppState.entity_aliases_list.length() > 0,  # type: ignore[union-attr]
+            AppState.identity_aliases_list.length() > 0,  # type: ignore[union-attr]
             rx.flex(
                 rx.foreach(
-                    AppState.entity_aliases_list,
+                    AppState.identity_aliases_list,
                     _alias_bubble,
                 ),
                 wrap="wrap",
@@ -979,8 +979,8 @@ def _detail_aliases() -> rx.Component:
             rx.el.input(
                 type="text",
                 placeholder="Add alias…",
-                value=AppState.entity_new_alias,
-                on_change=AppState.set_entity_new_alias,
+                value=AppState.identity_new_alias,
+                on_change=AppState.set_identity_new_alias,
                 class_name=(
                     "flex-1 bg-white border border-gray-200 rounded-lg "
                     "px-3 py-1.5 text-sm text-gray-700 outline-none "
@@ -990,7 +990,7 @@ def _detail_aliases() -> rx.Component:
             rx.button(
                 rx.icon("plus", size=14, class_name="mr-1"),
                 "Add",
-                on_click=AppState.add_entity_alias,
+                on_click=AppState.add_identity_alias,
                 size="1",
                 class_name="bg-accent text-white hover:bg-accent-hover shrink-0",
             ),
@@ -1008,7 +1008,7 @@ def _alias_bubble(alias: dict) -> rx.Component:
                 "x",
                 size=12,
                 class_name="shrink-0 cursor-pointer opacity-50 hover:opacity-100",
-                on_click=AppState.delete_entity_alias(alias["id"]),
+                on_click=AppState.delete_identity_alias(alias["id"]),
             ),
             rx.text(
                 alias["alias"],
@@ -1040,12 +1040,12 @@ def _alias_bubble(alias: dict) -> rx.Component:
 def _detail_relationships() -> rx.Component:
     """Relationships section."""
     return rx.cond(
-        AppState.entity_relationships_list.length() > 0,  # type: ignore[union-attr]
+        AppState.identity_relationships_list.length() > 0,  # type: ignore[union-attr]
         _section_card(
             "Relationships", "link",
             rx.flex(
                 rx.foreach(
-                    AppState.entity_relationships_list,
+                    AppState.identity_relationships_list,
                     _relationship_badge,
                 ),
                 wrap="wrap",
@@ -1089,8 +1089,8 @@ def _detail_add_fact() -> rx.Component:
             rx.el.input(
                 type="text",
                 placeholder="Key (e.g. birth_date)",
-                value=AppState.entity_new_fact_key,
-                on_change=AppState.set_entity_new_fact_key,
+                value=AppState.identity_new_fact_key,
+                on_change=AppState.set_identity_new_fact_key,
                 class_name=(
                     "bg-white border border-gray-200 rounded-lg "
                     "px-3 py-2 text-sm text-gray-700 outline-none "
@@ -1100,8 +1100,8 @@ def _detail_add_fact() -> rx.Component:
             rx.el.input(
                 type="text",
                 placeholder="Value",
-                value=AppState.entity_new_fact_value,
-                on_change=AppState.set_entity_new_fact_value,
+                value=AppState.identity_new_fact_value,
+                on_change=AppState.set_identity_new_fact_value,
                 class_name=(
                     "flex-1 bg-white border border-gray-200 rounded-lg "
                     "px-3 py-2 text-sm text-gray-700 outline-none "
@@ -1111,7 +1111,7 @@ def _detail_add_fact() -> rx.Component:
             rx.button(
                 rx.icon("plus", size=14, class_name="mr-1"),
                 "Add Fact",
-                on_click=AppState.add_entity_fact,
+                on_click=AppState.add_identity_fact,
                 size="2",
                 class_name="bg-accent text-white hover:bg-accent-hover shrink-0",
             ),
@@ -1134,11 +1134,11 @@ def _facts_tab() -> rx.Component:
             rx.el.select(
                 rx.el.option("All fact keys", value=""),
                 rx.foreach(
-                    AppState.entity_fact_keys,
+                    AppState.identity_fact_keys,
                     lambda k: rx.el.option(k, value=k),
                 ),
-                value=AppState.entity_fact_key_filter,
-                on_change=AppState.set_entity_fact_key_filter,
+                value=AppState.identity_fact_key_filter,
+                on_change=AppState.set_identity_fact_key_filter,
                 class_name=(
                     "min-w-[180px] bg-white border border-gray-200 rounded-lg "
                     "px-3 py-2 text-sm text-gray-700 outline-none"
@@ -1147,7 +1147,7 @@ def _facts_tab() -> rx.Component:
             rx.button(
                 rx.icon("search", size=14, class_name="mr-1"),
                 "Load Facts",
-                on_click=AppState.load_all_entity_facts,
+                on_click=AppState.load_all_identity_facts,
                 size="2",
                 variant="outline",
             ),
@@ -1157,7 +1157,7 @@ def _facts_tab() -> rx.Component:
         ),
         # Facts table
         rx.cond(
-            AppState.entity_all_facts.length() > 0,  # type: ignore[union-attr]
+            AppState.identity_all_facts.length() > 0,  # type: ignore[union-attr]
             rx.box(
                 rx.el.table(
                     rx.el.thead(
@@ -1174,7 +1174,7 @@ def _facts_tab() -> rx.Component:
                     ),
                     rx.el.tbody(
                         rx.foreach(
-                            AppState.entity_all_facts,
+                            AppState.identity_all_facts,
                             _all_facts_row,
                         ),
                     ),
@@ -1198,7 +1198,7 @@ def _all_facts_row(fact: dict) -> rx.Component:
             rx.text(
                 fact["person_name"],
                 class_name="font-medium text-gray-800 cursor-pointer hover:text-accent",
-                on_click=AppState.select_entity(fact["person_id"]),
+                on_click=AppState.select_identity(fact["person_id"]),
             ),
             class_name="px-3 py-2",
         ),
@@ -1302,7 +1302,7 @@ def _suggestions_tab() -> rx.Component:
                 rx.icon("scan-search", size=14, class_name="mr-1"),
                 "Find Duplicates",
                 on_click=AppState.load_merge_candidates,
-                loading=AppState.entity_candidates_loading,
+                loading=AppState.identity_candidates_loading,
                 size="2",
                 class_name="bg-purple-500 text-white hover:bg-purple-600",
             ),
@@ -1316,16 +1316,16 @@ def _suggestions_tab() -> rx.Component:
         ),
         # Candidate list
         rx.cond(
-            AppState.entity_merge_candidates.length() > 0,  # type: ignore[union-attr]
+            AppState.identity_merge_candidates.length() > 0,  # type: ignore[union-attr]
             rx.box(
                 rx.foreach(
-                    AppState.entity_merge_candidates,
+                    AppState.identity_merge_candidates,
                     _suggestion_card,
                 ),
                 class_name="space-y-3",
             ),
             rx.cond(
-                AppState.entity_candidates_loading,
+                AppState.identity_candidates_loading,
                 rx.flex(
                     rx.spinner(size="3"),
                     rx.text("Scanning…", class_name="text-sm text-gray-400 ml-2"),
@@ -1428,7 +1428,7 @@ def _graph_tab() -> rx.Component:
             rx.button(
                 rx.icon("network", size=14, class_name="mr-1"),
                 "Load Interactive Graph",
-                on_click=AppState.load_full_entity_graph,
+                on_click=AppState.load_full_identity_graph,
                 loading=AppState.full_graph_loading,
                 size="2",
                 class_name="bg-blue-500 text-white hover:bg-blue-600",
@@ -1436,8 +1436,8 @@ def _graph_tab() -> rx.Component:
             rx.button(
                 rx.icon("list", size=14, class_name="mr-1"),
                 "List View",
-                on_click=AppState.load_entity_graph,
-                loading=AppState.entity_graph_loading,
+                on_click=AppState.load_identity_graph,
+                loading=AppState.identity_graph_loading,
                 size="2",
                 variant="outline",
             ),
@@ -1451,7 +1451,7 @@ def _graph_tab() -> rx.Component:
         ),
         # Legend
         rx.cond(
-            AppState.entity_graph_html != "",
+            AppState.identity_graph_html != "",
             rx.flex(
                 rx.flex(
                     rx.box(class_name="w-3 h-3 rounded-full bg-blue-500 inline-block"),
@@ -1485,7 +1485,7 @@ def _graph_tab() -> rx.Component:
         ),
         # Interactive graph (vis.js)
         rx.cond(
-            AppState.entity_graph_html != "",
+            AppState.identity_graph_html != "",
             rx.flex(
                 # Stats bar
                 rx.flex(
@@ -1503,23 +1503,23 @@ def _graph_tab() -> rx.Component:
             ),
             # Fallback: list view or empty state
             rx.cond(
-                AppState.entity_graph_nodes.length() > 0,  # type: ignore[union-attr]
+                AppState.identity_graph_nodes.length() > 0,  # type: ignore[union-attr]
                 rx.flex(
                     # Stats
                     rx.flex(
-                        _graph_stat("👤", AppState.entity_graph_nodes.length(), "Connected Persons"),  # type: ignore[union-attr]
-                        _graph_stat("🔗", AppState.entity_graph_edges.length(), "Relationships"),  # type: ignore[union-attr]
+                        _graph_stat("👤", AppState.identity_graph_nodes.length(), "Connected Persons"),  # type: ignore[union-attr]
+                        _graph_stat("🔗", AppState.identity_graph_edges.length(), "Relationships"),  # type: ignore[union-attr]
                         gap="3",
                         class_name="mb-4",
                     ),
                     # Relationships section
                     rx.cond(
-                        AppState.entity_graph_edges.length() > 0,  # type: ignore[union-attr]
+                        AppState.identity_graph_edges.length() > 0,  # type: ignore[union-attr]
                         _section_card(
                             "Relationships", "link",
                             rx.box(
                                 rx.foreach(
-                                    AppState.entity_graph_edges,
+                                    AppState.identity_graph_edges,
                                     _graph_edge_row,
                                 ),
                             ),
@@ -1531,7 +1531,7 @@ def _graph_tab() -> rx.Component:
                         "Connected Persons", "users",
                         rx.box(
                             rx.foreach(
-                                AppState.entity_graph_nodes,
+                                AppState.identity_graph_nodes,
                                 _graph_person_node,
                             ),
                             class_name=(
@@ -1639,7 +1639,7 @@ def _graph_person_node(node: dict) -> rx.Component:
             ),
             rx.fragment(),
         ),
-        on_click=AppState.select_entity(node["id"]),
+        on_click=AppState.select_identity(node["id"]),
         class_name=(
             "settings-card cursor-pointer hover:border-blue-400 "
             "transition-all duration-150 hover:-translate-y-0.5"

@@ -166,10 +166,10 @@ class ArchiveRetriever(BaseRetriever):
     RECENCY_SUPPLEMENT_COUNT = 5
     
     def _inject_entity_facts(self, query: str) -> tuple:
-        """Inject known entity facts as high-priority context nodes.
+        """Inject known identity facts as high-priority context nodes.
         
         When the query mentions a known person (by name or alias), looks up
-        their stored facts in the Entity Store and creates a context node with
+        their stored facts in the Identity Store and creates a context node with
         the information. This enables instant answers for factual questions
         like "בת כמה מיה?" (How old is Mia?) using stored birth_date.
         
@@ -184,7 +184,7 @@ class ArchiveRetriever(BaseRetriever):
             query: The search query string
             
         Returns:
-            Tuple of (List[NodeWithScore], List[int]) — entity fact nodes
+            Tuple of (List[NodeWithScore], List[int]) — identity fact nodes
             and resolved person IDs
         """
         try:
@@ -256,7 +256,7 @@ class ArchiveRetriever(BaseRetriever):
                         continue
                     seen_person_ids.add(pid)
             
-            # Phase 3: Build entity fact nodes for ALL resolved person IDs
+            # Phase 3: Build identity fact nodes for ALL resolved person IDs
             # (from both n-gram and individual token resolution).
             # Uses Identity cache so repeated lookups are free.
             for pid in seen_person_ids:
@@ -309,7 +309,7 @@ class ArchiveRetriever(BaseRetriever):
                 
                 fact_text = "\n".join(fact_lines)
                 # Format with consistent source header so the LLM
-                # can cite entity facts like any other source.
+                # can cite identity facts like any other source.
                 formatted_fact_text = (
                     f"Entity Store | Person: {person.name}:\n"
                     f"{fact_text}"
@@ -323,7 +323,7 @@ class ArchiveRetriever(BaseRetriever):
                         "person_id": pid,
                     },
                 )
-                # High score so entity facts appear first in context
+                # High score so identity facts appear first in context
                 injected.append(NodeWithScore(node=node, score=1.0))
             
             return injected, list(seen_person_ids)
@@ -342,7 +342,7 @@ class ArchiveRetriever(BaseRetriever):
         3. Context expansion (±30min surrounding messages from reranked hits)
         4. Document chunk expansion (Paperless siblings of reranked hits)
         5. Per-chat recency supplement (only from chats in reranked results)
-        6. Entity fact injection
+        6. Identity fact injection
         7. Token budget trim
         
         Reranking before expansion means only high-quality seed results
@@ -492,7 +492,7 @@ class ArchiveRetriever(BaseRetriever):
                         results.append(nws)
         
         # =====================================================================
-        # Step 5: Entity fact injection + person-scoped search
+        # Step 5: Identity fact injection + person-scoped search
         # =====================================================================
         # When the query mentions a known person, inject their stored facts
         # as a high-priority context node so the LLM can answer factual
@@ -503,7 +503,7 @@ class ArchiveRetriever(BaseRetriever):
             entity_nodes, resolved_person_ids = self._inject_entity_facts(query_bundle.query_str)
             if entity_nodes:
                 results = entity_nodes + results
-                logger.info(f"Injected {len(entity_nodes)} entity fact node(s)")
+                logger.info(f"Injected {len(entity_nodes)} identity fact node(s)")
             
             # Classify query intent to control graph expansion depth.
             # Only expand identity relationships for family/team queries;
@@ -573,7 +573,7 @@ class ArchiveRetriever(BaseRetriever):
                         f"results for person_ids={expanded_ids}"
                     )
         except Exception as e:
-            logger.debug(f"Entity fact injection failed (non-critical): {e}")
+            logger.debug(f"Identity fact injection failed (non-critical): {e}")
         
         # Ensure at least one node so the synthesizer doesn't return "Empty Response"
         if not results:
@@ -1292,7 +1292,7 @@ class LlamaIndexRAG:
             ("is_group", PayloadSchemaType.BOOL, "is_group bool index"),
             ("source_id", PayloadSchemaType.KEYWORD, "source_id keyword index"),
             ("chat_id", PayloadSchemaType.KEYWORD, "chat_id keyword index"),
-            # Person-asset graph indexes for entity-scoped retrieval
+            # Person-asset graph indexes for identity-scoped retrieval
             ("person_ids", PayloadSchemaType.INTEGER, "person_ids integer index"),
             ("mentioned_person_ids", PayloadSchemaType.INTEGER, "mentioned_person_ids integer index"),
             # Asset-asset graph indexes for cross-channel coherence
@@ -2027,7 +2027,7 @@ class LlamaIndexRAG:
         fields can find the match.
         
         Strategy (ordered by richness):
-        1. Entity Store aliases (if available): uses person_aliases table which
+        1. Identity Store aliases (if available): uses person_aliases table which
            links all name variants across scripts for each person
         2. Fallback: sender + chat name lists from Redis cache, with simple
            first-name → full-name-parts mapping
@@ -2043,10 +2043,10 @@ class LlamaIndexRAG:
             Expanded token list (originals + cross-script contact name parts)
         """
         try:
-            # Strategy 1: Use Entity Store aliases (richer, links all name variants)
+            # Strategy 1: Use Identity Store aliases (richer, links all name variants)
             name_map = self._build_entity_name_map()
             
-            # Strategy 2: Fallback to sender/chat list if entity store is empty
+            # Strategy 2: Fallback to sender/chat list if identity store is empty
             if not name_map:
                 name_map = self._build_sender_name_map()
             
@@ -2086,7 +2086,7 @@ class LlamaIndexRAG:
             return tokens
     
     def _build_entity_name_map(self) -> Dict[str, set]:
-        """Build a name→name_parts map from the Entity Store aliases.
+        """Build a name→name_parts map from the Identity Store aliases.
         
         For each person, all aliases are cross-linked so that ANY alias
         token maps to ALL other alias parts. This is much richer than the
@@ -2648,14 +2648,14 @@ class LlamaIndexRAG:
         
         Uses the Qdrant integer index on ``person_ids`` for exact matching.
         This is the structural graph-enhanced retrieval: instead of fuzzy name
-        matching, we filter by the resolved entity IDs that were stored at
+        matching, we filter by the resolved identity IDs that were stored at
         ingestion time.
         
         Searches both ``person_ids`` (sender/participant) and
         ``mentioned_person_ids`` (mentioned in content) using OR logic.
         
         Args:
-            person_ids: List of person entity IDs to search for
+            person_ids: List of person identity IDs to search for
             k: Number of results per person ID
             filter_chat_name: Optional chat name filter
             filter_sender: Optional sender filter
@@ -2724,7 +2724,7 @@ class LlamaIndexRAG:
                     metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
                     id_=str(point.id),
                 )
-                # Use 0.85 score — high enough to be relevant but below entity facts (1.0)
+                # Use 0.85 score — high enough to be relevant but below identity facts (1.0)
                 valid_results.append(NodeWithScore(node=node, score=0.85))
             
             if valid_results:
@@ -2744,7 +2744,7 @@ class LlamaIndexRAG:
         target_id: int,
         source_ids: List[int],
     ) -> Dict[str, int]:
-        """Update person_ids in Qdrant payloads after an entity merge.
+        """Update person_ids in Qdrant payloads after an identity merge.
         
         Finds all points where ``person_ids`` or ``mentioned_person_ids``
         contain any of the source IDs and replaces them with the target ID.
@@ -3788,13 +3788,13 @@ class LlamaIndexRAG:
         )
         
         # Append the dynamic known contacts list and disambiguation instruction.
-        # Strategy: use Entity Store (rich aliases) when available, fall back
+        # Strategy: use Identity Store (rich aliases) when available, fall back
         # to the flat Redis-cached sender list.
         try:
             contacts_str = ""
             contact_count = 0
             
-            # Strategy 1: Entity Store with aliases (richer disambiguation)
+            # Strategy 1: Identity Store with aliases (richer disambiguation)
             try:
                 from identity import Identity
                 identities = Identity.all_summary()
@@ -4022,7 +4022,7 @@ class LlamaIndexRAG:
             "messages from the same chat\n"
             "- **Paperless documents**: 'Paperless | date | Document title:' followed by document text\n"
             "- **Gmail emails**: 'Gmail | date | sender in subject: body'\n"
-            "- **Entity Store facts**: 'Entity Store | Person: name:' followed by known facts about "
+            "- **Identity Store facts**: 'Entity Store | Person: name:' followed by known facts about "
             "a person — these are verified facts from the knowledge base, cite them as 'known facts'\n"
             "- **Other sources**: 'Source | date | sender in context: content'\n\n"
             "CITATION RULES:\n"
@@ -4903,35 +4903,35 @@ class FulltextOnlyRetriever(BaseRetriever):
 
 
 # =========================================================================
-# Phase 6: EntityExtractionTransform for IngestionPipeline
+# Phase 6: IdentityExtractionTransform for IngestionPipeline
 # =========================================================================
 
-class EntityExtractionTransform:
-    """LlamaIndex-compatible transform that runs entity extraction on nodes.
+class IdentityExtractionTransform:
+    """LlamaIndex-compatible transform that runs identity extraction on nodes.
     
     When added to an IngestionPipeline, automatically extracts person facts
     (birth dates, cities, relationships, etc.) from ingested documents and
-    stores them in the Entity Store.
+    stores them in the Identity Store.
     
     This is an alternative to calling entity_extractor directly from the
     sync files. The transform passes nodes through unchanged — it only
-    has the side effect of populating the entity store.
+    has the side effect of populating the identity store.
     
     Usage:
         pipeline = IngestionPipeline(
             transformations=[
                 splitter,
-                EntityExtractionTransform(),
+                IdentityExtractionTransform(),
                 embed_model,
             ],
         )
     """
     
     def __call__(self, nodes: List[TextNode], **kwargs) -> List[TextNode]:
-        """Extract entities from nodes and store in entity_db.
+        """Extract identities from nodes and store in entity_db.
         
-        Nodes are passed through unchanged. Entity extraction is a
-        side effect that populates the entity store.
+        Nodes are passed through unchanged. Identity extraction is a
+        side effect that populates the identity store.
         
         Args:
             nodes: List of TextNode instances from the pipeline
@@ -4946,7 +4946,7 @@ class EntityExtractionTransform:
             return nodes
         
         try:
-            from entity_extractor import extract_entities_from_document
+            from entity_extractor import extract_identities_from_document
             
             for node in nodes:
                 metadata = getattr(node, "metadata", {})
@@ -4963,18 +4963,18 @@ class EntityExtractionTransform:
                 content_type = metadata.get("content_type", "")
                 if content_type in ("document", "text") and source in ("paperless", "gmail"):
                     try:
-                        extract_entities_from_document(
+                        extract_identities_from_document(
                             doc_title=title or "Document",
                             doc_text=text,
                             source_ref=source_id,
                             sender=sender,
                         )
                     except Exception as e:
-                        logger.debug(f"Entity extraction failed for node (non-critical): {e}")
+                        logger.debug(f"Identity extraction failed for node (non-critical): {e}")
         except ImportError:
             logger.debug("entity_extractor not available — skipping pipeline extraction")
         except Exception as e:
-            logger.debug(f"EntityExtractionTransform failed (non-critical): {e}")
+            logger.debug(f"IdentityExtractionTransform failed (non-critical): {e}")
         
         return nodes
 
