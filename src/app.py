@@ -34,7 +34,7 @@ print("✅ Conversations DB imported", flush=True)
 import scheduled_tasks_db
 print("✅ Scheduled tasks DB imported", flush=True)
 
-import entity_db
+import identity_db
 from identity import Identity
 print("✅ Entity DB imported", flush=True)
 
@@ -398,7 +398,7 @@ def rag_query():
         # and facts the user provides in conversation (e.g., "David has a son
         # named Ben"). Non-blocking: failures never affect the chat response.
         try:
-            from entity_extractor import extract_from_chat_message
+            from identity_extractor import extract_from_chat_message
             extract_from_chat_message(
                 user_message=question,
                 llm_answer=answer,
@@ -1121,7 +1121,7 @@ def list_identities():
 def identity_stats():
     """Get entity store statistics."""
     try:
-        stats = entity_db.get_stats()
+        stats = identity_db.get_stats()
         return jsonify(stats), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1280,7 +1280,7 @@ def delete_identity_alias_by_id(person_id: int, alias_id: int):
 def resolve_identity_name(name: str):
     """Resolve a name to matching person entities (for disambiguation)."""
     try:
-        matches = entity_db.resolve_name(name)
+        matches = identity_db.resolve_name(name)
         return jsonify({"name": name, "matches": matches, "count": len(matches)}), 200
     except Exception as e:
         trace = traceback.format_exc()
@@ -1294,8 +1294,8 @@ def list_all_facts():
     try:
         fact_key = request.args.get("key")
         limit = min(request.args.get("limit", 200, type=int), 500)
-        facts = entity_db.get_all_facts_global(fact_key=fact_key, limit=limit)
-        keys = entity_db.get_fact_keys()
+        facts = identity_db.get_all_facts_global(fact_key=fact_key, limit=limit)
+        keys = identity_db.get_fact_keys()
         return jsonify({"facts": facts, "count": len(facts), "available_keys": keys}), 200
     except Exception as e:
         trace = traceback.format_exc()
@@ -1344,11 +1344,11 @@ def seed_identities():
                 ],
             }), 200
         
-        result = entity_db.seed_from_whatsapp_contacts(contacts)
+        result = identity_db.seed_from_whatsapp_contacts(contacts)
         return jsonify({
             "status": "ok",
             "result": result,
-            "stats": entity_db.get_stats(),
+            "stats": identity_db.get_stats(),
         }), 200
     except Exception as e:
         trace = traceback.format_exc()
@@ -1360,12 +1360,12 @@ def seed_identities():
 def cleanup_identities():
     """Remove persons with garbage/invalid names from the entity store."""
     try:
-        result = entity_db.cleanup_garbage_persons()
+        result = identity_db.cleanup_garbage_persons()
         return jsonify({
             "status": "ok",
             "deleted": result["deleted"],
             "names": result["names"][:50],  # Limit response size
-            "stats": entity_db.get_stats(),
+            "stats": identity_db.get_stats(),
         }), 200
     except Exception as e:
         trace = traceback.format_exc()
@@ -1424,7 +1424,7 @@ def merge_identities():
         except Exception:
             pass
         
-        result["stats"] = entity_db.get_stats()
+        result["stats"] = identity_db.get_stats()
         return jsonify({"status": "ok", **result}), 200
     except Exception as e:
         trace = traceback.format_exc()
@@ -1440,7 +1440,7 @@ def merge_candidates():
     """
     try:
         limit = request.args.get("limit", 50, type=int)
-        candidates = entity_db.find_merge_candidates(limit=limit)
+        candidates = identity_db.find_merge_candidates(limit=limit)
         return jsonify({"candidates": candidates, "count": len(candidates)}), 200
     except Exception as e:
         trace = traceback.format_exc()
@@ -1460,7 +1460,7 @@ def identity_graph():
     """
     try:
         limit = request.args.get("limit", 100, type=int)
-        graph = entity_db.get_graph_data(limit=limit)
+        graph = identity_db.get_graph_data(limit=limit)
         return jsonify(graph), 200
     except Exception as e:
         trace = traceback.format_exc()
@@ -1484,7 +1484,7 @@ def identity_graph_full():
         limit_persons = request.args.get("limit_persons", 100, type=int)
         limit_assets = request.args.get("limit_assets", 10, type=int)
         include_asset_edges = request.args.get("include_asset_edges", "true").lower() == "true"
-        graph = entity_db.get_full_graph_data(
+        graph = identity_db.get_full_graph_data(
             limit_persons=limit_persons,
             limit_assets_per_person=limit_assets,
             include_asset_edges=include_asset_edges,
@@ -1504,7 +1504,7 @@ def update_identity_display_name(person_id: int):
     and updates canonical_name to show both (e.g., "Shiran / שירן").
     """
     try:
-        new_name = entity_db.update_display_name(person_id)
+        new_name = identity_db.update_display_name(person_id)
         if new_name:
             return jsonify({
                 "status": "ok",
@@ -1528,7 +1528,7 @@ def identities_ui():
     """Serve the identity management web UI."""
     from flask import send_from_directory
     templates_dir = Path(__file__).resolve().parent / "templates"
-    return send_from_directory(str(templates_dir), "entities.html")
+    return send_from_directory(str(templates_dir), "identities.html")
 
 
 # =============================================================================

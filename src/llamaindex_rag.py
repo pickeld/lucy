@@ -188,7 +188,7 @@ class ArchiveRetriever(BaseRetriever):
             and resolved person IDs
         """
         try:
-            import entity_db
+            import identity_db
             from identity import Identity
             from datetime import datetime
             from zoneinfo import ZoneInfo
@@ -227,7 +227,7 @@ class ArchiveRetriever(BaseRetriever):
                     # Strategy (b): resolve_name — accept only if exactly 1 match
                     # (unambiguous). Multiple matches → skip, let Phase 2 handle.
                     if pid is None:
-                        matches = entity_db.resolve_name(ngram)
+                        matches = identity_db.resolve_name(ngram)
                         if len(matches) == 1:
                             pid = matches[0]["id"]
                     
@@ -249,7 +249,7 @@ class ArchiveRetriever(BaseRetriever):
             for token in tokens:
                 if token.lower() in consumed_tokens:
                     continue
-                matches = entity_db.resolve_name(token, exact_only=True)
+                matches = identity_db.resolve_name(token, exact_only=True)
                 for match in matches:
                     pid = match["id"]
                     if pid in seen_person_ids:
@@ -2750,7 +2750,7 @@ class LlamaIndexRAG:
         contain any of the source IDs and replaces them with the target ID.
         
         Called from the ``/entities/merge`` API endpoint after
-        ``entity_db.merge_persons()`` completes.
+        ``identity_db.merge_persons()`` completes.
         
         Args:
             target_id: The surviving person ID (merge target)
@@ -3335,7 +3335,7 @@ class LlamaIndexRAG:
             if _settings.get("asset_neighborhood_expansion_enabled", "false").lower() != "true":
                 return results
             
-            import entity_db
+            import identity_db
             
             existing_ids: set = set()
             for nws in results:
@@ -3412,7 +3412,7 @@ class LlamaIndexRAG:
                 if budget <= 0:
                     break
                 try:
-                    neighbors = entity_db.get_asset_neighbors(
+                    neighbors = identity_db.get_asset_neighbors(
                         sid, relation_types=["attachment_of"], direction="incoming", limit=5
                     )
                     for neighbor in neighbors:
@@ -4928,7 +4928,7 @@ class IdentityExtractionTransform:
     """
     
     def __call__(self, nodes: List[TextNode], **kwargs) -> List[TextNode]:
-        """Extract identities from nodes and store in entity_db.
+        """Extract identities from nodes and store in identity_db.
         
         Nodes are passed through unchanged. Identity extraction is a
         side effect that populates the identity store.
@@ -4946,7 +4946,7 @@ class IdentityExtractionTransform:
             return nodes
         
         try:
-            from entity_extractor import extract_identities_from_document
+            from identity_extractor import extract_identities_from_document
             
             for node in nodes:
                 metadata = getattr(node, "metadata", {})

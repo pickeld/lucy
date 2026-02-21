@@ -242,7 +242,7 @@ def _store_extracted_identities(
     Returns:
         Number of facts stored
     """
-    import entity_db
+    import identity_db
     from identity import Identity
 
     entities = extraction_result.get("entities", [])
@@ -335,7 +335,7 @@ def _store_extracted_identities(
         # Person-asset graph: link extracted person as "mentioned" on the source asset
         if asset_ref and person.id:
             try:
-                entity_db.link_person_asset(
+                identity_db.link_person_asset(
                     person_id=person.id,
                     asset_type=asset_type,
                     asset_ref=asset_ref,

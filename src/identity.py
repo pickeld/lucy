@@ -75,8 +75,8 @@ class Identity:
                 return cached
 
         # Load from DB
-        import entity_db
-        data = entity_db.get_person(person_id)
+        import identity_db
+        data = identity_db.get_person(person_id)
         if data is None:
             # Remove stale cache entry if person was deleted
             cls._cache.pop(person_id, None)
@@ -95,8 +95,8 @@ class Identity:
         Returns:
             An ``Identity`` instance, or ``None``.
         """
-        import entity_db
-        data = entity_db.get_person_by_name(name)
+        import identity_db
+        data = identity_db.get_person_by_name(name)
         if data is None:
             return None
         return cls._wrap(data)
@@ -111,8 +111,8 @@ class Identity:
         Returns:
             An ``Identity`` instance, or ``None``.
         """
-        import entity_db
-        data = entity_db.get_person_by_whatsapp_id(whatsapp_id)
+        import identity_db
+        data = identity_db.get_person_by_whatsapp_id(whatsapp_id)
         if data is None:
             return None
         return cls._wrap(data)
@@ -127,8 +127,8 @@ class Identity:
         Returns:
             An ``Identity`` instance, or ``None``.
         """
-        import entity_db
-        pid = entity_db.find_person_by_phone(phone)
+        import identity_db
+        pid = identity_db.find_person_by_phone(phone)
         if pid is None:
             return None
         return cls.get(pid)
@@ -143,8 +143,8 @@ class Identity:
         Returns:
             An ``Identity`` instance, or ``None``.
         """
-        import entity_db
-        pid = entity_db.find_person_by_email(email)
+        import identity_db
+        pid = identity_db.find_person_by_email(email)
         if pid is None:
             return None
         return cls.get(pid)
@@ -161,7 +161,7 @@ class Identity:
     ) -> "Identity":
         """Get or create a person using the identifier cascade, then wrap.
 
-        Delegates to ``entity_db.get_or_create_person()`` which deduplicates
+        Delegates to ``identity_db.get_or_create_person()`` which deduplicates
         by phone → email → name.
 
         Args:
@@ -174,8 +174,8 @@ class Identity:
         Returns:
             An ``Identity`` instance (always non-None).
         """
-        import entity_db
-        pid = entity_db.get_or_create_person(
+        import identity_db
+        pid = identity_db.get_or_create_person(
             canonical_name=name,
             whatsapp_id=whatsapp_id,
             phone=phone,
@@ -234,8 +234,8 @@ class Identity:
         Returns:
             List of ``Identity`` instances, sorted by canonical name.
         """
-        import entity_db
-        summaries = entity_db.search_persons(query, limit=limit)
+        import identity_db
+        summaries = identity_db.search_persons(query, limit=limit)
         results: List[Identity] = []
         for s in summaries:
             pid = s.get("id")
@@ -249,15 +249,15 @@ class Identity:
     def all_summary(cls) -> List["Identity"]:
         """Get all persons as Identity instances (lightweight).
 
-        Loads via ``entity_db.get_all_persons_summary()`` and wraps each
+        Loads via ``identity_db.get_all_persons_summary()`` and wraps each
         into a cached Identity. Note: the summary data has less detail
         than ``get_person()`` — lazy properties will reload on access.
 
         Returns:
             List of ``Identity`` instances sorted by canonical name.
         """
-        import entity_db
-        summaries = entity_db.get_all_persons_summary()
+        import identity_db
+        summaries = identity_db.get_all_persons_summary()
         results: List[Identity] = []
         for data in summaries:
             pid = data.get("id")
@@ -334,7 +334,7 @@ class Identity:
     # =====================================================================
 
     def __init__(self, person_data: Dict[str, Any]) -> None:
-        """Initialize from a person data dict (as returned by entity_db.get_person).
+        """Initialize from a person data dict (as returned by identity_db.get_person).
 
         Args:
             person_data: Dict with keys id, canonical_name, whatsapp_id,
@@ -434,8 +434,8 @@ class Identity:
     def facts(self) -> Dict[str, str]:
         """All facts as a ``{key: value}`` dict. Lazy-loaded and cached."""
         if self._facts is None:
-            import entity_db
-            self._facts = entity_db.get_all_facts(self._id)
+            import identity_db
+            self._facts = identity_db.get_all_facts(self._id)
         return self._facts
 
     @property
@@ -443,8 +443,8 @@ class Identity:
         """Full fact records with metadata (confidence, source, quote). Lazy-loaded."""
         if self._facts_detail is None:
             # Reload full person data to get facts_detail
-            import entity_db
-            data = entity_db.get_person(self._id)
+            import identity_db
+            data = identity_db.get_person(self._id)
             if data and "facts_detail" in data:
                 self._facts_detail = data["facts_detail"]
             else:
@@ -455,8 +455,8 @@ class Identity:
     def aliases(self) -> List[Dict[str, Any]]:
         """Alias records (each with ``alias``, ``script``, ``source``). Lazy-loaded."""
         if self._aliases is None:
-            import entity_db
-            data = entity_db.get_person(self._id)
+            import identity_db
+            data = identity_db.get_person(self._id)
             if data and "aliases" in data:
                 self._aliases = data["aliases"]
             else:
@@ -472,16 +472,16 @@ class Identity:
     def relationships(self) -> List[Dict[str, Any]]:
         """Relationship records with related person names. Lazy-loaded."""
         if self._relationships is None:
-            import entity_db
-            self._relationships = entity_db.get_relationships(self._id)
+            import identity_db
+            self._relationships = identity_db.get_relationships(self._id)
         return self._relationships
 
     @property
     def asset_counts(self) -> Dict[str, int]:
         """Asset counts by type (e.g. ``{"whatsapp_msg": 42, "document": 3}``). Lazy-loaded."""
         if self._asset_counts is None:
-            import entity_db
-            self._asset_counts = entity_db.get_person_asset_count(self._id)
+            import identity_db
+            self._asset_counts = identity_db.get_person_asset_count(self._id)
         return self._asset_counts
 
     # =====================================================================
@@ -501,8 +501,8 @@ class Identity:
         """
         if self._facts is not None:
             return self._facts.get(key)
-        import entity_db
-        return entity_db.get_fact(self._id, key)
+        import identity_db
+        return identity_db.get_fact(self._id, key)
 
     def set_fact(
         self,
@@ -526,8 +526,8 @@ class Identity:
             source_ref: Reference to source.
             source_quote: Original text snippet.
         """
-        import entity_db
-        entity_db.set_fact(
+        import identity_db
+        identity_db.set_fact(
             person_id=self._id,
             key=key,
             value=value,
@@ -549,8 +549,8 @@ class Identity:
         Returns:
             ``True`` if the fact was deleted.
         """
-        import entity_db
-        result = entity_db.delete_fact(self._id, key)
+        import identity_db
+        result = identity_db.delete_fact(self._id, key)
         if result:
             self._facts = None
             self._facts_detail = None
@@ -576,8 +576,8 @@ class Identity:
         Returns:
             ``True`` if the alias was added.
         """
-        import entity_db
-        result = entity_db.add_alias(
+        import identity_db
+        result = identity_db.add_alias(
             person_id=self._id,
             alias=alias,
             script=script,
@@ -597,8 +597,8 @@ class Identity:
         Returns:
             ``True`` if the alias was deleted.
         """
-        import entity_db
-        result = entity_db.delete_alias(alias_id)
+        import identity_db
+        result = identity_db.delete_alias(alias_id)
         if result:
             self._aliases = None
             self._display_name = None
@@ -627,8 +627,8 @@ class Identity:
             ``True`` if the relationship was added.
         """
         related_id = related.id if isinstance(related, Identity) else related
-        import entity_db
-        result = entity_db.add_relationship(
+        import identity_db
+        result = identity_db.add_relationship(
             person_id=self._id,
             related_person_id=related_id,
             relationship_type=rel_type,
@@ -664,8 +664,8 @@ class Identity:
         Returns:
             List of ``Identity`` instances (includes self).
         """
-        import entity_db
-        expanded_ids = entity_db.expand_person_ids_with_relationships(
+        import identity_db
+        expanded_ids = identity_db.expand_person_ids_with_relationships(
             [self._id], max_depth=max_depth,
         )
         return Identity.preload(expanded_ids)
@@ -683,8 +683,8 @@ class Identity:
         Returns:
             The new name if updated, ``None`` if failed (not found or conflicts).
         """
-        import entity_db
-        result = entity_db.rename_person(self._id, new_name)
+        import identity_db
+        result = identity_db.rename_person(self._id, new_name)
         if result:
             self._canonical_name = result
             self._display_name = None  # Will be recomputed
@@ -700,14 +700,14 @@ class Identity:
             sources: List of source ``Identity`` instances or person IDs.
 
         Returns:
-            Merge summary dict from ``entity_db.merge_persons()``.
+            Merge summary dict from ``identity_db.merge_persons()``.
         """
         source_ids = [
             s.id if isinstance(s, Identity) else s
             for s in sources
         ]
-        import entity_db
-        result = entity_db.merge_persons(self._id, source_ids)
+        import identity_db
+        result = identity_db.merge_persons(self._id, source_ids)
 
         # Remove merged sources from cache
         for sid in source_ids:
@@ -725,8 +725,8 @@ class Identity:
         Returns:
             ``True`` if the person was deleted.
         """
-        import entity_db
-        result = entity_db.delete_person(self._id)
+        import identity_db
+        result = identity_db.delete_person(self._id)
         if result:
             Identity._cache.pop(self._id, None)
             Identity._cache_timestamps.pop(self._id, None)
@@ -737,8 +737,8 @@ class Identity:
 
         Clears all lazy caches and reloads the core record.
         """
-        import entity_db
-        data = entity_db.get_person(self._id)
+        import identity_db
+        data = identity_db.get_person(self._id)
         if data is None:
             # Person was deleted
             Identity._cache.pop(self._id, None)
@@ -778,8 +778,8 @@ class Identity:
         Returns:
             Context string summarizing this person.
         """
-        import entity_db
-        result = entity_db.get_person_context(self._canonical_name)
+        import identity_db
+        result = identity_db.get_person_context(self._canonical_name)
         return result or self.display_name
 
     def to_dict(self) -> Dict[str, Any]:
@@ -837,7 +837,7 @@ class Identity:
         it is refreshed in-place rather than replaced.
 
         Args:
-            person_data: Full person dict from ``entity_db.get_person()``.
+            person_data: Full person dict from ``identity_db.get_person()``.
 
         Returns:
             Cached ``Identity`` instance.
@@ -880,7 +880,7 @@ class Identity:
         If a full instance already exists in cache, returns it unchanged.
 
         Args:
-            summary_data: Person summary dict from ``entity_db.get_all_persons_summary()``.
+            summary_data: Person summary dict from ``identity_db.get_all_persons_summary()``.
 
         Returns:
             Cached ``Identity`` instance.

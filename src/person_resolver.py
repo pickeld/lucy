@@ -31,8 +31,8 @@ from utils.logger import logger
 def _resolve_by_whatsapp_id(whatsapp_id: str) -> Optional[int]:
     """Resolve a WhatsApp ID to a person_id (cached)."""
     try:
-        import entity_db
-        person = entity_db.get_person_by_whatsapp_id(whatsapp_id)
+        import identity_db
+        person = identity_db.get_person_by_whatsapp_id(whatsapp_id)
         return person["id"] if person else None
     except Exception:
         return None
@@ -42,8 +42,8 @@ def _resolve_by_whatsapp_id(whatsapp_id: str) -> Optional[int]:
 def _resolve_by_phone(phone: str) -> Optional[int]:
     """Resolve a phone number to a person_id (cached)."""
     try:
-        import entity_db
-        return entity_db.find_person_by_phone(phone)
+        import identity_db
+        return identity_db.find_person_by_phone(phone)
     except Exception:
         return None
 
@@ -52,8 +52,8 @@ def _resolve_by_phone(phone: str) -> Optional[int]:
 def _resolve_by_email(email: str) -> Optional[int]:
     """Resolve an email address to a person_id (cached)."""
     try:
-        import entity_db
-        return entity_db.find_person_by_email(email)
+        import identity_db
+        return identity_db.find_person_by_email(email)
     except Exception:
         return None
 
@@ -67,8 +67,8 @@ def _resolve_by_name(name: str) -> Optional[int]:
     prefer phone/email/whatsapp_id when available.
     """
     try:
-        import entity_db
-        person = entity_db.get_person_by_name(name)
+        import identity_db
+        person = identity_db.get_person_by_name(name)
         return person["id"] if person else None
     except Exception:
         return None
@@ -231,7 +231,7 @@ def resolve_and_link(
     Returns:
         Tuple of (person_ids, mentioned_person_ids) — the resolved entity IDs
     """
-    import entity_db
+    import identity_db
 
     person_ids: List[int] = []
     mentioned_person_ids: List[int] = []
@@ -248,7 +248,7 @@ def resolve_and_link(
         person_ids.append(sender_pid)
         seen_ids.add(sender_pid)
         try:
-            entity_db.link_person_asset(
+            identity_db.link_person_asset(
                 person_id=sender_pid,
                 asset_type=asset_type,
                 asset_ref=asset_ref,
@@ -265,7 +265,7 @@ def resolve_and_link(
                 person_ids.append(pid)
                 seen_ids.add(pid)
                 try:
-                    entity_db.link_person_asset(
+                    identity_db.link_person_asset(
                         person_id=pid,
                         asset_type=asset_type,
                         asset_ref=asset_ref,
@@ -282,7 +282,7 @@ def resolve_and_link(
                 mentioned_person_ids.append(pid)
                 seen_ids.add(pid)
                 try:
-                    entity_db.link_person_asset(
+                    identity_db.link_person_asset(
                         person_id=pid,
                         asset_type=asset_type,
                         asset_ref=asset_ref,

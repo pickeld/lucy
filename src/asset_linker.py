@@ -78,8 +78,8 @@ def link_attachment(
         provenance: Where this edge was derived from
     """
     try:
-        import entity_db
-        entity_db.link_assets(
+        import identity_db
+        identity_db.link_assets(
             src_asset_ref=child_ref,
             dst_asset_ref=parent_ref,
             relation_type="attachment_of",
@@ -105,8 +105,8 @@ def link_thread_member(
         provenance: Where this edge was derived from
     """
     try:
-        import entity_db
-        entity_db.link_assets(
+        import identity_db
+        identity_db.link_assets(
             src_asset_ref=f"thread:{thread_id}",
             dst_asset_ref=asset_ref,
             relation_type="thread_member",
@@ -129,8 +129,8 @@ def link_chunk(
         provenance: Where this edge was derived from
     """
     try:
-        import entity_db
-        entity_db.link_assets(
+        import identity_db
+        identity_db.link_assets(
             src_asset_ref=chunk_ref,
             dst_asset_ref=parent_ref,
             relation_type="chunk_of",
@@ -153,8 +153,8 @@ def link_reply(
         provenance: Where this edge was derived from
     """
     try:
-        import entity_db
-        entity_db.link_assets(
+        import identity_db
+        identity_db.link_assets(
             src_asset_ref=reply_ref,
             dst_asset_ref=original_ref,
             relation_type="reply_to",
@@ -177,8 +177,8 @@ def link_transcript(
         provenance: Where this edge was derived from
     """
     try:
-        import entity_db
-        entity_db.link_assets(
+        import identity_db
+        identity_db.link_assets(
             src_asset_ref=transcript_ref,
             dst_asset_ref=recording_ref,
             relation_type="transcript_of",
@@ -203,8 +203,8 @@ def link_reference(
         provenance: What the shared reference is
     """
     try:
-        import entity_db
-        entity_db.link_assets(
+        import identity_db
+        identity_db.link_assets(
             src_asset_ref=asset_ref_a,
             dst_asset_ref=asset_ref_b,
             relation_type="references",

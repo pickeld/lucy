@@ -14,7 +14,7 @@ from ..state import AppState
 # =========================================================================
 
 
-def entities_page() -> rx.Component:
+def identities_page() -> rx.Component:
     """Full identities page with tabbed interface matching settings page."""
     return rx.box(
         rx.flex(

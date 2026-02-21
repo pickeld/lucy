@@ -693,7 +693,7 @@ class CallRecordingSyncer:
 
             # Entity extraction (non-critical)
             try:
-                from entity_extractor import extract_identities_from_document
+                from identity_extractor import extract_identities_from_document
 
                 extract_identities_from_document(
                     doc_title=f"Call Recording: {filename}",

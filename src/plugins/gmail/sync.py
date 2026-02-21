@@ -713,7 +713,7 @@ class EmailSyncer:
                             
                             # Entity extraction from email content
                             try:
-                                from entity_extractor import extract_identities_from_document
+                                from identity_extractor import extract_identities_from_document
                                 extract_identities_from_document(
                                     doc_title=parsed.subject or "Email",
                                     doc_text=body,

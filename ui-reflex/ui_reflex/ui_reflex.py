@@ -13,7 +13,7 @@ from .state import AppState
 from .components.layout import layout
 from .components.chat_area import chat_area
 from .components.settings_page import settings_page
-from .components.entities_page import entities_page
+from .components.identities_page import identities_page
 from .components.recordings_page import recordings_page
 from .components.insights_page import insights_page
 
@@ -34,7 +34,7 @@ def settings() -> rx.Component:
 
 def entities() -> rx.Component:
     """Entities page — sidebar + native entity management UI."""
-    return layout(entities_page())
+    return layout(identities_page())
 
 
 def recordings() -> rx.Component:

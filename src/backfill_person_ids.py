@@ -122,7 +122,7 @@ def backfill(
     """
     from qdrant_client import QdrantClient
     from qdrant_client.models import PointVectors
-    import entity_db
+    import identity_db
 
     qdrant_host = settings.qdrant_host
     qdrant_port = int(settings.qdrant_port)
@@ -216,7 +216,7 @@ def backfill(
                 # Create person_assets links
                 for pid in person_ids:
                     try:
-                        entity_db.link_person_asset(
+                        identity_db.link_person_asset(
                             person_id=pid,
                             asset_type=asset_type,
                             asset_ref=asset_ref,
@@ -228,7 +228,7 @@ def backfill(
 
                 for pid in mentioned_ids:
                     try:
-                        entity_db.link_person_asset(
+                        identity_db.link_person_asset(
                             person_id=pid,
                             asset_type=asset_type,
                             asset_ref=asset_ref,

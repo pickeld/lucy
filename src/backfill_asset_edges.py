@@ -173,7 +173,7 @@ def backfill(
         Dict with counts: scanned, updated, edges_created, skipped, errors
     """
     from qdrant_client import QdrantClient
-    import entity_db
+    import identity_db
 
     qdrant_host = settings.qdrant_host
     qdrant_port = int(settings.qdrant_port)
@@ -273,7 +273,7 @@ def backfill(
                 # Create asset↔asset edges
                 for edge in fields["edges"]:
                     try:
-                        entity_db.link_assets(
+                        identity_db.link_assets(
                             src_asset_ref=edge["src_asset_ref"],
                             dst_asset_ref=edge["dst_asset_ref"],
                             relation_type=edge["relation_type"],
