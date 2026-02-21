@@ -498,7 +498,7 @@ def extract_from_chat_message(
     if not settings.get("entity_extraction_enabled", "true").lower() == "true":
         return 0
 
-    if not settings.get("chat_entity_extraction_enabled", "true").lower() == "true":
+    if not settings.get("chat_identity_extraction_enabled", "true").lower() == "true":
         return 0
 
     if not _should_extract(user_message):

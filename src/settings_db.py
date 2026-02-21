@@ -195,8 +195,8 @@ DEFAULT_SETTINGS: List[Tuple[str, str, str, str, str]] = [
     ("source_display_min_score", "0.5", "rag", "float", "Minimum score for a source to be displayed (0.0-1.0). Sources below this are hidden from the user."),
     ("source_display_max_count", "8", "rag", "int", "Maximum number of sources to show per response"),
     ("source_display_answer_filter", "true", "rag", "bool", "Only show sources whose sender/chat_name/content is referenced in the LLM answer"),
-    # RAG — Chat-based entity learning
-    ("chat_entity_extraction_enabled", "true", "rag", "bool", "Learn entity facts from user chat messages (corrections, family info shared in conversation)"),
+    # RAG — Chat-based identity learning
+    ("chat_identity_extraction_enabled", "true", "rag", "bool", "Learn identity facts from user chat messages (corrections, family info shared in conversation)"),
     # Insights — Scheduled Insights quality settings
     ("insight_default_k", "20", "insights", "int", "Documents per sub-query for insights (higher = more thorough, default 20)"),
     ("insight_max_context_tokens", "8000", "insights", "int", "Max context tokens for insight LLM calls (higher than chat default for thorough analysis)"),
@@ -342,6 +342,8 @@ def _seed_missing_defaults(conn: sqlite3.Connection) -> None:
     overwritten. This handles the case where new settings are added to
     DEFAULT_SETTINGS in a code update but the database already has data.
     
+    Also performs key migrations for renamed settings (e.g., entity→identity).
+    
     Args:
         conn: Active database connection
     """
@@ -350,6 +352,57 @@ def _seed_missing_defaults(conn: sqlite3.Connection) -> None:
            VALUES (?, ?, ?, ?, ?)""",
         DEFAULT_SETTINGS
     )
+    conn.commit()
+
+    # --- Key migrations: entity → identity rename (Phase 5) ---
+    _migrate_renamed_keys(conn)
+
+
+# Mapping of old (deprecated) setting keys → new keys for migration
+_DEPRECATED_KEY_MAP: Dict[str, str] = {
+    "chat_entity_extraction_enabled": "chat_identity_extraction_enabled",
+}
+
+
+def _migrate_renamed_keys(conn: sqlite3.Connection) -> None:
+    """Migrate user-set values from deprecated setting keys to their new names.
+
+    For each old→new pair in _DEPRECATED_KEY_MAP:
+    1. If the old key exists with a user-set value, copy it to the new key
+       (only if the new key still has the default value).
+    2. Delete the old key from the database to avoid confusion.
+
+    This is idempotent — safe to call on every startup.
+    """
+    for old_key, new_key in _DEPRECATED_KEY_MAP.items():
+        old_row = conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (old_key,)
+        ).fetchone()
+        if old_row is None:
+            continue  # Old key doesn't exist — nothing to migrate
+
+        old_value = old_row["value"]
+
+        # Look up the default value for the new key
+        new_default = None
+        for key, default_val, *_ in DEFAULT_SETTINGS:
+            if key == new_key:
+                new_default = default_val
+                break
+
+        # Copy old value to new key if the new key is still at its default
+        new_row = conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (new_key,)
+        ).fetchone()
+        if new_row is not None and new_default is not None and new_row["value"] == new_default:
+            conn.execute(
+                "UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?",
+                (old_value, new_key),
+            )
+
+        # Remove the deprecated key
+        conn.execute("DELETE FROM settings WHERE key = ?", (old_key,))
+
     conn.commit()
 
 
@@ -442,6 +495,9 @@ def get_setting_value(key: str) -> Optional[str]:
     For infrastructure settings (hosts, ports, URLs), environment variables
     take precedence over SQLite. This allows Docker and local dev to coexist
     with the same SQLite database.
+
+    Supports backward compatibility for renamed keys: if the new key is
+    not found, falls back to the deprecated old key with a warning.
     
     Args:
         key: The setting key (e.g., 'openai_model')
@@ -472,9 +528,28 @@ def get_setting_value(key: str) -> Optional[str]:
     ).fetchone()
     value = row["value"] if row else None
 
+    # Backward compatibility: fall back to deprecated key if new key not found
+    if value is None and key in _DEPRECATED_KEY_REVERSE:
+        old_key = _DEPRECATED_KEY_REVERSE[key]
+        old_row = conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (old_key,)
+        ).fetchone()
+        if old_row is not None:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "Setting '%s' is deprecated — use '%s'. "
+                "The old key will be removed in a future release.",
+                old_key, key,
+            )
+            value = old_row["value"]
+
     # Store in cache
     _SETTINGS_CACHE[key] = (value, now)
     return value
+
+
+# Reverse lookup: new_key → old_key (for backward-compat fallback)
+_DEPRECATED_KEY_REVERSE: Dict[str, str] = {v: k for k, v in _DEPRECATED_KEY_MAP.items()}
 
 
 def get_setting_row(key: str) -> Optional[Dict[str, Any]]:
