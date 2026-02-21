@@ -155,6 +155,7 @@ SETTING_LABELS: dict[str, str] = {
     "source_display_min_score": "Min Source Display Score",
     "source_display_max_count": "Max Sources Displayed",
     "source_display_answer_filter": "Answer-Relevance Filter",
+    "chat_entity_extraction_enabled": "Learn Facts from Chat",
     # Infrastructure / Connections
     "redis_host": "Redis Host",
     "redis_port": "Redis Port",
@@ -1188,6 +1189,7 @@ class AppState(rx.State):
             ("rag", "source_display_min_score"),
             ("rag", "source_display_max_count"),
             ("rag", "source_display_answer_filter"),
+            ("rag", "chat_entity_extraction_enabled"),
         ])
 
     @rx.var(cache=True)

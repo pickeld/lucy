@@ -394,6 +394,19 @@ def rag_query():
             rich_content=json.dumps(rich_content) if rich_content else "",
         )
 
+        # Entity extraction from user chat messages — learn from corrections
+        # and facts the user provides in conversation (e.g., "David has a son
+        # named Ben"). Non-blocking: failures never affect the chat response.
+        try:
+            from entity_extractor import extract_from_chat_message
+            extract_from_chat_message(
+                user_message=question,
+                llm_answer=answer,
+                conversation_id=conversation_id,
+            )
+        except Exception as e:
+            logger.debug(f"Chat entity extraction failed (non-critical): {e}")
+
         stats = rag.get_stats()
 
         return jsonify({

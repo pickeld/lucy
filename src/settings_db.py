@@ -195,6 +195,8 @@ DEFAULT_SETTINGS: List[Tuple[str, str, str, str, str]] = [
     ("source_display_min_score", "0.5", "rag", "float", "Minimum score for a source to be displayed (0.0-1.0). Sources below this are hidden from the user."),
     ("source_display_max_count", "8", "rag", "int", "Maximum number of sources to show per response"),
     ("source_display_answer_filter", "true", "rag", "bool", "Only show sources whose sender/chat_name/content is referenced in the LLM answer"),
+    # RAG — Chat-based entity learning
+    ("chat_entity_extraction_enabled", "true", "rag", "bool", "Learn entity facts from user chat messages (corrections, family info shared in conversation)"),
     # Insights — Scheduled Insights quality settings
     ("insight_default_k", "20", "insights", "int", "Documents per sub-query for insights (higher = more thorough, default 20)"),
     ("insight_max_context_tokens", "8000", "insights", "int", "Max context tokens for insight LLM calls (higher than chat default for thorough analysis)"),

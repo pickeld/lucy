@@ -225,6 +225,7 @@ def _store_extracted_entities(
     source_type: str = "extracted",
     source_ref: Optional[str] = None,
     sender_whatsapp_id: Optional[str] = None,
+    confidence: float = 0.6,
 ) -> int:
     """Store extracted entities in the Entity Store.
 
@@ -233,9 +234,10 @@ def _store_extracted_entities(
 
     Args:
         extraction_result: Parsed JSON from LLM with 'entities' list
-        source_type: Where this was extracted from ("whatsapp", "paperless")
+        source_type: Where this was extracted from ("whatsapp", "paperless", "user_correction")
         source_ref: Reference string (e.g., "chat:972501234567@c.us:1708012345")
         sender_whatsapp_id: WhatsApp ID of the message sender (for auto-matching)
+        confidence: Confidence score for stored facts (default 0.6 for auto, 0.8 for user corrections)
 
     Returns:
         Number of facts stored
@@ -308,7 +310,7 @@ def _store_extracted_entities(
                     person.set_fact(
                         key=key,
                         value=fact_value,
-                        confidence=0.6,  # LLM extraction confidence
+                        confidence=confidence,
                         source_type=source_type,
                         source_ref=source_ref,
                         source_quote=fact_quote or None,
@@ -326,7 +328,7 @@ def _store_extracted_entities(
                     person.add_relationship(
                         related=related,
                         rel_type=rel_type,
-                        confidence=0.5,
+                        confidence=confidence,
                         source_ref=source_ref,
                     )
 
@@ -338,7 +340,7 @@ def _store_extracted_entities(
                     asset_type=asset_type,
                     asset_ref=asset_ref,
                     role="mentioned",
-                    confidence=0.6,
+                    confidence=confidence,
                 )
             except Exception:
                 pass  # Non-critical
@@ -463,6 +465,88 @@ def extract_entities_from_document(
     if facts_stored > 0:
         logger.info(
             f"Entity extraction from document '{doc_title}': {facts_stored} facts"
+        )
+
+    return facts_stored
+
+
+def extract_from_chat_message(
+    user_message: str,
+    llm_answer: str = "",
+    conversation_id: str = "",
+) -> int:
+    """Extract entities from a user's chat message (corrections, facts shared in conversation).
+
+    When a user tells the assistant something like "David has a son named Ben
+    and a daughter named Mia", this function extracts those relationships and
+    stores them in the Entity Store.
+
+    Uses higher confidence (0.8) than auto-extraction (0.6) because the user
+    is explicitly providing factual information.
+
+    The LLM answer is included as context so the extractor can resolve
+    pronouns and references (e.g., "he" refers to the person discussed).
+
+    Args:
+        user_message: The user's message text
+        llm_answer: The assistant's response (provides context for pronoun resolution)
+        conversation_id: Conversation ID for source tracking
+
+    Returns:
+        Number of facts stored (0 if skipped or failed)
+    """
+    if not settings.get("entity_extraction_enabled", "true").lower() == "true":
+        return 0
+
+    if not settings.get("chat_entity_extraction_enabled", "true").lower() == "true":
+        return 0
+
+    if not _should_extract(user_message):
+        return 0
+
+    # Build a context-aware prompt that includes the LLM's response
+    # so the extractor can resolve "him", "her", "he" etc.
+    context_block = ""
+    if llm_answer:
+        # Truncate long answers — only need recent context for pronoun resolution
+        answer_snippet = llm_answer[:500]
+        context_block = (
+            f"\nConversation context (assistant's previous response):\n"
+            f"{answer_snippet}\n"
+            f"---\n"
+        )
+
+    user_prompt = (
+        f"Source: User correction in chat conversation\n"
+        f"Sender/Author: User (app owner)\n"
+        f"{context_block}"
+        f"---\n"
+        f"{user_message}\n"
+        f"---\n"
+        f"Extract person facts from the above. The user is correcting or providing "
+        f"new information about people. Pay special attention to:\n"
+        f"- Family relationships (son, daughter, parent, spouse)\n"
+        f"- Personal facts (name, birth date, city, job)\n"
+        f"- Identity corrections (actual name, nickname)\n"
+        f"Use the conversation context to resolve pronouns (he/she/him/her → the person being discussed)."
+    )
+
+    result = _call_extraction_llm(user_prompt)
+    if not result:
+        return 0
+
+    source_ref = f"chat_correction:{conversation_id}" if conversation_id else "chat_correction"
+    facts_stored = _store_extracted_entities(
+        extraction_result=result,
+        source_type="user_correction",
+        source_ref=source_ref,
+        confidence=0.8,  # Higher confidence for user-provided facts
+    )
+
+    if facts_stored > 0:
+        logger.info(
+            f"Chat entity extraction: {facts_stored} facts from user message "
+            f"(conversation={conversation_id})"
         )
 
     return facts_stored
