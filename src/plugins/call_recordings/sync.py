@@ -875,18 +875,16 @@ class CallRecordingSyncer:
             return ""
 
         try:
-            import entity_db
+            from identity import Identity
 
-            person_id = entity_db.find_person_by_phone(phone)
-            if person_id:
-                person = entity_db.get_person(person_id)
-                if person:
-                    display = person.get("display_name") or person.get("canonical_name") or ""
-                    if display:
-                        logger.info(
-                            f"Resolved phone {phone} → entity '{display}' (id={person_id})"
-                        )
-                        return str(display)
+            person = Identity.get_by_phone(phone)
+            if person:
+                display = person.display_name
+                if display:
+                    logger.info(
+                        f"Resolved phone {phone} → entity '{display}' (id={person.id})"
+                    )
+                    return str(display)
         except Exception as e:
             logger.debug(f"Entity lookup by phone failed for {phone}: {e}")
 
@@ -910,17 +908,13 @@ class CallRecordingSyncer:
             return None
 
         try:
-            import entity_db
+            from identity import Identity
 
-            person = entity_db.get_person_by_name(name)
-            if person:
-                display = (
-                    person.get("display_name")
-                    or person.get("canonical_name")
-                    or name
-                )
-                phone = person.get("phone") or ""
-                wa_id = person.get("whatsapp_id") or ""
+            ident = Identity.get_by_name(name)
+            if ident:
+                display = ident.display_name or name
+                phone = ident.phone or ""
+                wa_id = ident.whatsapp_id or ""
 
                 # Detect if "phone" is actually a WhatsApp Linked ID
                 # (not a real phone number).  LID contacts have
@@ -948,7 +942,7 @@ class CallRecordingSyncer:
 
                 logger.info(
                     f"Resolved name '{name}' → entity '{display}' "
-                    f"(id={person.get('id')}, phone={phone or 'N/A'})"
+                    f"(id={ident.id}, phone={phone or 'N/A'})"
                 )
                 return {"display_name": str(display), "phone": str(phone)}
         except Exception as e:

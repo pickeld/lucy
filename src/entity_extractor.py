@@ -241,6 +241,7 @@ def _store_extracted_entities(
         Number of facts stored
     """
     import entity_db
+    from identity import Identity
 
     entities = extraction_result.get("entities", [])
     if not entities:
@@ -285,8 +286,8 @@ def _store_extracted_entities(
                 extracted_email = None
 
         # Get or create person — uses phone→email→name cascade
-        person_id = entity_db.get_or_create_person(
-            canonical_name=name,
+        person = Identity.find_or_create(
+            name,
             whatsapp_id=sender_whatsapp_id if len(entities) == 1 else None,
             email=extracted_email,
         )
@@ -304,8 +305,7 @@ def _store_extracted_entities(
                     fact_value = raw_val.strip()
 
                 if fact_value:
-                    entity_db.set_fact(
-                        person_id=person_id,
+                    person.set_fact(
                         key=key,
                         value=fact_value,
                         confidence=0.6,  # LLM extraction confidence
@@ -322,22 +322,19 @@ def _store_extracted_entities(
                 related_name = rel.get("related_to")
                 rel_type = rel.get("type")
                 if related_name and rel_type:
-                    related_id = entity_db.get_or_create_person(
-                        canonical_name=related_name
-                    )
-                    entity_db.add_relationship(
-                        person_id=person_id,
-                        related_person_id=related_id,
-                        relationship_type=rel_type,
+                    related = Identity.find_or_create(related_name)
+                    person.add_relationship(
+                        related=related,
+                        rel_type=rel_type,
                         confidence=0.5,
                         source_ref=source_ref,
                     )
 
         # Person-asset graph: link extracted person as "mentioned" on the source asset
-        if asset_ref and person_id:
+        if asset_ref and person.id:
             try:
                 entity_db.link_person_asset(
-                    person_id=person_id,
+                    person_id=person.id,
                     asset_type=asset_type,
                     asset_ref=asset_ref,
                     role="mentioned",

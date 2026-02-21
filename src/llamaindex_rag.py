@@ -189,6 +189,7 @@ class ArchiveRetriever(BaseRetriever):
         """
         try:
             import entity_db
+            from identity import Identity
             from datetime import datetime
             from zoneinfo import ZoneInfo
             
@@ -206,7 +207,7 @@ class ArchiveRetriever(BaseRetriever):
             # exact match before individual tokens like "שירן" are tried
             # (which could match multiple persons via LIKE).
             # Uses two strategies:
-            #   a) get_person_by_name() — exact canonical/alias match
+            #   a) Identity.get_by_name() — exact canonical/alias match
             #   b) resolve_name() — if exactly 1 result, unambiguous match
             # Strategy (b) handles bilingual canonical names like
             # "Shiran Waintrob / שירן וינטרוב" where the Hebrew n-gram
@@ -220,8 +221,8 @@ class ArchiveRetriever(BaseRetriever):
                     ngram = " ".join(ngram_tokens)
                     
                     # Strategy (a): exact canonical/alias match
-                    person = entity_db.get_person_by_name(ngram)
-                    pid = person["id"] if person else None
+                    ident = Identity.get_by_name(ngram)
+                    pid = ident.id if ident else None
                     
                     # Strategy (b): resolve_name — accept only if exactly 1 match
                     # (unambiguous). Multiple matches → skip, let Phase 2 handle.
@@ -256,18 +257,19 @@ class ArchiveRetriever(BaseRetriever):
                     seen_person_ids.add(pid)
             
             # Phase 3: Build entity fact nodes for ALL resolved person IDs
-            # (from both n-gram and individual token resolution)
+            # (from both n-gram and individual token resolution).
+            # Uses Identity cache so repeated lookups are free.
             for pid in seen_person_ids:
-                person = entity_db.get_person(pid)
+                person = Identity.get(pid)
                 if not person:
                     continue
                 
-                facts = person.get("facts", {})
+                facts = person.facts
                 if not facts:
                     continue
                 
                 # Build fact text
-                fact_lines = [f"Known facts about {person['canonical_name']}:"]
+                fact_lines = [f"Known facts about {person.name}:"]
                 
                 for key, value in facts.items():
                     if key == "birth_date":
@@ -290,8 +292,8 @@ class ArchiveRetriever(BaseRetriever):
                 
                 # Add aliases
                 aliases = [
-                    a["alias"] for a in person.get("aliases", [])
-                    if a["alias"] != person["canonical_name"]
+                    a["alias"] for a in person.aliases
+                    if a.get("alias") != person.name
                 ]
                 if aliases:
                     fact_lines.append(
@@ -299,7 +301,7 @@ class ArchiveRetriever(BaseRetriever):
                     )
                 
                 # Add relationships
-                rels = person.get("relationships", [])
+                rels = person.relationships
                 for rel in rels[:3]:
                     fact_lines.append(
                         f"- {rel['relationship_type'].title()} of {rel['related_name']}"
@@ -309,7 +311,7 @@ class ArchiveRetriever(BaseRetriever):
                 # Format with consistent source header so the LLM
                 # can cite entity facts like any other source.
                 formatted_fact_text = (
-                    f"Entity Store | Person: {person['canonical_name']}:\n"
+                    f"Entity Store | Person: {person.name}:\n"
                     f"{fact_text}"
                 )
                 node = TextNode(
@@ -317,7 +319,7 @@ class ArchiveRetriever(BaseRetriever):
                     metadata={
                         "source": "entity_store",
                         "content_type": "entity_facts",
-                        "person_name": person["canonical_name"],
+                        "person_name": person.name,
                         "person_id": pid,
                     },
                 )
@@ -532,10 +534,15 @@ class ArchiveRetriever(BaseRetriever):
                 # only when intent calls for it
                 if _expand_rels:
                     try:
-                        import entity_db as _edb
-                        expanded_ids = _edb.expand_person_ids_with_relationships(
-                            resolved_person_ids, max_depth=1,
-                        )
+                        from identity import Identity as _Identity
+                        # Use the first resolved person to expand via Identity cache
+                        _all_expanded: set = set(resolved_person_ids)
+                        for _rpid in resolved_person_ids:
+                            _ident = _Identity.get(_rpid)
+                            if _ident:
+                                for _rel_ident in _ident.expand_related(max_depth=1):
+                                    _all_expanded.add(_rel_ident.id)
+                        expanded_ids = list(_all_expanded)
                         if len(expanded_ids) > len(resolved_person_ids):
                             logger.info(
                                 f"Relationship expansion: {resolved_person_ids} → {expanded_ids}"
@@ -2086,9 +2093,9 @@ class LlamaIndexRAG:
             Dict of lowercased-alias → set of all name parts for that person
         """
         try:
-            import entity_db
-            persons = entity_db.get_all_persons_summary()
-            if not persons:
+            from identity import Identity
+            identities = Identity.all_summary()
+            if not identities:
                 return {}
             
             import re
@@ -2098,20 +2105,17 @@ class LlamaIndexRAG:
             _MIN_NAME_PART_LEN = 3  # Skip 1-2 char parts as map keys (too ambiguous)
             
             name_map: Dict[str, set] = {}
-            for person in persons:
+            for person in identities:
                 # Collect all name parts from canonical name + all aliases
                 all_parts: set = set()
-                canonical = person.get("canonical_name", "")
+                canonical = person.name
                 if canonical:
                     all_parts.update(canonical.split())
                 
-                for alias in person.get("aliases", []):
-                    if isinstance(alias, str):
-                        all_parts.update(alias.split())
-                    elif isinstance(alias, dict):
-                        alias_text = alias.get("alias", "")
-                        if alias_text:
-                            all_parts.update(alias_text.split())
+                for alias in person.aliases:
+                    alias_text = alias.get("alias", "") if isinstance(alias, dict) else str(alias)
+                    if alias_text:
+                        all_parts.update(alias_text.split())
                 
                 # Filter out phone numbers, group IDs, and other numeric-only parts
                 all_parts = {p for p in all_parts if not _NUMERIC_RE.match(p)}
@@ -3781,17 +3785,17 @@ class LlamaIndexRAG:
             
             # Strategy 1: Entity Store with aliases (richer disambiguation)
             try:
-                import entity_db
-                persons = entity_db.get_all_persons_summary()
-                if persons:
+                from identity import Identity
+                identities = Identity.all_summary()
+                if identities:
                     contact_entries = []
-                    for p in persons:
-                        if p.get("is_group"):
+                    for p in identities:
+                        if p.is_group:
                             continue
-                        name = p["canonical_name"]
+                        name = p.name
                         aliases = [
-                            a for a in p.get("aliases", [])
-                            if isinstance(a, str) and a != name
+                            a for a in p.alias_names
+                            if a != name
                         ]
                         if aliases:
                             alias_str = "/".join(aliases[:3])

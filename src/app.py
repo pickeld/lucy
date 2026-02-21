@@ -35,6 +35,7 @@ import scheduled_tasks_db
 print("✅ Scheduled tasks DB imported", flush=True)
 
 import entity_db
+from identity import Identity
 print("✅ Entity DB imported", flush=True)
 
 import cost_db
@@ -1071,11 +1072,12 @@ def list_entities():
         query = request.args.get("q")
         limit = request.args.get("limit", 50, type=int)
         if query:
-            persons = entity_db.search_persons(query, limit=min(limit, 200))
+            identities = Identity.search(query, limit=min(limit, 200))
+            persons = [i.to_dict() for i in identities]
         else:
             # Limit the full list to avoid sending 5000+ records
-            all_persons = entity_db.get_all_persons_summary()
-            persons = all_persons[:limit]
+            identities = Identity.all_summary()
+            persons = [i.to_dict() for i in identities[:limit]]
         return jsonify({"persons": persons, "count": len(persons)}), 200
     except Exception as e:
         trace = traceback.format_exc()
@@ -1097,10 +1099,10 @@ def entity_stats():
 def get_entity(person_id: int):
     """Get a person entity with all facts, aliases, and relationships."""
     try:
-        person = entity_db.get_person(person_id)
+        person = Identity.get(person_id)
         if not person:
             return jsonify({"error": "Person not found"}), 404
-        return jsonify(person), 200
+        return jsonify(person.to_dict()), 200
     except Exception as e:
         trace = traceback.format_exc()
         logger.error(f"Entity get error: {e}\n{trace}")
@@ -1116,9 +1118,12 @@ def update_entity(person_id: int):
         if not new_name or not new_name.strip():
             return jsonify({"error": "Missing 'canonical_name'"}), 400
 
-        result = entity_db.rename_person(person_id, new_name.strip())
+        person = Identity.get(person_id)
+        if not person:
+            return jsonify({"error": "Person not found"}), 404
+        result = person.rename(new_name.strip())
         if result is None:
-            return jsonify({"error": "Person not found or name already taken"}), 400
+            return jsonify({"error": "Name already taken"}), 400
         return jsonify({
             "status": "ok",
             "person_id": person_id,
@@ -1134,9 +1139,10 @@ def update_entity(person_id: int):
 def delete_entity(person_id: int):
     """Delete a person entity and all associated data."""
     try:
-        deleted = entity_db.delete_person(person_id)
-        if not deleted:
+        person = Identity.get(person_id)
+        if not person:
             return jsonify({"error": "Person not found"}), 404
+        person.delete()
         return jsonify({"status": "ok", "person_id": person_id}), 200
     except Exception as e:
         trace = traceback.format_exc()
@@ -1148,8 +1154,10 @@ def delete_entity(person_id: int):
 def get_entity_facts(person_id: int):
     """Get all facts for a person entity."""
     try:
-        facts = entity_db.get_all_facts(person_id)
-        return jsonify({"person_id": person_id, "facts": facts}), 200
+        person = Identity.get(person_id)
+        if not person:
+            return jsonify({"error": "Person not found"}), 404
+        return jsonify({"person_id": person_id, "facts": person.facts}), 200
     except Exception as e:
         trace = traceback.format_exc()
         logger.error(f"Entity facts error: {e}\n{trace}")
@@ -1166,8 +1174,10 @@ def set_entity_fact(person_id: int):
         if not key or not value:
             return jsonify({"error": "Missing 'key' and/or 'value'"}), 400
 
-        entity_db.set_fact(
-            person_id=person_id,
+        person = Identity.get(person_id)
+        if not person:
+            return jsonify({"error": "Person not found"}), 404
+        person.set_fact(
             key=key,
             value=value,
             confidence=data.get("confidence", 0.8),
@@ -1189,11 +1199,10 @@ def add_entity_alias(person_id: int):
         if not alias:
             return jsonify({"error": "Missing 'alias'"}), 400
 
-        entity_db.add_alias(
-            person_id=person_id,
-            alias=alias,
-            source="manual",
-        )
+        person = Identity.get(person_id)
+        if not person:
+            return jsonify({"error": "Person not found"}), 404
+        person.add_alias(alias=alias, source="manual")
         return jsonify({"status": "ok", "person_id": person_id, "alias": alias}), 200
     except Exception as e:
         trace = traceback.format_exc()
@@ -1205,7 +1214,10 @@ def add_entity_alias(person_id: int):
 def delete_entity_fact(person_id: int, fact_key: str):
     """Delete a single fact for a person entity."""
     try:
-        deleted = entity_db.delete_fact(person_id, fact_key)
+        person = Identity.get(person_id)
+        if not person:
+            return jsonify({"error": "Person not found"}), 404
+        deleted = person.delete_fact(fact_key)
         if not deleted:
             return jsonify({"error": "Fact not found"}), 404
         return jsonify({"status": "ok", "person_id": person_id, "key": fact_key}), 200
@@ -1219,7 +1231,10 @@ def delete_entity_fact(person_id: int, fact_key: str):
 def delete_entity_alias_by_id(person_id: int, alias_id: int):
     """Delete a single alias for a person entity by alias row ID."""
     try:
-        deleted = entity_db.delete_alias(alias_id)
+        person = Identity.get(person_id)
+        if not person:
+            return jsonify({"error": "Person not found"}), 404
+        deleted = person.delete_alias(alias_id)
         if not deleted:
             return jsonify({"error": "Alias not found"}), 404
         return jsonify({"status": "ok", "person_id": person_id, "alias_id": alias_id}), 200
@@ -1346,10 +1361,11 @@ def merge_entities():
         if not source_ids:
             return jsonify({"error": "Missing 'source_ids' list"}), 400
         
-        result = entity_db.merge_persons(
-            target_id=int(target_id),
-            source_ids=[int(s) for s in source_ids],
-        )
+        target = Identity.get(int(target_id))
+        if not target:
+            return jsonify({"error": "Target person not found"}), 404
+        
+        result = target.merge_from([int(s) for s in source_ids])
         
         if "error" in result:
             return jsonify({"error": result["error"]}), 400
