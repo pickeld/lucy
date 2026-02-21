@@ -15,7 +15,7 @@ import os
 import re
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
 from utils.logger import logger
@@ -26,6 +26,15 @@ EVENTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "e
 os.makedirs(EVENTS_DIR, exist_ok=True)
 
 
+# Roles assigned to nodes that serve as LLM context but should not appear
+# as user-visible sources.  Set in llamaindex_rag.py during retrieval.
+_CONTEXT_ONLY_ROLES: Set[str] = {
+    "context_expansion",
+    "recency_supplement",
+    "asset_neighborhood",
+}
+
+
 class RichResponseProcessor:
     """Post-processes LLM responses to extract rich content blocks.
     
@@ -34,6 +43,134 @@ class RichResponseProcessor:
     - ics_event: Calendar event for download
     - buttons: Clickable options for disambiguation/clarification
     """
+    
+    # =========================================================================
+    # Source Relevance Filtering
+    # =========================================================================
+    
+    def filter_sources_for_display(
+        self,
+        source_nodes: List[Any],
+        answer: str,
+        min_score: float = 0.5,
+        max_count: int = 8,
+        answer_filter: bool = True,
+    ) -> List[Any]:
+        """Filter source nodes to only show relevant ones to the user.
+        
+        The retriever intentionally casts a wide net for the LLM context
+        (context expansion, recency supplements, asset neighborhood).
+        This method prunes those internal-context nodes so the user only
+        sees sources that meaningfully contributed to the answer.
+        
+        Filtering pipeline (applied in order):
+        1. Exclude system/placeholder nodes
+        2. Exclude context-only roles (context_expansion, recency_supplement, etc.)
+        3. Score threshold — drop nodes below ``min_score``
+        4. Answer-relevance — keep only sources referenced in the answer text
+        5. Max count cap
+        
+        Args:
+            source_nodes: Raw source nodes from the chat engine response
+            answer: The LLM's generated answer text
+            min_score: Minimum score for a source to be displayed (default 0.5)
+            max_count: Maximum number of sources to show (default 8)
+            answer_filter: Whether to apply answer-relevance filtering (default True)
+            
+        Returns:
+            Filtered list of source nodes suitable for user display
+        """
+        if not source_nodes:
+            return []
+        
+        filtered = []
+        answer_lower = answer.lower() if answer else ""
+        
+        for nws in source_nodes:
+            node = getattr(nws, "node", None)
+            if not node:
+                continue
+            
+            metadata = getattr(node, "metadata", {})
+            score = getattr(nws, "score", None)
+            
+            # Layer 1: Skip system/placeholder nodes
+            if metadata.get("source") == "system":
+                continue
+            
+            # Layer 2: Skip context-only roles
+            source_role = metadata.get("source_role", "")
+            if source_role in _CONTEXT_ONLY_ROLES:
+                continue
+            
+            # Layer 3: Score threshold
+            # Entity store facts (score=1.0) always pass.
+            # Primary search + reranked results typically score > 0.5.
+            if score is not None and score < min_score:
+                continue
+            
+            # Layer 4: Answer-relevance check
+            # A source is relevant if:
+            #   a) It's an entity_store fact (always relevant — factual answers)
+            #   b) Its sender name appears in the answer
+            #   c) Its chat_name appears in the answer
+            #   d) A meaningful content snippet (>20 chars) appears in the answer
+            if answer_filter and answer_lower:
+                source_type = metadata.get("source", "")
+                
+                # Entity store facts are always relevant
+                if source_type == "entity_store":
+                    filtered.append(nws)
+                    continue
+                
+                # Check if sender or chat_name is referenced in the answer
+                sender = metadata.get("sender", "")
+                chat_name = metadata.get("chat_name", "")
+                is_referenced = False
+                
+                if sender and len(sender) >= 2 and sender.lower() in answer_lower:
+                    is_referenced = True
+                elif chat_name and len(chat_name) >= 2 and chat_name.lower() in answer_lower:
+                    is_referenced = True
+                else:
+                    # Check if distinctive content from the source appears in the answer
+                    # Use the first meaningful sentence (>20 chars) from the source text
+                    node_text = getattr(node, "text", "") or ""
+                    # Extract lines that look like content (not headers/metadata)
+                    for line in node_text.split("\n"):
+                        line = line.strip()
+                        if len(line) > 20 and not line.startswith(("[", "Entity Store")):
+                            # Check if a substantial substring appears in the answer
+                            # Use first 60 chars of the line as a fingerprint
+                            snippet = line[:60].lower()
+                            if snippet in answer_lower:
+                                is_referenced = True
+                                break
+                
+                if not is_referenced:
+                    continue
+            
+            filtered.append(nws)
+        
+        pre_cap = len(filtered)
+        
+        # Layer 5: Max count cap (keep highest-scored)
+        if len(filtered) > max_count:
+            # Sort by score descending, keep top N
+            filtered.sort(
+                key=lambda nws: getattr(nws, "score", 0.0) or 0.0,
+                reverse=True,
+            )
+            filtered = filtered[:max_count]
+        
+        if len(source_nodes) != len(filtered):
+            logger.info(
+                f"Source display filter: {len(source_nodes)} → {len(filtered)} sources "
+                f"(role={len(source_nodes) - pre_cap - (len(source_nodes) - len(filtered)) if pre_cap < len(source_nodes) else 0} excluded, "
+                f"cap={pre_cap - len(filtered) if pre_cap > len(filtered) else 0} capped)"
+            )
+        
+        return filtered
     
     def process(
         self,

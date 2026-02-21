@@ -343,29 +343,48 @@ def rag_query():
         # Compute per-query cost
         query_cost = METER.session_total - cost_snapshot
         
-        # Extract source documents
+        # Extract source documents (all nodes for rich content processing)
         source_nodes = []
-        sources = []
         if hasattr(response, 'source_nodes') and response.source_nodes:
             source_nodes = response.source_nodes
-            for node_with_score in response.source_nodes:
-                node = node_with_score.node
-                metadata = getattr(node, 'metadata', {})
-                if metadata.get("source") == "system":
-                    continue
-                sources.append({
-                    "content": getattr(node, 'text', '')[:300],
-                    "score": node_with_score.score,
-                    "sender": metadata.get("sender", ""),
-                    "chat_name": metadata.get("chat_name", ""),
-                    "timestamp": metadata.get("timestamp"),
-                })
         
         # Post-process for rich content (images, ICS events, buttons)
+        # NOTE: rich_processor.process() needs ALL source_nodes to find images
         answer, rich_content = rich_processor.process(
             answer=raw_answer,
             source_nodes=source_nodes,
         )
+        
+        # Filter sources for user-visible display (removes context-only noise)
+        # Read configurable settings with sensible defaults
+        _filter_enabled = settings.get("source_display_filter_enabled", "true").lower() == "true"
+        if _filter_enabled:
+            _min_score = float(settings.get("source_display_min_score", "0.5"))
+            _max_count = int(settings.get("source_display_max_count", "8"))
+            _answer_filter = settings.get("source_display_answer_filter", "true").lower() == "true"
+            display_nodes = rich_processor.filter_sources_for_display(
+                source_nodes=source_nodes,
+                answer=answer,
+                min_score=_min_score,
+                max_count=_max_count,
+                answer_filter=_answer_filter,
+            )
+        else:
+            display_nodes = source_nodes
+        
+        sources = []
+        for node_with_score in display_nodes:
+            node = node_with_score.node
+            metadata = getattr(node, 'metadata', {})
+            if metadata.get("source") == "system":
+                continue
+            sources.append({
+                "content": getattr(node, 'text', '')[:300],
+                "score": node_with_score.score,
+                "sender": metadata.get("sender", ""),
+                "chat_name": metadata.get("chat_name", ""),
+                "timestamp": metadata.get("timestamp"),
+            })
 
         # Persist messages to SQLite (include sources + rich_content JSON)
         conversations_db.add_message(conversation_id, "user", question)

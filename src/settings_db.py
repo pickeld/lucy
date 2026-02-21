@@ -190,6 +190,11 @@ DEFAULT_SETTINGS: List[Tuple[str, str, str, str, str]] = [
     ("rag_entity_extraction_in_pipeline", "false", "rag", "bool", "Run entity extraction as part of the LlamaIndex ingestion pipeline (instead of standalone)"),
     ("asset_neighborhood_expansion_enabled", "false", "rag", "bool", "Enable asset neighborhood expansion: follow thread/attachment/parent edges at retrieval time for cross-channel coherence"),
     ("pii_redaction_enabled", "false", "rag", "bool", "Enable PII detection and redaction (requires presidio-analyzer and presidio-anonymizer packages)"),
+    # RAG — Source display filtering (controls which sources are shown to the user)
+    ("source_display_filter_enabled", "true", "rag", "bool", "Filter sources shown to user for relevance (hides context-only nodes, low-score noise)"),
+    ("source_display_min_score", "0.5", "rag", "float", "Minimum score for a source to be displayed (0.0-1.0). Sources below this are hidden from the user."),
+    ("source_display_max_count", "8", "rag", "int", "Maximum number of sources to show per response"),
+    ("source_display_answer_filter", "true", "rag", "bool", "Only show sources whose sender/chat_name/content is referenced in the LLM answer"),
     # Insights — Scheduled Insights quality settings
     ("insight_default_k", "20", "insights", "int", "Documents per sub-query for insights (higher = more thorough, default 20)"),
     ("insight_max_context_tokens", "8000", "insights", "int", "Max context tokens for insight LLM calls (higher than chat default for thorough analysis)"),

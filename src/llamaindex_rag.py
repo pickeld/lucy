@@ -485,6 +485,9 @@ class ArchiveRetriever(BaseRetriever):
                 )
                 for nws in chat_recent:
                     if nws.node and nws.node.id_ not in existing_ids:
+                        # Tag recency supplement nodes for source filtering
+                        meta = getattr(nws.node, "metadata", {})
+                        meta["source_role"] = "recency_supplement"
                         existing_ids.add(nws.node.id_)
                         results.append(nws)
         
@@ -3115,9 +3118,11 @@ class LlamaIndexRAG:
                         payload = record.payload or {}
                         text = self._extract_text_from_payload(payload)
                         if text:
+                            _meta = {mk: mv for mk, mv in payload.items() if not mk.startswith("_")}
+                            _meta["source_role"] = "context_expansion"
                             node = TextNode(
                                 text=text,
-                                metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
+                                metadata=_meta,
                                 id_=record_id,
                             )
                             # Score slightly below original results so they rank after
@@ -3390,9 +3395,11 @@ class LlamaIndexRAG:
                         payload = record.payload or {}
                         text = self._extract_text_from_payload(payload)
                         if text:
+                            _meta = {mk: mv for mk, mv in payload.items() if not mk.startswith("_")}
+                            _meta["source_role"] = "asset_neighborhood"
                             node = TextNode(
                                 text=text,
-                                metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
+                                metadata=_meta,
                                 id_=record_id,
                             )
                             expanded_nodes.append(NodeWithScore(node=node, score=0.40))
@@ -3428,9 +3435,11 @@ class LlamaIndexRAG:
                             payload = record.payload or {}
                             text = self._extract_text_from_payload(payload)
                             if text:
+                                _meta = {mk: mv for mk, mv in payload.items() if not mk.startswith("_")}
+                                _meta["source_role"] = "asset_neighborhood"
                                 node = TextNode(
                                     text=text,
-                                    metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
+                                    metadata=_meta,
                                     id_=record_id,
                                 )
                                 expanded_nodes.append(NodeWithScore(node=node, score=0.38))
@@ -3465,9 +3474,11 @@ class LlamaIndexRAG:
                         payload = record.payload or {}
                         text = self._extract_text_from_payload(payload)
                         if text:
+                            _meta = {mk: mv for mk, mv in payload.items() if not mk.startswith("_")}
+                            _meta["source_role"] = "asset_neighborhood"
                             node = TextNode(
                                 text=text,
-                                metadata={mk: mv for mk, mv in payload.items() if not mk.startswith("_")},
+                                metadata=_meta,
                                 id_=record_id,
                             )
                             expanded_nodes.append(NodeWithScore(node=node, score=0.35))

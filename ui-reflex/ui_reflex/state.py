@@ -150,6 +150,11 @@ SETTING_LABELS: dict[str, str] = {
     "rag_fulltext_score_sender": "Sender Match Score",
     "rag_fulltext_score_chat_name": "Chat Name Match Score",
     "rag_fulltext_score_message": "Message Content Score",
+    # Source display filtering
+    "source_display_filter_enabled": "Filter Sources for Relevance",
+    "source_display_min_score": "Min Source Display Score",
+    "source_display_max_count": "Max Sources Displayed",
+    "source_display_answer_filter": "Answer-Relevance Filter",
     # Infrastructure / Connections
     "redis_host": "Redis Host",
     "redis_port": "Redis Port",
@@ -1179,6 +1184,10 @@ class AppState(rx.State):
             ("rag", "rag_min_score"),
             ("rag", "asset_neighborhood_expansion_enabled"),
             ("rag", "pii_redaction_enabled"),
+            ("rag", "source_display_filter_enabled"),
+            ("rag", "source_display_min_score"),
+            ("rag", "source_display_max_count"),
+            ("rag", "source_display_answer_filter"),
         ])
 
     @rx.var(cache=True)
