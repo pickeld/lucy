@@ -1230,19 +1230,19 @@ class AppState(rx.State):
     # ----- Identity computed vars -----
 
     @rx.var(cache=True)
-    def ididentity_stats_persons(self) -> str:
+    def identity_stats_persons(self) -> str:
         return str(self.identity_stats.get("persons", "0"))
 
     @rx.var(cache=True)
-    def ididentity_stats_aliases(self) -> str:
+    def identity_stats_aliases(self) -> str:
         return str(self.identity_stats.get("aliases", "0"))
 
     @rx.var(cache=True)
-    def ididentity_stats_facts(self) -> str:
+    def identity_stats_facts(self) -> str:
         return str(self.identity_stats.get("facts", "0"))
 
     @rx.var(cache=True)
-    def ididentity_stats_relationships(self) -> str:
+    def identity_stats_relationships(self) -> str:
         return str(self.identity_stats.get("relationships", "0"))
 
     @rx.var(cache=True)
